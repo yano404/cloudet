@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+out/
+results/
+*.ply
+*.pcd
+*.npz
+.DS_Store
