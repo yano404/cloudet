@@ -50,12 +50,19 @@ class SourceInfo:
 
 @dataclass
 class ViewSettings:
-    """GUI preferences (units mm where applicable)."""
+    """GUI preferences (units mm where applicable).
+
+    Display downsampling only affects rendering; picking, fitting and
+    saving always use the full-resolution cloud. Large clouds crash the
+    renderer if sent unfiltered, so ``display_max_points`` is a hard
+    cap enforced by random subsampling after the optional voxel filter.
+    """
 
     base_point_size: float = 1.0
     active_point_size: float = 6.0
     inactive_point_size: float = 2.5
-    group_vis_voxel_size_mm: float = 0.0
+    display_voxel_size_mm: float = 0.5  # 0 = no voxel filter
+    display_max_points: int = 4_000_000  # hard cap per geometry
     axis_size_mm: float = 100.0
     axis_margin_mm: float = 20.0
 

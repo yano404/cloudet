@@ -182,7 +182,10 @@ class PlanePickerApp:
         self.e_actsz = self._num_edit(vw, "active_point_size", v.active_point_size)
         self.e_inactsz = self._num_edit(vw, "inactive_point_size", v.inactive_point_size)
         self.e_voxel = self._num_edit(
-            vw, "group_vis_voxel_size_mm (0=off)", v.group_vis_voxel_size_mm
+            vw, "display_voxel_size_mm (0=off)", v.display_voxel_size_mm
+        )
+        self.e_maxdisp = self._num_edit(
+            vw, "display_max_points", int(v.display_max_points)
         )
         self.e_axsize = self._num_edit(vw, "axis_size_mm", v.axis_size_mm)
         vw.set_is_open(False)
@@ -256,7 +259,8 @@ class PlanePickerApp:
             base_point_size=self.e_basesz.double_value,
             active_point_size=self.e_actsz.double_value,
             inactive_point_size=self.e_inactsz.double_value,
-            group_vis_voxel_size_mm=self.e_voxel.double_value,
+            display_voxel_size_mm=self.e_voxel.double_value,
+            display_max_points=max(100_000, self.e_maxdisp.int_value),
             axis_size_mm=self.e_axsize.double_value,
         )
         self._refresh_base_cloud()
@@ -300,7 +304,10 @@ class PlanePickerApp:
         self.kdtree = o3d.geometry.KDTreeFlann(pcd)
         self.pcd_path = path
         self._refresh_base_cloud()
-        self.info.text = f"Loaded {len(self.full_points):,} points from {os.path.basename(path)}"
+        self.info.text = (
+            f"Loaded {len(self.full_points):,} points from {os.path.basename(path)} "
+            f"(displaying {getattr(self, '_n_displayed', 0):,})"
+        )
         self._update_info()
 
     def _mat(self, point_size):
@@ -315,14 +322,30 @@ class PlanePickerApp:
         except Exception:
             pass
 
+    def _for_display(self, cloud: o3d.geometry.PointCloud) -> o3d.geometry.PointCloud:
+        """Downsample for rendering only (never used for pick/fit/save).
+
+        Optional voxel filter, then a hard random-subsample cap: large
+        geometries crash the renderer (bus error) if sent unfiltered.
+        """
+        vox = self.settings.view.display_voxel_size_mm
+        if vox > 0:
+            cloud = cloud.voxel_down_sample(vox)
+        cap = int(self.settings.view.display_max_points)
+        n = len(cloud.points)
+        if n > cap:
+            rng = np.random.default_rng(0)
+            keep = rng.choice(n, size=cap, replace=False)
+            cloud = cloud.select_by_index(np.sort(keep).tolist())
+        return cloud
+
     def _refresh_base_cloud(self):
         self._remove_geom("base")
         self._remove_geom("axis")
         if len(self.full_points) == 0:
             return
-        vox = self.settings.view.group_vis_voxel_size_mm
-        base = self.pcd_full.voxel_down_sample(vox) if vox > 0 else \
-            o3d.geometry.PointCloud(self.pcd_full)
+        base = self._for_display(self.pcd_full)
+        self._n_displayed = len(base.points)
         base.paint_uniform_color([0.88, 0.88, 0.88])
         self.widget3d.scene.add_geometry(
             "base", base, self._mat(self.settings.view.base_point_size)
@@ -574,9 +597,7 @@ class PlanePickerApp:
         if self.solo_mode and gid != self.active_group_id:
             return
         cloud = self.pcd_full.select_by_index(g["indices"].tolist())
-        vox = self.settings.view.group_vis_voxel_size_mm
-        if vox > 0:
-            cloud = cloud.voxel_down_sample(vox)
+        cloud = self._for_display(cloud)
         active = gid == self.active_group_id
         color = g["color"]
         if active:
