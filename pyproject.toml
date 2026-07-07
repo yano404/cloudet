@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 dependencies = ["numpy>=1.24"]
 
 [project.optional-dependencies]
+gui = ["PySide6>=6.5", "pyvista>=0.43", "pyvistaqt>=0.11", "matplotlib>=3.7"]
 viz = ["open3d>=0.17", "matplotlib>=3.7"]
 dev = ["pytest>=7"]
 

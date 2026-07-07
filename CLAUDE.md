@@ -76,8 +76,12 @@ version なし、未知キー黙殺、`settings_path` の自己参照、単位�
    平面方程式は Hesse 標準形 n·x + d = 0 [mm]（`plane.abcd`）。
 3. [未] 位置関係リダクション: 面間距離・角度・交線・コーナー → 検出器位置・姿勢。
    平面の安定命名（例 "det1_top"）の仕様決めが必要（GUI からラベル付け予定）
-4. [実装済み・実機未検証] GUI picker 再実装（`picker_gui.py` + `picking.py` + `project.py`、
-   `detpos pick <project_dir> --pcd <cloud>`)。
+4b. [実装済み・実機未検証] **Qt picker**（`picker_qt.py`、PySide6 + PyVista/VTK、
+   `detpos pick <dir> --pcd <cloud>` のデフォルト。`pip install -e ".[gui]"`）。
+   Open3D 依存ゼロ（近傍探索は `neighbors.py` VoxelHashGrid、表示間引きも numpy）。
+   group/plane ツリー（1 group = N 平面を反映）、P キーでピック、Fit で多平面分離+QC即表示、
+   ツリーで rename/visibility。旧 Open3D 版は `--ui open3d` で残存。
+4. [動作確認済み] Open3D 版 picker（`picker_gui.py` + `picking.py` + `project.py`）。
    - ロジック（クリック抽出=連結性制限付き accumulate、新形式保存）は GUI から分離しテスト済み
    - 保存(S)時に全 group を extract_main_plane で fit し QC/mad_sigma を即表示、manifest 書込
    - Save All は非表示 group も保存（旧版のバグを踏襲しない）。Load は manifest の

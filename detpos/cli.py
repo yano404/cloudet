@@ -48,9 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--cell-size", type=float, default=5.0,
                    help="connectivity grid cell size in mm (default: 5.0)")
 
-    pk = sub.add_parser("pick", help="interactive plane picker GUI (requires open3d)")
+    pk = sub.add_parser("pick", help="interactive plane picker GUI")
     pk.add_argument("project_dir", help="project directory (created if missing)")
     pk.add_argument("--pcd", default=None, help="point cloud file to load at startup")
+    pk.add_argument("--ui", choices=["qt", "open3d"], default="qt",
+                    help="GUI backend (default: qt = PySide6 + PyVista)")
     return p
 
 
@@ -102,12 +104,24 @@ def main(argv=None) -> int:
             return 1
 
     elif args.command == "pick":
-        try:
-            from detpos.picker_gui import run_picker  # lazy: needs open3d
-        except ImportError as e:
-            print(f"error: the picker GUI requires open3d ({e})", file=sys.stderr)
-            return 1
-        run_picker(args.project_dir, args.pcd)
+        if args.ui == "qt":
+            try:
+                from detpos.picker_qt import run_picker_qt  # lazy: needs pyside6/pyvista
+            except ImportError as e:
+                print(
+                    f"error: the Qt picker requires PySide6 + pyvista + pyvistaqt ({e})\n"
+                    'install with: pip install -e ".[gui]"',
+                    file=sys.stderr,
+                )
+                return 1
+            run_picker_qt(args.project_dir, args.pcd)
+        else:
+            try:
+                from detpos.picker_gui import run_picker  # lazy: needs open3d
+            except ImportError as e:
+                print(f"error: the open3d picker requires open3d ({e})", file=sys.stderr)
+                return 1
+            run_picker(args.project_dir, args.pcd)
     return 0
 
 

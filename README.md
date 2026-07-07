@@ -29,18 +29,19 @@ tests/          合成データによる検証（σ=0.03mm の FARO 条件を模
 ## 使い方（全工程）
 
 ```bash
-pip install -e ".[dev,viz]"   # 初回。GUI と u-v マップに open3d + matplotlib
+pip install -e ".[dev,gui]"   # Qt picker（PySide6 + PyVista）と u-v マップ
 pytest                        # テスト
 
-# 1. 対話的抽出（Alt+Click で group 追加、S で保存。保存時に fit 品質を即表示）
+# 1. 対話的抽出（マウス位置で P キー → group 追加。Fit で多平面分離と QC を即表示）
 detpos pick ~/surveys/proj1 --pcd /path/to/scan.ply
 
 # 2. バッチ高精度フィット（picker の保存先をそのまま入力に）
 detpos fit ~/surveys/proj1 -o ~/surveys/proj1/fits
 ```
 
-picker のキー: Alt+Click 追加 / M append 切替 / Tab 巡回 / F アクティブを fit /
-V solo 表示 / S 全保存 / L 読込 / Del 削除
+Qt picker: P ピック / M append 切替 / F アクティブを fit / V solo / Ctrl+S 保存 /
+ツリーで名前編集・表示切替・平面ごとの品質確認。
+旧 Open3D 版は `--ui open3d`（要 `pip install -e ".[viz]"`）。
 
 ## 段階計画
 
