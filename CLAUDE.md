@@ -60,8 +60,12 @@ version なし、未知キー黙殺、`settings_path` の自己参照、単位�
    結果: 品質は group 間で大差。良: G9=39µm, G16=47µm。悪: G11=1223µm(平面ですらない,
    adaptive threshold が発散して inlier 100%), G3=472µm, G4=364µm, G15=非収束。
    u-v マップでパス間段差（±100µm のコヒーレント構造）が可視化できた。
-   → 課題: 非平面 group の自動フラグ（threshold 上限 or 収束+sigma 妥当性チェック）、
-     品質の悪い group は picker で拾い直しが必要
+2.5 [完了] main component 抽出（`mainplane.py`、CLI デフォルト。--simple で旧動作）:
+   picker はラフ選択という前提。上限付き適応threshold + 面内(u,v)グリッド連結成分分析
+   （クリック点の成分を優先、なければ最大）+ QC ゲート（ok/suspect/fail + reasons）。
+   全17group 再実行 → `../results/DELTA_survey_20260312/fits_main/`: ok=9, suspect=8, fail=0。
+   G11 は 1223µm のゴミ → main 292k点で 49µm ok に回復。suspect 8つは mad_sigma 100-200µm
+   （パス間段差が主因の見込み、u-vマップ参照）
 3. 位置関係リダクション: 面間距離・角度・交線・コーナー → 検出器位置・姿勢
 4. GUI picker 再実装（計算コアと分離した薄い GUI。旧版の教訓: Save All が非表示 group を
    meta から落とす問題、accumulate の連結性制限が必要）
