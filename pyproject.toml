@@ -13,5 +13,8 @@ dependencies = ["numpy>=1.24"]
 viz = ["open3d>=0.17", "matplotlib>=3.7"]
 dev = ["pytest>=7"]
 
+[project.scripts]
+detpos = "detpos.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["detpos*"]

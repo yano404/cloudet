@@ -54,8 +54,14 @@ version なし、未知キー黙殺、`settings_path` の自己参照、単位�
 ## 段階計画と現状
 
 1. [完了] コア: `detpos/plane.py`（LSQ/RANSAC/robust反復/統計）, `detpos/plyio.py`（PLY I/O）, テスト13本
-2. [次] バッチ CLI: groups_out 全 group 一括フィット + JSON/CSV 出力 + 残差 u-v 空間マップ
-   （u-v マップで 57 µm の原因＝パス間段差か波打ちかを切り分ける）
+2. [完了] バッチ CLI: `detpos fit <groups_dir> -o <out>`（`groups.py`=legacy互換読込,
+   `pipeline.py`=fit_xxx.json+CSV+u-vマップ, `cli.py`）。全17group実行済み →
+   `../results/DELTA_survey_20260312/fits/`。
+   結果: 品質は group 間で大差。良: G9=39µm, G16=47µm。悪: G11=1223µm(平面ですらない,
+   adaptive threshold が発散して inlier 100%), G3=472µm, G4=364µm, G15=非収束。
+   u-v マップでパス間段差（±100µm のコヒーレント構造）が可視化できた。
+   → 課題: 非平面 group の自動フラグ（threshold 上限 or 収束+sigma 妥当性チェック）、
+     品質の悪い group は picker で拾い直しが必要
 3. 位置関係リダクション: 面間距離・角度・交線・コーナー → 検出器位置・姿勢
 4. GUI picker 再実装（計算コアと分離した薄い GUI。旧版の教訓: Save All が非表示 group を
    meta から落とす問題、accumulate の連結性制限が必要）
