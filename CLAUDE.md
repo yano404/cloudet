@@ -66,7 +66,16 @@ version なし、未知キー黙殺、`settings_path` の自己参照、単位�
    全17group 再実行 → `../results/DELTA_survey_20260312/fits_main/`: ok=9, suspect=8, fail=0。
    G11 は 1223µm のゴミ → main 292k点で 49µm ok に回復。suspect 8つは mad_sigma 100-200µm
    （パス間段差が主因の見込み、u-vマップ参照）
-3. [未] 位置関係リダクション: 面間距離・角度・交線・コーナー → 検出器位置・姿勢
+2.7 [完了] 多平面分離（`multiplane.py`、CLI デフォルト。--single-plane で単一平面）:
+   **データモデルは 1 group = N 平面**。逐次抽出（fit→inlier除去→繰り返し）、
+   平面ごとの threshold は細め（RANSAC 0.1 / 上限 0.15mm）で近接平行面を解像。
+   合成テストで 0.4mm 分離を確認。実データ G13 は d=-1733.35/-1733.62/-1733.05 の
+   **0.3mm 間隔の3面に分離**（前は 116µm suspect で混合していた）。
+   fit_xxx.json は version 2: `planes` 配列（dominant first、各平面に
+   plane方程式/status/bimodalフラグ/統計）。CSV は1行=1平面。
+   平面方程式は Hesse 標準形 n·x + d = 0 [mm]（`plane.abcd`）。
+3. [未] 位置関係リダクション: 面間距離・角度・交線・コーナー → 検出器位置・姿勢。
+   平面の安定命名（例 "det1_top"）の仕様決めが必要（GUI からラベル付け予定）
 4. [実装済み・実機未検証] GUI picker 再実装（`picker_gui.py` + `picking.py` + `project.py`、
    `detpos pick <project_dir> --pcd <cloud>`)。
    - ロジック（クリック抽出=連結性制限付き accumulate、新形式保存）は GUI から分離しテスト済み

@@ -10,6 +10,7 @@ import argparse
 import sys
 
 from detpos.mainplane import MainPlaneParams
+from detpos.multiplane import MultiPlaneParams
 from detpos.pipeline import FitParams, fit_groupset
 
 
@@ -36,8 +37,14 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--uv-bins", type=int, default=200)
     f.add_argument("--simple", action="store_true",
                    help="plain RANSAC+refit without main-component extraction")
-    f.add_argument("--max-threshold", type=float, default=0.3,
-                   help="ceiling for the adaptive threshold in mm (default: 0.3)")
+    f.add_argument("--single-plane", action="store_true",
+                   help="extract only the dominant plane per group "
+                        "(default: sequential multi-plane extraction)")
+    f.add_argument("--max-planes", type=int, default=5,
+                   help="max planes per group in multi-plane mode (default: 5)")
+    f.add_argument("--max-threshold", type=float, default=None,
+                   help="ceiling for the adaptive threshold in mm "
+                        "(default: 0.15 multi / 0.3 single)")
     f.add_argument("--cell-size", type=float, default=5.0,
                    help="connectivity grid cell size in mm (default: 5.0)")
 
@@ -59,14 +66,28 @@ def main(argv=None) -> int:
                 strict_threshold_mm=args.strict_threshold,
                 sigma_factor=args.sigma_factor,
             )
-        else:
+        elif args.single_plane:
+            max_thr = args.max_threshold if args.max_threshold is not None else 0.3
             params = MainPlaneParams(
-                ransac_threshold_mm=min(args.ransac_threshold, args.max_threshold),
+                ransac_threshold_mm=min(args.ransac_threshold, max_thr),
                 ransac_iterations=args.ransac_iterations,
                 seed=args.seed,
                 sigma_factor=args.sigma_factor,
-                max_threshold_mm=args.max_threshold,
+                max_threshold_mm=max_thr,
                 cell_size_mm=args.cell_size,
+            )
+        else:
+            max_thr = args.max_threshold if args.max_threshold is not None else 0.15
+            params = MultiPlaneParams(
+                plane=MainPlaneParams(
+                    ransac_threshold_mm=min(0.1, max_thr),
+                    ransac_iterations=args.ransac_iterations,
+                    seed=args.seed,
+                    sigma_factor=args.sigma_factor,
+                    max_threshold_mm=max_thr,
+                    cell_size_mm=args.cell_size,
+                ),
+                max_planes=args.max_planes,
             )
         try:
             fit_groupset(
