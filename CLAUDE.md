@@ -66,9 +66,15 @@ version なし、未知キー黙殺、`settings_path` の自己参照、単位�
    全17group 再実行 → `../results/DELTA_survey_20260312/fits_main/`: ok=9, suspect=8, fail=0。
    G11 は 1223µm のゴミ → main 292k点で 49µm ok に回復。suspect 8つは mad_sigma 100-200µm
    （パス間段差が主因の見込み、u-vマップ参照）
-3. 位置関係リダクション: 面間距離・角度・交線・コーナー → 検出器位置・姿勢
-4. GUI picker 再実装（計算コアと分離した薄い GUI。旧版の教訓: Save All が非表示 group を
-   meta から落とす問題、accumulate の連結性制限が必要）
+3. [未] 位置関係リダクション: 面間距離・角度・交線・コーナー → 検出器位置・姿勢
+4. [実装済み・実機未検証] GUI picker 再実装（`picker_gui.py` + `picking.py` + `project.py`、
+   `detpos pick <project_dir> --pcd <cloud>`)。
+   - ロジック（クリック抽出=連結性制限付き accumulate、新形式保存）は GUI から分離しテスト済み
+   - 保存(S)時に全 group を extract_main_plane で fit し QC/mad_sigma を即表示、manifest 書込
+   - Save All は非表示 group も保存（旧版のバグを踏襲しない）。Load は manifest の
+     n_points 照合 + indices 範囲チェック
+   - GUI 本体はサンドボックスで起動不可のため**ユーザーの実機での動作確認待ち**。
+     Open3D API は旧実装で実績のあるパターンを踏襲
 
 ## コマンド
 

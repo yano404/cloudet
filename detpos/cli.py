@@ -1,4 +1,8 @@
-"""Command line interface: ``detpos fit <groups_dir> -o <out_dir>``."""
+"""Command line interface.
+
+- ``detpos pick <project_dir> [--pcd <cloud>]`` : interactive picker GUI
+- ``detpos fit <groups_dir> -o <out_dir>``      : batch plane fitting
+"""
 
 from __future__ import annotations
 
@@ -36,6 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="ceiling for the adaptive threshold in mm (default: 0.3)")
     f.add_argument("--cell-size", type=float, default=5.0,
                    help="connectivity grid cell size in mm (default: 5.0)")
+
+    pk = sub.add_parser("pick", help="interactive plane picker GUI (requires open3d)")
+    pk.add_argument("project_dir", help="project directory (created if missing)")
+    pk.add_argument("--pcd", default=None, help="point cloud file to load at startup")
     return p
 
 
@@ -71,6 +79,14 @@ def main(argv=None) -> int:
         except (OSError, ValueError) as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
+
+    elif args.command == "pick":
+        try:
+            from detpos.picker_gui import run_picker  # lazy: needs open3d
+        except ImportError as e:
+            print(f"error: the picker GUI requires open3d ({e})", file=sys.stderr)
+            return 1
+        run_picker(args.project_dir, args.pcd)
     return 0
 
 

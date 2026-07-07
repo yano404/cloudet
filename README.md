@@ -14,21 +14,37 @@ FARO Quantum-S で測定した原子核実験用検出器の三次元点群か�
 
 ```
 detpos/
-  plane.py    平面フィットコア（LSQ / RANSAC / robust 反復・残差統計）
-  plyio.py    PLY 読み書き（double 精度、Open3D 非依存）
-tests/        合成データによる検証（σ=0.03mm の FARO 条件を模擬）
+  plane.py      平面フィットコア（LSQ / RANSAC / robust 反復・残差統計）
+  mainplane.py  main plane component 抽出（連結成分 + QC ゲート）
+  picking.py    クリック駆動の領域抽出ロジック（GUI 非依存）
+  plyio.py      PLY 読み書き（double 精度、Open3D 非依存）
+  groups.py     group 読込（新形式 + legacy groups_out 互換）
+  project.py    プロジェクトディレクトリ I/O（manifest / settings / group 保存）
+  pipeline.py   バッチフィット（fit_xxx.json + CSV + 残差 u-v マップ）
+  picker_gui.py 対話的 picker（Open3D GUI の薄いシェル）
+  cli.py        detpos pick / detpos fit
+tests/          合成データによる検証（σ=0.03mm の FARO 条件を模擬）
 ```
 
-## テスト
+## 使い方（全工程）
 
+```bash
+pip install -e ".[dev,viz]"   # 初回。GUI と u-v マップに open3d + matplotlib
+pytest                        # テスト
+
+# 1. 対話的抽出（Alt+Click で group 追加、S で保存。保存時に fit 品質を即表示）
+detpos pick ~/surveys/proj1 --pcd /path/to/scan.ply
+
+# 2. バッチ高精度フィット（picker の保存先をそのまま入力に）
+detpos fit ~/surveys/proj1 -o ~/surveys/proj1/fits
 ```
-pip install -e .[dev]
-pytest
-```
+
+picker のキー: Alt+Click 追加 / M append 切替 / Tab 巡回 / F アクティブを fit /
+V solo 表示 / S 全保存 / L 読込 / Del 削除
 
 ## 段階計画
 
-1. コア（本コミット）
-2. バッチ CLI: 既存 `groups_out/*.ply` の一括フィット + JSON/CSV 出力 + 残差 u-v マップ
-3. 位置関係リダクション（面間距離・角度・交線・コーナー）
-4. GUI picker の再実装
+1. [完了] コア
+2. [完了] バッチ CLI（main component 抽出 + QC がデフォルト）
+3. [未] 位置関係リダクション（面間距離・角度・交線・コーナー）
+4. [完了・実機検証待ち] GUI picker 再実装
