@@ -35,6 +35,22 @@ ChatGPT 実装（下記「参照データ」内の `interactive_plane_picker.py`
 全体に `manifest.json`（単位・元スキャン一覧・ハッシュ・結合順序・ツールversion）。
 pickle 完全排除。後段処理の契約は ply + json のみ。旧 groups_out は読み取り互換を維持。
 
+## 設定ファイル（新設計・合意済み）
+
+旧 `plane_picker_settings.json` の問題: フラットにアルゴリズム/表示/セッションが混在、
+version なし、未知キー黙殺、`settings_path` の自己参照、単位暗黙。
+実害: 現物の `accumulate_distance_threshold` は 2.5（コードのデフォルトは 1.0）で、
+**groups_out がどの値で抽出されたか確定不能**（G13/G14 の平面外混入 max 3.4mm と符合）。
+
+新設計:
+- スキーマ: `{"version": 1, "units": "mm", "detection": {...}, "view": {...}}` とセクション分割。
+  数値キーは単位サフィックス付き（例 `local_radius_mm`）
+- セッション状態（pcd_path, save_dir, パネル幅）は別ファイル `session.json`（マシンローカル）。
+  `settings_path` 自己参照は廃止
+- ローダーは dataclass ベース: 未知キーは警告、欠落はデフォルト、version で移行
+- **detection の内容は group 保存のたびに manifest へ焼き込む**（再現性は出力側記録で担保。
+  可変な設定ファイルに依存しない）
+
 ## 段階計画と現状
 
 1. [完了] コア: `detpos/plane.py`（LSQ/RANSAC/robust反復/統計）, `detpos/plyio.py`（PLY I/O）, テスト13本
