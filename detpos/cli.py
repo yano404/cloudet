@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from detpos.mainplane import MainPlaneParams
 from detpos.pipeline import FitParams, fit_groupset
 
 
@@ -29,6 +30,12 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--no-uv-maps", action="store_true",
                    help="skip residual u-v map PNGs")
     f.add_argument("--uv-bins", type=int, default=200)
+    f.add_argument("--simple", action="store_true",
+                   help="plain RANSAC+refit without main-component extraction")
+    f.add_argument("--max-threshold", type=float, default=0.3,
+                   help="ceiling for the adaptive threshold in mm (default: 0.3)")
+    f.add_argument("--cell-size", type=float, default=5.0,
+                   help="connectivity grid cell size in mm (default: 5.0)")
     return p
 
 
@@ -36,13 +43,23 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.command == "fit":
-        params = FitParams(
-            ransac_threshold_mm=args.ransac_threshold,
-            ransac_iterations=args.ransac_iterations,
-            seed=args.seed,
-            strict_threshold_mm=args.strict_threshold,
-            sigma_factor=args.sigma_factor,
-        )
+        if args.simple:
+            params = FitParams(
+                ransac_threshold_mm=args.ransac_threshold,
+                ransac_iterations=args.ransac_iterations,
+                seed=args.seed,
+                strict_threshold_mm=args.strict_threshold,
+                sigma_factor=args.sigma_factor,
+            )
+        else:
+            params = MainPlaneParams(
+                ransac_threshold_mm=min(args.ransac_threshold, args.max_threshold),
+                ransac_iterations=args.ransac_iterations,
+                seed=args.seed,
+                sigma_factor=args.sigma_factor,
+                max_threshold_mm=args.max_threshold,
+                cell_size_mm=args.cell_size,
+            )
         try:
             fit_groupset(
                 args.groups_dir,

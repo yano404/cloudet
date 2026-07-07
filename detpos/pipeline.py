@@ -21,6 +21,7 @@ import numpy as np
 
 import detpos
 from detpos.groups import GroupInfo, load_groups
+from detpos.mainplane import MainPlaneParams, extract_main_plane
 from detpos.plane import FitResult, Plane, ransac_plane, robust_fit_plane
 
 __all__ = ["FitParams", "fit_group", "fit_groupset", "residual_uv_map"]
@@ -117,7 +118,7 @@ def _save_uv_map_png(uv: dict, path: Path, title: str, vlim_mm: float) -> None:
     plt.close(fig)
 
 
-def _fit_record(group: GroupInfo, fit: FitResult, params: FitParams) -> dict:
+def _fit_record(group: GroupInfo, fit: FitResult, params) -> dict:
     return {
         "version": 1,
         "units": "mm",
@@ -149,7 +150,7 @@ def _fit_record(group: GroupInfo, fit: FitResult, params: FitParams) -> dict:
 
 
 _CSV_COLUMNS = [
-    "group_id", "name", "n_points", "n_inliers", "inlier_fraction",
+    "group_id", "name", "status", "n_points", "n_inliers", "inlier_fraction",
     "converged", "nx", "ny", "nz", "d_mm",
     "strict_threshold_mm", "inlier_mad_sigma_mm", "inlier_std_mm",
     "inlier_p95_abs_mm", "all_mad_sigma_mm", "all_max_abs_mm",
@@ -159,12 +160,17 @@ _CSV_COLUMNS = [
 def fit_groupset(
     groups_path: str | Path,
     out_dir: str | Path,
-    params: FitParams = FitParams(),
+    params: FitParams | MainPlaneParams = MainPlaneParams(),
     uv_maps: bool = True,
     uv_bins: int = 200,
     log=print,
 ) -> list[dict]:
-    """Fit every group and write fit_xxx.json + fits_summary.csv to out_dir."""
+    """Fit every group and write fit_xxx.json + fits_summary.csv to out_dir.
+
+    With ``MainPlaneParams`` (default) each group goes through main plane
+    component extraction (bounded threshold, in-plane connectivity, QC
+    status). With ``FitParams`` the plain RANSAC + robust refit is used.
+    """
     groups = load_groups(groups_path)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -173,8 +179,19 @@ def fit_groupset(
     rows = []
     for g in groups:
         pts = g.load_points()
-        fit = fit_group(pts, params)
+        if isinstance(params, MainPlaneParams):
+            res = extract_main_plane(
+                pts, params=params, clicked=g.clicked, coarse_plane=g.coarse_plane
+            )
+            fit = res.fit
+            status, reasons, diagnostics = res.status, res.reasons, res.diagnostics
+        else:
+            fit = fit_group(pts, params)
+            status, reasons, diagnostics = "unchecked", [], {}
         rec = _fit_record(g, fit, params)
+        rec["quality"]["status"] = status
+        rec["quality"]["reasons"] = reasons
+        rec["quality"]["diagnostics"] = diagnostics
         records.append(rec)
 
         with open(out_dir / f"fit_{g.group_id:03d}.json", "w", encoding="utf-8") as f:
@@ -199,7 +216,7 @@ def fit_groupset(
         q, si, sa = rec["quality"], fit.stats_inliers, fit.stats_all
         n = fit.plane.normal
         rows.append([
-            g.group_id, g.name, g.num_points, fit.n_inliers,
+            g.group_id, g.name, status, g.num_points, fit.n_inliers,
             round(q["inlier_fraction"], 4), fit.converged,
             *(round(x, 9) for x in n), round(fit.plane.d, 6),
             round(fit.threshold, 6), round(si["mad_sigma"], 6), round(si["std"], 6),
@@ -208,7 +225,7 @@ def fit_groupset(
         log(
             f"{g.name}: {g.num_points:,} pts -> {fit.n_inliers:,} inliers "
             f"({q['inlier_fraction']:.0%}), mad_sigma={si['mad_sigma']*1e3:.0f} um, "
-            f"converged={fit.converged}"
+            f"status={status}{' ' + ','.join(reasons) if reasons else ''}"
         )
 
     with open(out_dir / "fits_summary.csv", "w", newline="", encoding="utf-8") as f:
