@@ -380,6 +380,7 @@ class PickerWindow(QMainWindow):
             color=(0.82, 0.82, 0.82),
             point_size=v.base_point_size,
             render_points_as_spheres=False,
+            reset_camera=False,
         )
         self.plotter.render()
 
@@ -409,6 +410,7 @@ class PickerWindow(QMainWindow):
             color=tuple(color),
             point_size=v.active_point_size if active else v.inactive_point_size,
             render_points_as_spheres=False,
+            reset_camera=False,
         )
 
     # ------------------------------------------------------------------
