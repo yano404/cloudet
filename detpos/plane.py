@@ -26,6 +26,8 @@ __all__ = [
     "FitResult",
     "fit_plane_lsq",
     "ransac_plane",
+    "ransac_plane_open3d",
+    "run_ransac",
     "robust_fit_plane",
     "residual_stats",
     "mad_sigma",
@@ -194,6 +196,75 @@ def ransac_plane(
     plane = Plane(normals[best_i], float(ds[best_i]))
     inlier_mask = plane.distances(points) <= threshold
     return plane, inlier_mask
+
+
+def ransac_plane_open3d(
+    points: np.ndarray,
+    threshold: float,
+    n_iterations: int = 1000,
+    seed: int = 0,
+) -> tuple[Plane, np.ndarray]:
+    """Plane RANSAC via Open3D's ``segment_plane`` (selector only).
+
+    Same interface as :func:`ransac_plane`. Note that Open3D refits the
+    returned plane on its inliers internally; here the plane is used
+    only as a seed for :func:`robust_fit_plane`, so both backends feed
+    the identical final estimator. Requires open3d to be installed.
+    """
+    try:
+        import open3d as o3d
+    except ImportError as e:
+        raise ImportError(
+            "RANSAC backend 'open3d' requested but open3d is not installed "
+            "(pip install open3d, or use backend='numpy')"
+        ) from e
+
+    points = np.asarray(points, dtype=np.float64)
+    if len(points) < 3:
+        raise ValueError("need at least 3 points")
+    if threshold <= 0:
+        raise ValueError("threshold must be positive")
+
+    try:
+        o3d.utility.random.seed(int(seed))  # open3d >= 0.16
+    except AttributeError:
+        pass  # older open3d: not seedable, results not reproducible
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    model, inliers = pcd.segment_plane(
+        distance_threshold=float(threshold),
+        ransac_n=3,
+        num_iterations=int(n_iterations),
+    )
+    plane = Plane.from_array(np.asarray(model, dtype=np.float64))
+    mask = np.zeros(len(points), dtype=bool)
+    mask[np.asarray(inliers, dtype=np.int64)] = True
+    return plane, mask
+
+
+RANSAC_BACKENDS = ("numpy", "open3d")
+
+
+def run_ransac(
+    points: np.ndarray,
+    threshold: float,
+    n_iterations: int = 1000,
+    seed: int = 0,
+    backend: str = "numpy",
+    n_hypo_points: int | None = 100_000,
+) -> tuple[Plane, np.ndarray]:
+    """Dispatch plane RANSAC to the selected backend.
+
+    Both backends are selectors only; the final plane always comes from
+    :func:`robust_fit_plane` (orthogonal least squares), so the backend
+    choice affects only which points seed the refit.
+    """
+    if backend == "numpy":
+        return ransac_plane(points, threshold, n_iterations, seed, n_hypo_points)
+    if backend == "open3d":
+        return ransac_plane_open3d(points, threshold, n_iterations, seed)
+    raise ValueError(f"unknown RANSAC backend {backend!r} (choose from {RANSAC_BACKENDS})")
 
 
 @dataclass

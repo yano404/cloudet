@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from detpos.plane import FitResult, Plane, fit_plane_lsq, ransac_plane, robust_fit_plane
+from detpos.plane import FitResult, Plane, fit_plane_lsq, robust_fit_plane, run_ransac
 
 __all__ = ["MainPlaneParams", "MainPlaneResult", "extract_main_plane"]
 
@@ -37,6 +37,7 @@ class MainPlaneParams:
     # step 1: RANSAC seed
     ransac_threshold_mm: float = 0.3
     ransac_iterations: int = 1000
+    ransac_backend: str = "numpy"  # "numpy" (seeded, reproducible) or "open3d"
     seed: int = 0
     # step 2/4: robust refit
     sigma_factor: float = 3.0
@@ -134,11 +135,12 @@ def extract_main_plane(
 
     # --- 1. seed ---------------------------------------------------------
     try:
-        seed_plane, _ = ransac_plane(
+        seed_plane, _ = run_ransac(
             points,
             threshold=params.ransac_threshold_mm,
             n_iterations=params.ransac_iterations,
             seed=params.seed,
+            backend=params.ransac_backend,
         )
     except ValueError:
         if coarse_plane is None:

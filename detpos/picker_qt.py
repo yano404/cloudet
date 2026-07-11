@@ -30,6 +30,7 @@ from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDockWidget,
     QDoubleSpinBox,
     QFileDialog,
@@ -219,6 +220,9 @@ class PickerWindow(QMainWindow):
         self.s_connect = QCheckBox()
         self.s_connect.setChecked(d.connect)
         self.s_cell = dspin(d.cell_size_mm)
+        self.s_backend = QComboBox()
+        self.s_backend.addItems(["numpy", "open3d"])
+        self.s_backend.setCurrentText(getattr(d, "ransac_backend", "numpy"))
         form.addRow(QLabel("<b>Detection (mm)</b>"))
         form.addRow("local_radius", self.s_radius)
         form.addRow("local_distance_threshold", self.s_locthr)
@@ -228,6 +232,7 @@ class PickerWindow(QMainWindow):
         form.addRow("accumulate_threshold", self.s_accthr)
         form.addRow("connect (component only)", self.s_connect)
         form.addRow("cell_size", self.s_cell)
+        form.addRow("ransac_backend", self.s_backend)
 
         self.s_voxel = dspin(v.display_voxel_size_mm)
         self.s_maxdisp = ispin(v.display_max_points, lo=100_000)
@@ -301,6 +306,7 @@ class PickerWindow(QMainWindow):
             accumulate_threshold_mm=self.s_accthr.value(),
             connect=self.s_connect.isChecked(),
             cell_size_mm=self.s_cell.value(),
+            ransac_backend=self.s_backend.currentText(),
         )
         self.settings.view = ViewSettings(
             base_point_size=self.s_ptsize.value(),
@@ -460,9 +466,15 @@ class PickerWindow(QMainWindow):
         self._refresh_tree()
 
     def _fit_group(self, g):
+        from dataclasses import replace
+
         pts = self.full_points[g["indices"]]
+        mp = MultiPlaneParams()
+        mp = MultiPlaneParams(
+            plane=replace(mp.plane, ransac_backend=self.settings.detection.ransac_backend)
+        )
         extracted = extract_planes(
-            pts, MultiPlaneParams(), clicked=g["clicked"], coarse_plane=g["coarse_plane"]
+            pts, mp, clicked=g["clicked"], coarse_plane=g["coarse_plane"]
         )
         g["fit"] = {
             "planes": [

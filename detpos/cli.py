@@ -32,6 +32,10 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--sigma-factor", type=float, default=3.0,
                    help="adaptive threshold = factor * mad_sigma (default: 3.0)")
     f.add_argument("--seed", type=int, default=0)
+    f.add_argument("--ransac-backend", choices=["numpy", "open3d"], default="numpy",
+                   help="RANSAC selector backend (default: numpy = seeded, "
+                        "reproducible; open3d = segment_plane). The final plane "
+                        "is always the orthogonal least-squares refit.")
     f.add_argument("--no-uv-maps", action="store_true",
                    help="skip residual u-v map PNGs")
     f.add_argument("--uv-bins", type=int, default=200)
@@ -64,6 +68,7 @@ def main(argv=None) -> int:
             params = FitParams(
                 ransac_threshold_mm=args.ransac_threshold,
                 ransac_iterations=args.ransac_iterations,
+                ransac_backend=args.ransac_backend,
                 seed=args.seed,
                 strict_threshold_mm=args.strict_threshold,
                 sigma_factor=args.sigma_factor,
@@ -73,6 +78,7 @@ def main(argv=None) -> int:
             params = MainPlaneParams(
                 ransac_threshold_mm=min(args.ransac_threshold, max_thr),
                 ransac_iterations=args.ransac_iterations,
+                ransac_backend=args.ransac_backend,
                 seed=args.seed,
                 sigma_factor=args.sigma_factor,
                 max_threshold_mm=max_thr,
@@ -84,6 +90,7 @@ def main(argv=None) -> int:
                 plane=MainPlaneParams(
                     ransac_threshold_mm=min(0.1, max_thr),
                     ransac_iterations=args.ransac_iterations,
+                    ransac_backend=args.ransac_backend,
                     seed=args.seed,
                     sigma_factor=args.sigma_factor,
                     max_threshold_mm=max_thr,

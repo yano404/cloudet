@@ -9,6 +9,10 @@ ChatGPT 実装（下記「参照データ」内の `interactive_plane_picker.py`
 - **原本不可侵**: `~/work/survey2026/` 以下の既存コード・データは読み取り専用。変更・削除しない。
 - 単位は **mm**。平面は Hesse 標準形 `n·x + d = 0`（`|n|=1`、法線の最大成分が正になる符号規約）。
 - RANSAC は点の選別のみ。**最終平面は必ず直交最小二乗**（`robust_fit_plane`）。
+  RANSAC バックエンドは選択式（`ransac_backend`: "numpy"=シード固定・再現可 /
+  "open3d"=segment_plane。CLI `--ransac-backend`、GUI Settings、全 Params に存在）。
+  相互検証テストは tests/test_backend.py（open3d がある環境で実行、最終平面の一致
+  <10µrad/<1µm を確認）。
 - 乱数はシード固定。統計は inlier（打ち切り）と全点の両方 + `mad_sigma` を報告。
 - コアは numpy のみ依存、GUI と分離、テスト必須（`pytest`、合成データで σ=0.03mm 条件を模擬）。
 

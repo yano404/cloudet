@@ -18,7 +18,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from detpos.mainplane import _inplane_basis, _label_components
-from detpos.plane import Plane, fit_plane_lsq, ransac_plane
+from detpos.plane import Plane, fit_plane_lsq, run_ransac
 
 __all__ = ["PickParams", "pick_plane_region"]
 
@@ -36,6 +36,7 @@ class PickParams:
     connect: bool = True  # restrict to the component containing the click
     cell_size_mm: float = 5.0
     min_points_per_cell: int = 3
+    ransac_backend: str = "numpy"  # "numpy" (seeded, reproducible) or "open3d"
     seed: int = 0
 
 
@@ -44,11 +45,12 @@ def _fit_local_plane(neighbors: np.ndarray, params: PickParams) -> Plane:
         raise ValueError(
             f"too few neighbor points: {len(neighbors)} < {params.min_neighbor_points}"
         )
-    plane, inlier_mask = ransac_plane(
+    plane, inlier_mask = run_ransac(
         neighbors,
         threshold=params.local_distance_threshold_mm,
         n_iterations=params.local_ransac_iterations,
         seed=params.seed,
+        backend=params.ransac_backend,
     )
     n_in = int(np.count_nonzero(inlier_mask))
     if n_in < params.min_local_inliers:

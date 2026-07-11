@@ -23,7 +23,7 @@ import detpos
 from detpos.groups import GroupInfo, load_groups
 from detpos.mainplane import MainPlaneParams, extract_main_plane
 from detpos.multiplane import MultiPlaneParams, extract_planes
-from detpos.plane import FitResult, Plane, ransac_plane, robust_fit_plane
+from detpos.plane import FitResult, Plane, robust_fit_plane, run_ransac
 
 __all__ = ["FitParams", "fit_group", "fit_groupset", "residual_uv_map"]
 
@@ -34,6 +34,7 @@ class FitParams:
 
     ransac_threshold_mm: float = 0.5
     ransac_iterations: int = 1000
+    ransac_backend: str = "numpy"  # "numpy" (seeded, reproducible) or "open3d"
     seed: int = 0
     strict_threshold_mm: float | None = None  # None -> adaptive 3*mad_sigma
     sigma_factor: float = 3.0
@@ -43,11 +44,12 @@ class FitParams:
 
 def fit_group(points: np.ndarray, params: FitParams = FitParams()) -> FitResult:
     """RANSAC (selector) followed by robust orthogonal LSQ refit."""
-    init, _ = ransac_plane(
+    init, _ = run_ransac(
         points,
         threshold=params.ransac_threshold_mm,
         n_iterations=params.ransac_iterations,
         seed=params.seed,
+        backend=params.ransac_backend,
     )
     return robust_fit_plane(
         points,
