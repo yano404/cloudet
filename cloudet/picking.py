@@ -142,16 +142,6 @@ def _inplane_radius(points: np.ndarray, plane: Plane, clicked: np.ndarray) -> np
     return np.hypot(uu, vv)
 
 
-def _coarsen_connect_params(
-    params: PickParams, uu: np.ndarray, vv: np.ndarray
-) -> PickParams:
-    """Keep the connectivity grid side length bounded on large faces."""
-    extent = max(float(uu.max() - uu.min()), float(vv.max() - vv.min()), 1.0)
-    cs = max(params.cell_size_mm, extent / _EXPAND_MAX_CELLS)
-    min_pts = 1 if cs > params.cell_size_mm else params.min_points_per_cell
-    return replace(params, cell_size_mm=cs, min_points_per_cell=min_pts)
-
-
 def _connected_indices(
     points: np.ndarray,
     candidate_idx: np.ndarray,
@@ -162,17 +152,22 @@ def _connected_indices(
     compute_backend: str = "auto",
     device_points: DevicePoints | None = None,
 ) -> np.ndarray:
-    """Keep only candidates in the in-plane component containing the click."""
+    """Keep only candidates in the in-plane component containing the click.
+
+    Uses the caller's ``cell_size_mm`` / ``min_points_per_cell`` as-is (no
+    auto-coarsening). Intermediate pick stages already skip connectivity;
+    this final pass must stay fine enough to separate coplanar faces.
+    """
     pts = points[candidate_idx]
     u, v = _inplane_basis(plane.normal)
     center = pts.mean(axis=0)
     uu = (pts - center) @ u
     vv = (pts - center) @ v
-    conn_params = _coarsen_connect_params(params, uu, vv)
 
     n_in = len(candidate_idx)
     ctx = get_context(compute_backend, n_points=n_in)
-    cs = conn_params.cell_size_mm
+    cs = float(params.cell_size_mm)
+    min_pts = int(params.min_points_per_cell)
 
     if ctx.name == "cupy" and n_in >= 1_000:
         xp = ctx.xp
@@ -207,7 +202,7 @@ def _connected_indices(
         umin_f = float(uu.min())
         vmin_f = float(vv.min())
 
-    occupied = counts >= conn_params.min_points_per_cell
+    occupied = counts >= min_pts
     labels = _label_components(occupied)
     if labels.max() == 0:
         return candidate_idx
