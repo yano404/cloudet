@@ -20,6 +20,8 @@ dependencies = [
 [project.optional-dependencies]
 # Faster display-only voxel decimation (Open3D C++); picking/fit stay on full cloud.
 fast = ["open3d>=0.17"]
+# GPU compute for fit / residual QC / display voxel (CuPy + CUDA 12.x).
+gpu = ["cupy-cuda12x>=13.0"]
 dev = ["pytest>=7"]
 
 [project.scripts]

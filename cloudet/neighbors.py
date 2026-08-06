@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from cloudet.array_backend import cupy_available, get_context
+
 __all__ = [
     "VoxelHashGrid",
     "voxel_downsample_indices",
@@ -86,15 +88,37 @@ class VoxelHashGrid:
         return cand[d2 <= radius * radius]
 
 
-def voxel_downsample_indices(points: np.ndarray, voxel_size: float) -> np.ndarray:
-    """Indices of one representative point per occupied voxel (numpy)."""
+def voxel_downsample_indices(
+    points: np.ndarray,
+    voxel_size: float,
+    *,
+    compute_backend: str = "auto",
+) -> np.ndarray:
+    """Indices of one representative point per occupied voxel."""
     points = np.asarray(points, dtype=np.float64)
     if voxel_size <= 0:
         return np.arange(len(points))
+    ctx = get_context(compute_backend, n_points=len(points))
+    if ctx.name == "cupy":
+        return _voxel_downsample_indices_cupy(points, voxel_size, ctx)
     ijk = np.floor((points - points.min(axis=0)) / voxel_size).astype(np.int64)
     dims = ijk.max(axis=0) + 1
     keys = (ijk[:, 0] * dims[1] + ijk[:, 1]) * dims[2] + ijk[:, 2]
     _, first = np.unique(keys, return_index=True)
+    return np.sort(first)
+
+
+def _voxel_downsample_indices_cupy(
+    points: np.ndarray, voxel_size: float, ctx
+) -> np.ndarray:
+    xp = ctx.xp
+    pts = ctx.to_device(points)
+    origin = pts.min(axis=0)
+    ijk = xp.floor((pts - origin) / voxel_size).astype(xp.int64)
+    dims = ijk.max(axis=0) + 1
+    keys = (ijk[:, 0] * dims[1] + ijk[:, 1]) * dims[2] + ijk[:, 2]
+    keys_np = ctx.asnumpy(keys)
+    _, first = np.unique(keys_np, return_index=True)
     return np.sort(first)
 
 
@@ -103,9 +127,13 @@ def display_indices(
     voxel_size: float,
     max_points: int,
     seed: int = 0,
+    *,
+    compute_backend: str = "auto",
 ) -> np.ndarray:
-    """Indices for display: optional voxel filter then a hard random cap (numpy)."""
-    idx = voxel_downsample_indices(points, voxel_size)
+    """Indices for display: optional voxel filter then a hard random cap."""
+    idx = voxel_downsample_indices(
+        points, voxel_size, compute_backend=compute_backend
+    )
     if len(idx) > max_points:
         rng = np.random.default_rng(seed)
         idx = np.sort(rng.choice(idx, size=max_points, replace=False))
@@ -113,10 +141,18 @@ def display_indices(
 
 
 def resolve_display_backend(backend: str = "auto") -> str:
-    """Return ``'open3d'`` or ``'numpy'``."""
+    """Return ``'cupy'``, ``'open3d'``, or ``'numpy'``."""
     backend = (backend or "auto").lower()
     if backend == "numpy":
         return "numpy"
+    if backend == "cupy":
+        if not cupy_available():
+            raise ImportError(
+                "display downsample backend 'cupy' requested but CuPy/CUDA "
+                "is not available (pip install cupy-cuda12x, or use "
+                "backend='auto'/'numpy'/'open3d')"
+            )
+        return "cupy"
     if backend == "open3d":
         try:
             import open3d  # noqa: F401
@@ -127,6 +163,8 @@ def resolve_display_backend(backend: str = "auto") -> str:
             ) from e
         return "open3d"
     if backend == "auto":
+        if cupy_available():
+            return "cupy"
         try:
             import open3d  # noqa: F401
 
@@ -135,7 +173,7 @@ def resolve_display_backend(backend: str = "auto") -> str:
             return "numpy"
     raise ValueError(
         f"unknown display downsample backend {backend!r} "
-        "(choose from auto, numpy, open3d)"
+        "(choose from auto, numpy, open3d, cupy)"
     )
 
 
@@ -176,15 +214,21 @@ def display_xyz(
 ) -> np.ndarray:
     """Return ``(M, 3)`` points for display (voxel + hard cap).
 
-    ``backend``: ``auto`` (Open3D if installed, else numpy), ``numpy``,
-    or ``open3d``. Rendering backends (Qt/PyVista, Open3D GUI) can share
-    this; only the decimation implementation changes.
+    ``backend``: ``auto`` (CuPy if available, else Open3D if installed,
+    else numpy), ``numpy``, ``open3d``, or ``cupy``.
     """
     points = np.asarray(points, dtype=np.float64)
     resolved = resolve_display_backend(backend)
     if resolved == "open3d":
         return _display_xyz_open3d(points, voxel_size, max_points, seed)
-    idx = display_indices(points, voxel_size, max_points, seed=seed)
+    compute = "cupy" if resolved == "cupy" else "numpy"
+    idx = display_indices(
+        points,
+        voxel_size,
+        max_points,
+        seed=seed,
+        compute_backend=compute,
+    )
     return points[idx]
 
 

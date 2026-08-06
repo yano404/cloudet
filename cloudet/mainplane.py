@@ -42,6 +42,7 @@ class MainPlaneParams:
     sigma_factor: float = 3.0
     max_threshold_mm: float = 0.3  # ceiling for the adaptive threshold
     max_iterations: int = 100
+    compute_backend: str = "auto"  # auto | numpy | cupy
     # step 3: connectivity
     cell_size_mm: float = 5.0
     min_points_per_cell: int = 5
@@ -110,14 +111,15 @@ def _label_components(occupied: np.ndarray) -> np.ndarray:
 
 def _bounded_robust_fit(points, params: MainPlaneParams, init: Plane) -> FitResult:
     """Adaptive robust fit, but never let the threshold exceed the ceiling."""
-    fit = robust_fit_plane(
-        points,
+    kw = dict(
         threshold=None,
         sigma_factor=params.sigma_factor,
         max_iterations=params.max_iterations,
         init=init,
         min_inlier_fraction=0.0,
+        compute_backend=params.compute_backend,
     )
+    fit = robust_fit_plane(points, **kw)
     if fit.threshold > params.max_threshold_mm:
         fit = robust_fit_plane(
             points,
@@ -125,6 +127,7 @@ def _bounded_robust_fit(points, params: MainPlaneParams, init: Plane) -> FitResu
             max_iterations=params.max_iterations,
             init=init,
             min_inlier_fraction=0.0,
+            compute_backend=params.compute_backend,
         )
     return fit
 

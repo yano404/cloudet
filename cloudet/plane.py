@@ -21,6 +21,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from cloudet.array_backend import ArrayContext, get_context
+
 __all__ = [
     "Plane",
     "FitResult",
@@ -94,6 +96,7 @@ def mad_sigma(
     *,
     max_samples: int | None = None,
     seed: int = 0,
+    ctx: ArrayContext | None = None,
 ) -> float:
     """Robust sigma estimate: 1.4826 * median absolute deviation.
 
@@ -104,6 +107,18 @@ def mad_sigma(
     on a seeded subsample (for iterative loops). Final QC should leave
     ``max_samples=None``.
     """
+    if ctx is not None and ctx.name == "cupy":
+        xp = ctx.xp
+        r = ctx.to_device(signed_residuals).ravel()
+        if r.size == 0:
+            return float("nan")
+        if max_samples is not None and r.size > int(max_samples):
+            rng = np.random.default_rng(int(seed))
+            idx = rng.choice(int(r.size), size=int(max_samples), replace=False)
+            r = r[idx]
+        med = xp.median(r)
+        return float(1.4826 * xp.median(xp.abs(r - med)))
+
     r = np.asarray(signed_residuals, dtype=np.float64)
     if r.size == 0:
         return float("nan")
@@ -145,7 +160,11 @@ def residual_stats(
 # ----------------------------------------------------------------------
 
 
-def fit_plane_lsq(points: np.ndarray) -> Plane:
+def fit_plane_lsq(
+    points: np.ndarray,
+    *,
+    compute_backend: str = "auto",
+) -> Plane:
     """Orthogonal least-squares plane through ``points``.
 
     Minimises the sum of squared perpendicular distances (total least
@@ -158,15 +177,27 @@ def fit_plane_lsq(points: np.ndarray) -> Plane:
     if len(points) < 3:
         raise ValueError("need at least 3 points")
 
-    n = len(points)
-    centroid = points.mean(axis=0)
-    # Scatter without an N×3 centered copy: XᵀX − n c cᵀ.
-    cov = points.T @ points
-    cov -= n * np.outer(centroid, centroid)
+    ctx = get_context(compute_backend, n_points=len(points))
+    if ctx.name == "numpy":
+        n = len(points)
+        centroid = points.mean(axis=0)
+        cov = points.T @ points
+        cov -= n * np.outer(centroid, centroid)
+    else:
+        xp = ctx.xp
+        pts = ctx.to_device(points)
+        n = len(pts)
+        centroid = pts.mean(axis=0)
+        cov = pts.T @ pts
+        cov -= n * xp.outer(centroid, centroid)
+        cov = ctx.asnumpy(cov)
+
     eigvals, eigvecs = np.linalg.eigh(cov)
     normal = eigvecs[:, 0]  # smallest eigenvalue
     if not np.isfinite(eigvals).all() or eigvals[0] < -1e-9 * max(eigvals[-1], 1.0):
         raise ValueError("degenerate point configuration")
+    if ctx.name == "cupy":
+        centroid = ctx.asnumpy(centroid)
     d = -float(normal @ centroid)
     return Plane(normal, d)
 
@@ -314,6 +345,8 @@ def robust_fit_plane(
     max_iterations: int = 50,
     init: Plane | None = None,
     min_inlier_fraction: float = 0.1,
+    *,
+    compute_backend: str = "auto",
 ) -> FitResult:
     """Iterative reweighted plane fit: LSQ -> reselect -> refit.
 
@@ -328,17 +361,44 @@ def robust_fit_plane(
     if n < 3:
         raise ValueError("need at least 3 points")
 
-    plane = init if init is not None else fit_plane_lsq(points)
+    ctx = get_context(compute_backend, n_points=n)
+    if ctx.name == "numpy":
+        return _robust_fit_plane_cpu(
+            points,
+            threshold,
+            sigma_factor,
+            max_iterations,
+            init,
+            min_inlier_fraction,
+        )
+    return _robust_fit_plane_cupy(
+        points,
+        threshold,
+        sigma_factor,
+        max_iterations,
+        init,
+        min_inlier_fraction,
+        ctx,
+    )
+
+
+def _robust_fit_plane_cpu(
+    points: np.ndarray,
+    threshold: float | None,
+    sigma_factor: float,
+    max_iterations: int,
+    init: Plane | None,
+    min_inlier_fraction: float,
+) -> FitResult:
+    n = len(points)
+    plane = init if init is not None else fit_plane_lsq(points, compute_backend="numpy")
     mask = np.ones(n, dtype=bool)
     converged = False
     thr = threshold if threshold is not None else float("nan")
-    # Reuse residual vector across the stable-mask exit; recompute after each LSQ.
     r = plane.signed_distances(points)
 
     for it in range(1, max_iterations + 1):
         if threshold is None:
-            # Exact MAD every iteration: subsampled MAD jitters the threshold
-            # enough that the inlier mask never becomes identical (no converge).
             thr = sigma_factor * mad_sigma(r[mask])
             if not np.isfinite(thr) or thr <= 0:
                 raise ValueError("adaptive threshold collapsed (degenerate residuals)")
@@ -352,7 +412,7 @@ def robust_fit_plane(
             converged = True
             break
         mask = new_mask
-        plane = fit_plane_lsq(points[mask])
+        plane = fit_plane_lsq(points[mask], compute_backend="numpy")
         r = plane.signed_distances(points)
 
     return FitResult(
@@ -363,4 +423,58 @@ def robust_fit_plane(
         threshold=float(thr),
         stats_inliers=residual_stats(r[mask]),
         stats_all=residual_stats(r),
+    )
+
+
+def _robust_fit_plane_cupy(
+    points: np.ndarray,
+    threshold: float | None,
+    sigma_factor: float,
+    max_iterations: int,
+    init: Plane | None,
+    min_inlier_fraction: float,
+    ctx: ArrayContext,
+) -> FitResult:
+    xp = ctx.xp
+    n = len(points)
+    pts = ctx.to_device(points)
+    plane = init if init is not None else fit_plane_lsq(points, compute_backend="cupy")
+    normal = ctx.to_device(plane.normal)
+    d = float(plane.d)
+    mask = xp.ones(n, dtype=bool)
+    converged = False
+    thr = threshold if threshold is not None else float("nan")
+    r = pts @ normal + d
+
+    for it in range(1, max_iterations + 1):
+        if threshold is None:
+            thr = sigma_factor * mad_sigma(r[mask], ctx=ctx)
+            if not np.isfinite(thr) or thr <= 0:
+                raise ValueError("adaptive threshold collapsed (degenerate residuals)")
+        new_mask = xp.abs(r) <= thr
+        n_in = int(xp.count_nonzero(new_mask))
+        if n_in < max(3, int(min_inlier_fraction * n)):
+            raise ValueError(
+                f"too few inliers ({n_in}) at threshold {thr:.6g}"
+            )
+        if xp.array_equal(new_mask, mask) and it > 1:
+            converged = True
+            break
+        mask = new_mask
+        inlier_pts = ctx.asnumpy(pts[mask])
+        plane = fit_plane_lsq(inlier_pts, compute_backend="cupy")
+        normal = ctx.to_device(plane.normal)
+        d = float(plane.d)
+        r = pts @ normal + d
+
+    mask_np = ctx.asbool(mask)
+    r_np = ctx.asnumpy(r)
+    return FitResult(
+        plane=plane,
+        inlier_mask=mask_np,
+        n_iterations=it,
+        converged=converged,
+        threshold=float(thr),
+        stats_inliers=residual_stats(r_np[mask_np]),
+        stats_all=residual_stats(r_np),
     )

@@ -63,8 +63,9 @@ class ViewSettings:
     inactive_point_size: float = 2.5
     display_voxel_size_mm: float = 0.5  # 0 = no voxel filter
     display_max_points: int = 4_000_000  # hard cap per geometry
-    # Display-only decimation: "auto" uses Open3D C++ voxel if installed.
-    display_downsample_backend: str = "auto"  # auto | numpy | open3d
+    # Display-only decimation: "auto" prefers CuPy, then Open3D, else numpy.
+    display_downsample_backend: str = "auto"  # auto | numpy | open3d | cupy
+    compute_backend: str = "auto"  # auto | numpy | cupy (fit / residual QC)
     axis_size_mm: float = 100.0
     axis_margin_mm: float = 20.0
 

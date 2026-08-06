@@ -64,6 +64,11 @@ from PySide6.QtWidgets import (
 
 from pyvistaqt import QtInteractor
 
+from cloudet.array_backend import (
+    device_name,
+    resolve_compute_backend,
+    set_default_backend,
+)
 from cloudet.groups import load_groups
 from cloudet.mainplane import MainPlaneParams, extract_main_plane
 from cloudet.multiplane import MultiPlaneParams, _bimodality_flag, extract_planes
@@ -347,6 +352,7 @@ class PickerWindow(QMainWindow):
         self.project_dir.mkdir(parents=True, exist_ok=True)
         self._vtk_log_path = route_vtk_messages_to_file(self.project_dir / "vtk.log")
         self.settings = load_settings(self.project_dir, warn=self._status)
+        set_default_backend(self.settings.view.compute_backend)
 
         self.full_points: np.ndarray = np.zeros((0, 3))
         self.grid: VoxelHashGrid | None = None
@@ -404,6 +410,7 @@ class PickerWindow(QMainWindow):
         self._build_uv_dock()
         self._build_shortcuts()
         ready = "Ready"
+        ready += f"  |  {self._compute_status_suffix()}"
         if self._vtk_log_path is not None:
             ready += f"  |  VTK messages -> {self._vtk_log_path}"
         self._status_default = ready
@@ -1004,17 +1011,31 @@ class PickerWindow(QMainWindow):
             ),
         )
         self.s_ds_backend = QComboBox()
-        self.s_ds_backend.addItems(["auto", "open3d", "numpy"])
+        self.s_ds_backend.addItems(["auto", "cupy", "open3d", "numpy"])
         self.s_ds_backend.setCurrentText(
             getattr(v, "display_downsample_backend", "auto")
         )
         self.s_ds_backend.setToolTip(
             setting_tip(
                 "Display downsampling method",
-                "Chooses how display points are thinned. auto prefers Open3D "
-                "when available; rendering remains in Qt / PyVista.",
+                "Chooses how display points are thinned. auto prefers CuPy, "
+                "then Open3D when available; rendering remains in Qt / PyVista.",
                 "3D display preparation only",
                 "display_downsample_backend",
+            )
+        )
+        self.s_compute_backend = QComboBox()
+        self.s_compute_backend.addItems(["auto", "cupy", "numpy"])
+        self.s_compute_backend.setCurrentText(
+            getattr(v, "compute_backend", "auto")
+        )
+        self.s_compute_backend.setToolTip(
+            setting_tip(
+                "Compute backend",
+                "Chooses CPU (NumPy) or GPU (CuPy) for Fit and residual u–v maps. "
+                "auto uses CuPy when CUDA is available (skipped for small clouds).",
+                "Fit and residual QC",
+                "compute_backend",
             )
         )
         self.s_ptsize = dspin(
@@ -1077,6 +1098,10 @@ class PickerWindow(QMainWindow):
             self.s_ds_backend,
         )
         view_form.addRow(
+            labeled("Compute backend", self.s_compute_backend.toolTip()),
+            self.s_compute_backend,
+        )
+        view_form.addRow(
             labeled("Source cloud point size", self.s_ptsize.toolTip()),
             self.s_ptsize,
         )
@@ -1132,7 +1157,7 @@ class PickerWindow(QMainWindow):
             self.s_radius, self.s_locthr, self.s_lociter, self.s_minnb, self.s_minin,
             self.s_accthr, self.s_connect, self.s_cell, self.s_expand, self.s_maxexp,
             self.s_maxinplane, self.s_backend, self.s_voxel, self.s_maxdisp,
-            self.s_ds_backend, self.s_ptsize, self.s_active_pt, self.s_inactive_pt,
+            self.s_ds_backend, self.s_compute_backend, self.s_ptsize, self.s_active_pt, self.s_inactive_pt,
         ]
         for w in self._settings_controls:
             help_text = w.toolTip()
@@ -1391,6 +1416,16 @@ class PickerWindow(QMainWindow):
                 self.settings_help_label.setText(SETTINGS_HELP_DEFAULT)
         return super().eventFilter(watched, event)
 
+    def _compute_status_suffix(self) -> str:
+        try:
+            resolved = resolve_compute_backend(self.settings.view.compute_backend)
+        except ImportError as e:
+            return f"compute: error ({e})"
+        if resolved == "cupy":
+            name = device_name() or "CUDA"
+            return f"compute: cupy ({name})"
+        return "compute: numpy"
+
     def _status(self, msg):
         self.statusBar().showMessage(str(msg)) if hasattr(self, "statusBar") else print(msg)
 
@@ -1513,7 +1548,14 @@ class PickerWindow(QMainWindow):
         plane = Plane.from_array(plane_entry["abcd"])
         bins = self._uv_bins_value()
         # Map + hist only; per-point u/v samples are built lazily on selection.
-        uv = residual_uv_map(pts, plane, mask=mask, bins=bins, return_points=False)
+        uv = residual_uv_map(
+            pts,
+            plane,
+            mask=mask,
+            bins=bins,
+            return_points=False,
+            compute_backend=self.settings.view.compute_backend,
+        )
         mad = float(plane_entry["mad_sigma_mm"])
         threshold = float(self._uv_vlim_mm())
         plane_entry["threshold_mm"] = float(
@@ -1576,7 +1618,8 @@ class PickerWindow(QMainWindow):
             r = plane.signed_distances(pts)
         else:
             uv = residual_uv_map(
-                pts, plane, mask=None, bins=self._uv_bins_value(), return_points=True
+                pts, plane, mask=None, bins=self._uv_bins_value(), return_points=True,
+                compute_backend=self.settings.view.compute_backend,
             )
             uu, vv, r = uv["u"], uv["v"], uv["r"]
         plane_entry["uv_samples"] = {
@@ -2367,6 +2410,7 @@ class PickerWindow(QMainWindow):
             display_voxel_size_mm=self.s_voxel.value(),
             display_max_points=self.s_maxdisp.value(),
             display_downsample_backend=self.s_ds_backend.currentText(),
+            compute_backend=self.s_compute_backend.currentText(),
             axis_size_mm=old.axis_size_mm,
             axis_margin_mm=old.axis_margin_mm,
         )
@@ -2385,6 +2429,7 @@ class PickerWindow(QMainWindow):
 
         self.settings.detection = new_det
         self.settings.view = new_view
+        set_default_backend(new_view.compute_backend)
 
         if effects.invalidate_grid:
             self.grid = None
@@ -2480,6 +2525,9 @@ class PickerWindow(QMainWindow):
             self.s_ds_backend.setCurrentText(
                 getattr(v, "display_downsample_backend", "auto")
             )
+            self.s_compute_backend.setCurrentText(
+                getattr(v, "compute_backend", "auto")
+            )
             self.s_ptsize.setValue(v.base_point_size)
             self.s_active_pt.setValue(v.active_point_size)
             self.s_inactive_pt.setValue(v.inactive_point_size)
@@ -2521,6 +2569,7 @@ class PickerWindow(QMainWindow):
         self.project_dir = path
         self._vtk_log_path = route_vtk_messages_to_file(self.project_dir / "vtk.log")
         self.settings = load_settings(self.project_dir, warn=self._status)
+        set_default_backend(self.settings.view.compute_backend)
         self._write_form_from_settings()
         self.grid = None
 
@@ -2534,6 +2583,7 @@ class PickerWindow(QMainWindow):
 
         self._update_project_labels()
         ready = "Ready"
+        ready += f"  |  {self._compute_status_suffix()}"
         if self._vtk_log_path is not None:
             ready += f"  |  VTK messages -> {self._vtk_log_path}"
         self._status_default = ready
@@ -2998,6 +3048,7 @@ class PickerWindow(QMainWindow):
 
         pts = self.full_points[g["indices"]]
         backend = self.settings.detection.ransac_backend
+        compute = self.settings.view.compute_backend
         if self.multiplane_cb.isChecked():
             mp = MultiPlaneParams()
             mp = MultiPlaneParams(
@@ -3005,6 +3056,7 @@ class PickerWindow(QMainWindow):
                     mp.plane,
                     ransac_backend=backend,
                     max_threshold_mm=FIT_MAX_THRESHOLD_MM,
+                    compute_backend=compute,
                 )
             )
             extracted = extract_planes(
@@ -3016,6 +3068,7 @@ class PickerWindow(QMainWindow):
                 MainPlaneParams(
                     ransac_backend=backend,
                     max_threshold_mm=FIT_MAX_THRESHOLD_MM,
+                    compute_backend=compute,
                 ),
                 clicked=g["clicked"],
                 coarse_plane=g["coarse_plane"],
@@ -3061,8 +3114,9 @@ class PickerWindow(QMainWindow):
         self._refresh_tree()
         self._show_uv_for_selection()
         planes = g["fit"]["planes"]
+        compute = resolve_compute_backend(self.settings.view.compute_backend)
         self._status(
-            f"{g['name']}: {len(planes)} plane(s): "
+            f"{g['name']}: {len(planes)} plane(s) [{compute}]: "
             + " | ".join(
                 f"p{p['plane_index']} {p['mad_sigma_mm']*1e3:.0f}um {p['status']}"
                 + (" BIMODAL" if p["bimodal"] else "")

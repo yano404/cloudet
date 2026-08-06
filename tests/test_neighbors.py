@@ -206,7 +206,7 @@ def test_resolve_display_backend_auto():
     from cloudet.neighbors import resolve_display_backend
 
     resolved = resolve_display_backend("auto")
-    assert resolved in ("numpy", "open3d")
+    assert resolved in ("numpy", "open3d", "cupy")
     assert resolve_display_backend("numpy") == "numpy"
 
 
