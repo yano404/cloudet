@@ -5,12 +5,14 @@ import pytest
 
 from cloudet.array_backend import (
     GPU_MIN_POINTS,
+    cupy_available,
+    cupy_unavailable_reason,
     get_context,
     resolve_compute_backend,
 )
 from cloudet.neighbors import display_indices, resolve_display_backend, voxel_downsample_indices
 from cloudet.pipeline import residual_uv_map
-from cloudet.plane import Plane, robust_fit_plane
+from cloudet.plane import Plane, robust_fit_plane, run_ransac
 
 try:
     import cupy as cp
@@ -100,8 +102,31 @@ def test_display_indices_cupy_backend():
     assert 0 < len(idx) <= 20_000
 
 
+def test_forced_cupy_uses_gpu_on_small_clouds():
+    if not HAS_CUPY:
+        pytest.skip("cupy not available")
+    assert resolve_compute_backend("cupy", n_points=1000) == "cupy"
+
+
+@pytest.mark.skipif(not HAS_CUPY, reason="cupy not available")
+def test_ransac_cpu_gpu_parity():
+    pts, true = _synthetic_plane(n_pts=60_000)
+    kw = dict(threshold=0.2, n_iterations=200, seed=5, compute_backend="numpy")
+    p_cpu, m_cpu = run_ransac(pts, **kw)
+    p_gpu, m_gpu = run_ransac(pts, **kw, compute_backend="cupy")
+    assert p_cpu.angle_to(p_gpu) < 1e-3
+    assert m_cpu.sum() == m_gpu.sum()
+
+
 def test_forced_cupy_without_install_raises():
-    if HAS_CUPY:
-        pytest.skip("cupy installed")
+    if cupy_available():
+        pytest.skip("cupy usable")
     with pytest.raises(ImportError, match="cupy"):
         get_context("cupy", n_points=100_000)
+
+
+def test_cupy_unavailable_reason_when_not_usable():
+    if cupy_available():
+        pytest.skip("cupy usable")
+    reason = cupy_unavailable_reason()
+    assert reason

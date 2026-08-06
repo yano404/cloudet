@@ -88,6 +88,14 @@ class VoxelHashGrid:
         return cand[d2 <= radius * radius]
 
 
+def _voxel_downsample_indices_numpy(points: np.ndarray, voxel_size: float) -> np.ndarray:
+    ijk = np.floor((points - points.min(axis=0)) / voxel_size).astype(np.int64)
+    dims = ijk.max(axis=0) + 1
+    keys = (ijk[:, 0] * dims[1] + ijk[:, 1]) * dims[2] + ijk[:, 2]
+    _, first = np.unique(keys, return_index=True)
+    return np.sort(first)
+
+
 def voxel_downsample_indices(
     points: np.ndarray,
     voxel_size: float,
@@ -100,12 +108,11 @@ def voxel_downsample_indices(
         return np.arange(len(points))
     ctx = get_context(compute_backend, n_points=len(points))
     if ctx.name == "cupy":
-        return _voxel_downsample_indices_cupy(points, voxel_size, ctx)
-    ijk = np.floor((points - points.min(axis=0)) / voxel_size).astype(np.int64)
-    dims = ijk.max(axis=0) + 1
-    keys = (ijk[:, 0] * dims[1] + ijk[:, 1]) * dims[2] + ijk[:, 2]
-    _, first = np.unique(keys, return_index=True)
-    return np.sort(first)
+        try:
+            return _voxel_downsample_indices_cupy(points, voxel_size, ctx)
+        except RuntimeError:
+            return _voxel_downsample_indices_numpy(points, voxel_size)
+    return _voxel_downsample_indices_numpy(points, voxel_size)
 
 
 def _voxel_downsample_indices_cupy(

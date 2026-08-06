@@ -47,12 +47,15 @@ cloudet --cloud /path/to/scan.ply
 cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
 ```
 
+Linux/WSL では `[gpu]` が `cupy-cuda12x[ctk]`（カーネルコンパイル用 CUDA ヘッダ）を入れます。ヘッダ無しで CuPy だけ入っている場合、`auto` では NumPy に自動フォールバックします。
+
 ### GPU（任意・NVIDIA + CUDA 12.x）
 
 3D **表示**はもともと VTK/OpenGL で GPU を使います。任意の **CuPy** で、大点群の Fit・残差 u–v マップ・表示用 voxel 間引きを加速できます。
 
 ```bat
 pip install -e ".[dev,gpu]"
+pip install "cupy-cuda12x[ctk]"   # GPU プローブ失敗時（WSL でヘッダ不足になりがち）
 python -c "import cupy as cp; print(cp.cuda.runtime.getDeviceProperties(0)['name'])"
 cloudet --cloud C:\path\to\scan.ply
 ```

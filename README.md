@@ -47,12 +47,15 @@ cloudet --cloud /path/to/scan.ply
 cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
 ```
 
+On Linux/WSL, the `[gpu]` extra installs `cupy-cuda12x[ctk]` (CUDA headers for kernel compile). If CuPy is installed without headers, cloudet falls back to NumPy automatically in `auto` mode.
+
 ### GPU (optional, NVIDIA + CUDA 12.x)
 
 3D **rendering** already uses the GPU via VTK/OpenGL. Optional **CuPy** accelerates Fit, residual u–v maps, and display voxel downsampling on large clouds.
 
 ```bat
 pip install -e ".[dev,gpu]"
+pip install "cupy-cuda12x[ctk]"   # if GPU probe fails: missing CUDA headers (common on WSL)
 python -c "import cupy as cp; print(cp.cuda.runtime.getDeviceProperties(0)['name'])"
 cloudet --cloud C:\path\to\scan.ply
 ```

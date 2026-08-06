@@ -65,6 +65,7 @@ from PySide6.QtWidgets import (
 from pyvistaqt import QtInteractor
 
 from cloudet.array_backend import (
+    cupy_unavailable_reason,
     device_name,
     resolve_compute_backend,
     set_default_backend,
@@ -1033,7 +1034,8 @@ class PickerWindow(QMainWindow):
             setting_tip(
                 "Compute backend",
                 "Chooses CPU (NumPy) or GPU (CuPy) for Fit and residual u–v maps. "
-                "auto uses CuPy when CUDA is available (skipped for small clouds).",
+                "auto uses CuPy when CUDA is available; cupy forces GPU even on "
+                "small groups. RANSAC scoring and robust refit run on GPU when enabled.",
                 "Fit and residual QC",
                 "compute_backend",
             )
@@ -1424,6 +1426,12 @@ class PickerWindow(QMainWindow):
         if resolved == "cupy":
             name = device_name() or "CUDA"
             return f"compute: cupy ({name})"
+        reason = cupy_unavailable_reason()
+        if reason and self.settings.view.compute_backend in ("auto", "cupy"):
+            short = reason.splitlines()[0]
+            if len(short) > 80:
+                short = short[:77] + "..."
+            return f"compute: numpy ({short})"
         return "compute: numpy"
 
     def _status(self, msg):
@@ -3104,19 +3112,26 @@ class PickerWindow(QMainWindow):
             self._cache_uv_for_plane(pts, entry, p["mask"])
 
     def _fit_active(self):
+        import time
+
         g = self._active_group()
         if g is None:
             raise ValueError("no active group")
-        self._status(f"fitting {g['name']} ...")
+        n_pts = len(g["indices"])
+        compute = resolve_compute_backend(
+            self.settings.view.compute_backend, n_points=n_pts
+        )
+        self._status(f"fitting {g['name']} ({n_pts:,} pts, {compute}) ...")
         QApplication.processEvents()
+        t0 = time.perf_counter()
         self._fit_group(g)
+        elapsed = time.perf_counter() - t0
         self._active_plane_index = 0
         self._refresh_tree()
         self._show_uv_for_selection()
         planes = g["fit"]["planes"]
-        compute = resolve_compute_backend(self.settings.view.compute_backend)
         self._status(
-            f"{g['name']}: {len(planes)} plane(s) [{compute}]: "
+            f"{g['name']}: {len(planes)} plane(s) [{compute}, {elapsed:.1f}s]: "
             + " | ".join(
                 f"p{p['plane_index']} {p['mad_sigma_mm']*1e3:.0f}um {p['status']}"
                 + (" BIMODAL" if p["bimodal"] else "")

@@ -151,6 +151,7 @@ def extract_main_plane(
             n_iterations=params.ransac_iterations,
             seed=params.seed,
             backend=params.ransac_backend,
+            compute_backend=params.compute_backend,
         )
     except ValueError:
         if coarse_plane is None:

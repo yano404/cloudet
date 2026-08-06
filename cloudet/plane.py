@@ -179,26 +179,42 @@ def fit_plane_lsq(
 
     ctx = get_context(compute_backend, n_points=len(points))
     if ctx.name == "numpy":
-        n = len(points)
-        centroid = points.mean(axis=0)
-        cov = points.T @ points
-        cov -= n * np.outer(centroid, centroid)
-    else:
-        xp = ctx.xp
-        pts = ctx.to_device(points)
-        n = len(pts)
-        centroid = pts.mean(axis=0)
-        cov = pts.T @ pts
-        cov -= n * xp.outer(centroid, centroid)
-        cov = ctx.asnumpy(cov)
+        return _plane_from_scatter(points)
+    xp = ctx.xp
+    pts = ctx.to_device(points)
+    return fit_plane_lsq_device(pts, ctx)
 
+
+def _plane_from_scatter(points: np.ndarray) -> Plane:
+    points = np.asarray(points, dtype=np.float64)
+    n = len(points)
+    centroid = points.mean(axis=0)
+    cov = points.T @ points
+    cov -= n * np.outer(centroid, centroid)
     eigvals, eigvecs = np.linalg.eigh(cov)
-    normal = eigvecs[:, 0]  # smallest eigenvalue
+    normal = eigvecs[:, 0]
     if not np.isfinite(eigvals).all() or eigvals[0] < -1e-9 * max(eigvals[-1], 1.0):
         raise ValueError("degenerate point configuration")
-    if ctx.name == "cupy":
-        centroid = ctx.asnumpy(centroid)
     d = -float(normal @ centroid)
+    return Plane(normal, d)
+
+
+def fit_plane_lsq_device(pts_dev, ctx: ArrayContext, mask=None) -> Plane:
+    """LSQ plane from points already on device (optional boolean ``mask``)."""
+    xp = ctx.xp
+    sub = pts_dev if mask is None else pts_dev[mask]
+    n = int(sub.shape[0])
+    if n < 3:
+        raise ValueError("need at least 3 points")
+    centroid = sub.mean(axis=0)
+    cov = sub.T @ sub - n * xp.outer(centroid, centroid)
+    cov_np = ctx.asnumpy(cov)
+    cen_np = ctx.asnumpy(centroid)
+    eigvals, eigvecs = np.linalg.eigh(cov_np)
+    normal = eigvecs[:, 0]
+    if not np.isfinite(eigvals).all() or eigvals[0] < -1e-9 * max(eigvals[-1], 1.0):
+        raise ValueError("degenerate point configuration")
+    d = -float(normal @ cen_np)
     return Plane(normal, d)
 
 
@@ -252,6 +268,53 @@ def ransac_plane(
     plane = Plane(normals[best_i], float(ds[best_i]))
     inlier_mask = plane.distances(points) <= threshold
     return plane, inlier_mask
+
+
+def ransac_plane_cupy(
+    points: np.ndarray,
+    threshold: float,
+    n_iterations: int,
+    seed: int,
+    n_hypo_points: int | None,
+    ctx: ArrayContext,
+) -> tuple[Plane, np.ndarray]:
+    """GPU-batched inlier scoring for plane RANSAC (selector only)."""
+    xp = ctx.xp
+    points = np.asarray(points, dtype=np.float64)
+    pts = ctx.to_device(points)
+    rng = np.random.default_rng(seed)
+    n = len(points)
+    if n_hypo_points is not None and n > n_hypo_points:
+        hypo_idx = rng.choice(n, size=n_hypo_points, replace=False)
+        hypo_pts = pts[hypo_idx]
+        hypo_np = points[hypo_idx]
+    else:
+        hypo_pts = pts
+        hypo_np = points
+
+    samples = hypo_np[rng.integers(0, len(hypo_np), size=(n_iterations, 3))]
+    v1 = samples[:, 1] - samples[:, 0]
+    v2 = samples[:, 2] - samples[:, 0]
+    normals = np.cross(v1, v2)
+    norms = np.linalg.norm(normals, axis=1)
+    valid = norms > 1e-12
+    if not np.any(valid):
+        raise ValueError("RANSAC failed: no valid hypothesis")
+    normals[valid] /= norms[valid, None]
+    ds = -np.einsum("ij,ij->i", normals, samples[:, 0])
+
+    valid_idx = np.flatnonzero(valid)
+    normals_g = xp.asarray(normals[valid], dtype=xp.float64)
+    ds_g = xp.asarray(ds[valid], dtype=xp.float64)
+    dists = xp.abs(hypo_pts @ normals_g.T + ds_g)
+    counts = (dists <= threshold).sum(axis=0)
+    best_j = int(xp.argmax(counts))
+    best_i = int(valid_idx[best_j])
+
+    plane = Plane(normals[best_i], float(ds[best_i]))
+    n_g = xp.asarray(plane.normal, dtype=xp.float64)
+    inlier_mask = xp.abs(pts @ n_g + plane.d) <= threshold
+    return plane, ctx.asbool(inlier_mask)
 
 
 def ransac_plane_open3d(
@@ -309,14 +372,24 @@ def run_ransac(
     seed: int = 0,
     backend: str = "numpy",
     n_hypo_points: int | None = 100_000,
+    *,
+    compute_backend: str = "auto",
 ) -> tuple[Plane, np.ndarray]:
     """Dispatch plane RANSAC to the selected backend.
 
     Both backends are selectors only; the final plane always comes from
     :func:`robust_fit_plane` (orthogonal least squares), so the backend
     choice affects only which points seed the refit.
+
+    When ``backend`` is ``numpy`` and ``compute_backend`` resolves to
+    CuPy, hypothesis scoring runs on the GPU (same seeded hypotheses).
     """
     if backend == "numpy":
+        ctx = get_context(compute_backend, n_points=len(points))
+        if ctx.name == "cupy":
+            return ransac_plane_cupy(
+                points, threshold, n_iterations, seed, n_hypo_points, ctx
+            )
         return ransac_plane(points, threshold, n_iterations, seed, n_hypo_points)
     if backend == "open3d":
         return ransac_plane_open3d(points, threshold, n_iterations, seed)
@@ -438,7 +511,7 @@ def _robust_fit_plane_cupy(
     xp = ctx.xp
     n = len(points)
     pts = ctx.to_device(points)
-    plane = init if init is not None else fit_plane_lsq(points, compute_backend="cupy")
+    plane = init if init is not None else fit_plane_lsq_device(pts, ctx)
     normal = ctx.to_device(plane.normal)
     d = float(plane.d)
     mask = xp.ones(n, dtype=bool)
@@ -461,8 +534,7 @@ def _robust_fit_plane_cupy(
             converged = True
             break
         mask = new_mask
-        inlier_pts = ctx.asnumpy(pts[mask])
-        plane = fit_plane_lsq(inlier_pts, compute_backend="cupy")
+        plane = fit_plane_lsq_device(pts, ctx, mask=mask)
         normal = ctx.to_device(plane.normal)
         d = float(plane.d)
         r = pts @ normal + d
