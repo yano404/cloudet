@@ -53,6 +53,8 @@ class MainPlaneParams:
     fail_mad_sigma_mm: float = 0.25  # above this -> fail
     min_main_fraction: float = 0.2  # main component vs all inliers
     min_points: int = 1000
+    fit_max_points: int = 300_000  # subsample cap for iterative robust refit
+    skip_ransac_min_points: int = 50_000  # reuse picker coarse plane above this
 
 
 @dataclass
@@ -238,6 +240,8 @@ def _bounded_robust_fit(
         compute_backend=params.compute_backend,
         device_points=device_points,
         fit_mask=fit_mask,
+        max_fit_points=params.fit_max_points,
+        seed=params.seed,
     )
     fit = robust_fit_plane(points, **kw)
     if fit.threshold > params.max_threshold_mm:
@@ -250,6 +254,8 @@ def _bounded_robust_fit(
             compute_backend=params.compute_backend,
             device_points=device_points,
             fit_mask=fit_mask,
+            max_fit_points=params.fit_max_points,
+            seed=params.seed,
         )
     return fit
 
@@ -267,20 +273,27 @@ def extract_main_plane(
     device_points = DevicePoints.create(points, params.compute_backend)
 
     # --- 1. seed ---------------------------------------------------------
-    try:
-        seed_plane, _ = run_ransac(
-            points,
-            threshold=params.ransac_threshold_mm,
-            n_iterations=params.ransac_iterations,
-            seed=params.seed,
-            backend=params.ransac_backend,
-            compute_backend=params.compute_backend,
-            device_points=device_points,
-        )
-    except ValueError:
-        if coarse_plane is None:
-            raise
+    if coarse_plane is not None and n >= int(params.skip_ransac_min_points):
         seed_plane = Plane.from_array(coarse_plane)
+        diag["ransac_skipped"] = True
+    else:
+        try:
+            seed_plane, _ = run_ransac(
+                points,
+                threshold=params.ransac_threshold_mm,
+                n_iterations=params.ransac_iterations,
+                seed=params.seed,
+                backend=params.ransac_backend,
+                compute_backend=params.compute_backend,
+                device_points=device_points,
+                return_inlier_mask=False,
+            )
+            diag["ransac_skipped"] = False
+        except ValueError:
+            if coarse_plane is None:
+                raise
+            seed_plane = Plane.from_array(coarse_plane)
+            diag["ransac_skipped"] = True
 
     # --- 2. bounded robust refit (all points) ----------------------------
     fit0 = _bounded_robust_fit(

@@ -35,6 +35,27 @@ __all__ = [
     "mad_sigma",
 ]
 
+_LSQ_MAX_POINTS = 300_000
+_MAD_MAX_SAMPLES = 100_000
+
+
+def _sample_indices(n: int, size: int, rng: np.random.Generator) -> np.ndarray:
+    """Sample ``size`` distinct indices from ``0..n-1`` without huge ``choice(n, ...)``."""
+    size = int(min(size, n))
+    if size <= 0:
+        return np.empty(0, dtype=np.int64)
+    if size >= n:
+        return np.arange(n, dtype=np.int64)
+    if size * 8 < n:
+        buf = np.empty(0, dtype=np.int64)
+        while len(buf) < size:
+            need = size - len(buf)
+            draw = rng.integers(0, n, size=max(need * 2, need + 1024), dtype=np.int64)
+            buf = np.unique(np.concatenate([buf, draw]))
+        rng.shuffle(buf)
+        return buf[:size]
+    return rng.choice(n, size=size, replace=False).astype(np.int64, copy=False)
+
 
 # ----------------------------------------------------------------------
 # Plane model
@@ -229,6 +250,8 @@ def ransac_plane(
     n_iterations: int = 1000,
     seed: int = 0,
     n_hypo_points: int | None = 100_000,
+    *,
+    return_inlier_mask: bool = True,
 ) -> tuple[Plane, np.ndarray]:
     """Pure-numpy plane RANSAC (selector only -- refit afterwards).
 
@@ -271,6 +294,8 @@ def ransac_plane(
         raise ValueError("RANSAC failed: no valid hypothesis")
 
     plane = Plane(normals[best_i], float(ds[best_i]))
+    if not return_inlier_mask:
+        return plane, np.empty(0, dtype=bool)
     inlier_mask = plane.distances(points) <= threshold
     return plane, inlier_mask
 
@@ -284,6 +309,7 @@ def ransac_plane_cupy(
     ctx: ArrayContext,
     *,
     pts_dev=None,
+    return_inlier_mask: bool = True,
 ) -> tuple[Plane, np.ndarray]:
     """GPU-batched inlier scoring for plane RANSAC (selector only)."""
     xp = ctx.xp
@@ -319,6 +345,8 @@ def ransac_plane_cupy(
     best_i = int(valid_idx[best_j])
 
     plane = Plane(normals[best_i], float(ds[best_i]))
+    if not return_inlier_mask:
+        return plane, np.empty(0, dtype=bool)
     n_g = xp.asarray(plane.normal, dtype=xp.float64)
     inlier_mask = xp.abs(pts @ n_g + plane.d) <= threshold
     return plane, ctx.asbool(inlier_mask)
@@ -382,6 +410,7 @@ def run_ransac(
     *,
     compute_backend: str = "auto",
     device_points: DevicePoints | None = None,
+    return_inlier_mask: bool = True,
 ) -> tuple[Plane, np.ndarray]:
     """Dispatch plane RANSAC to the selected backend.
 
@@ -404,13 +433,27 @@ def run_ransac(
                 n_hypo_points,
                 ctx,
                 pts_dev=device_points.pts,
+                return_inlier_mask=return_inlier_mask,
             )
         ctx = get_context(compute_backend, n_points=len(points))
         if ctx.name == "cupy":
             return ransac_plane_cupy(
-                points, threshold, n_iterations, seed, n_hypo_points, ctx
+                points,
+                threshold,
+                n_iterations,
+                seed,
+                n_hypo_points,
+                ctx,
+                return_inlier_mask=return_inlier_mask,
             )
-        return ransac_plane(points, threshold, n_iterations, seed, n_hypo_points)
+        return ransac_plane(
+            points,
+            threshold,
+            n_iterations,
+            seed,
+            n_hypo_points,
+            return_inlier_mask=return_inlier_mask,
+        )
     if backend == "open3d":
         return ransac_plane_open3d(points, threshold, n_iterations, seed)
     raise ValueError(f"unknown RANSAC backend {backend!r} (choose from {RANSAC_BACKENDS})")
@@ -442,6 +485,8 @@ def robust_fit_plane(
     compute_backend: str = "auto",
     device_points: DevicePoints | None = None,
     fit_mask: np.ndarray | None = None,
+    max_fit_points: int | None = _LSQ_MAX_POINTS,
+    seed: int = 0,
 ) -> FitResult:
     """Iterative reweighted plane fit: LSQ -> reselect -> refit.
 
@@ -450,6 +495,10 @@ def robust_fit_plane(
     If ``threshold`` is None it is chosen adaptively per iteration as
     ``sigma_factor * mad_sigma`` of the current residuals, which is
     robust against truncation bias.
+
+    When the masked (or full) input exceeds ``max_fit_points``, the
+    iterative refit runs on a seeded subsample and applies the final
+    threshold once on the full input for the returned inlier mask.
     """
     points = np.asarray(points, dtype=np.float64)
     n = len(points)
@@ -473,6 +522,8 @@ def robust_fit_plane(
                 init,
                 min_inlier_fraction,
                 fit_mask=fit_mask,
+                max_fit_points=max_fit_points,
+                seed=seed,
             )
         return _robust_fit_plane_cupy(
             points,
@@ -484,6 +535,8 @@ def robust_fit_plane(
             ctx,
             pts_dev=device_points.pts,
             fit_mask=fit_mask,
+            max_fit_points=max_fit_points,
+            seed=seed,
         )
 
     ctx = get_context(compute_backend, n_points=n)
@@ -496,6 +549,8 @@ def robust_fit_plane(
             init,
             min_inlier_fraction,
             fit_mask=fit_mask,
+            max_fit_points=max_fit_points,
+            seed=seed,
         )
     return _robust_fit_plane_cupy(
         points,
@@ -506,38 +561,35 @@ def robust_fit_plane(
         min_inlier_fraction,
         ctx,
         fit_mask=fit_mask,
+        max_fit_points=max_fit_points,
+        seed=seed,
     )
 
 
-def _robust_fit_plane_cpu(
-    points: np.ndarray,
+def _robust_fit_iterate_cpu(
+    host: np.ndarray,
+    *,
     threshold: float | None,
     sigma_factor: float,
     max_iterations: int,
     init: Plane | None,
     min_inlier_fraction: float,
-    fit_mask: np.ndarray | None = None,
-) -> FitResult:
-    n = len(points)
-    n_fit = int(np.count_nonzero(fit_mask)) if fit_mask is not None else n
-    if fit_mask is not None:
-        sub = points[fit_mask]
-        plane = init if init is not None else fit_plane_lsq(sub, compute_backend="numpy")
-        mask = np.ones(n_fit, dtype=bool)
-        r = plane.signed_distances(sub)
-        host = sub
-    else:
-        plane = init if init is not None else fit_plane_lsq(points, compute_backend="numpy")
-        mask = np.ones(n, dtype=bool)
-        r = plane.signed_distances(points)
-        host = points
-
+    seed: int,
+    lsq_max_points: int | None,
+) -> tuple[Plane, float, bool, int]:
+    n_fit = len(host)
+    plane = init if init is not None else fit_plane_lsq(host, compute_backend="numpy")
+    r = plane.signed_distances(host)
+    mask = np.ones(n_fit, dtype=bool)
+    rng = np.random.default_rng(int(seed))
     converged = False
     thr = threshold if threshold is not None else float("nan")
 
     for it in range(1, max_iterations + 1):
         if threshold is None:
-            thr = sigma_factor * mad_sigma(r[mask])
+            thr = sigma_factor * mad_sigma(
+                r[mask], max_samples=_MAD_MAX_SAMPLES, seed=seed
+            )
             if not np.isfinite(thr) or thr <= 0:
                 raise ValueError("adaptive threshold collapsed (degenerate residuals)")
         new_mask = np.abs(r) <= thr
@@ -550,32 +602,124 @@ def _robust_fit_plane_cpu(
             converged = True
             break
         mask = new_mask
-        plane = fit_plane_lsq(host[mask], compute_backend="numpy")
+        in_idx = np.flatnonzero(mask)
+        if lsq_max_points is not None and len(in_idx) > lsq_max_points:
+            in_idx = in_idx[_sample_indices(len(in_idx), lsq_max_points, rng)]
+        plane = fit_plane_lsq(host[in_idx], compute_backend="numpy")
         r = plane.signed_distances(host)
+    return plane, float(thr), converged, it
 
+
+def _robust_fit_plane_cpu(
+    points: np.ndarray,
+    threshold: float | None,
+    sigma_factor: float,
+    max_iterations: int,
+    init: Plane | None,
+    min_inlier_fraction: float,
+    fit_mask: np.ndarray | None = None,
+    max_fit_points: int | None = _LSQ_MAX_POINTS,
+    seed: int = 0,
+) -> FitResult:
+    points = np.asarray(points, dtype=np.float64)
+    n = len(points)
     if fit_mask is not None:
-        full_mask = np.zeros(n, dtype=bool)
-        full_mask[np.flatnonzero(fit_mask)] = mask
-        full_r = plane.signed_distances(points)
-        return FitResult(
-            plane=plane,
-            inlier_mask=full_mask,
-            n_iterations=it,
-            converged=converged,
-            threshold=float(thr),
-            stats_inliers=residual_stats(r[mask]),
-            stats_all=residual_stats(r),
-        )
+        fit_idx = np.flatnonzero(np.asarray(fit_mask, dtype=bool))
+        host = points[fit_idx]
+        n_fit = len(host)
+    else:
+        fit_idx = None
+        host = points
+        n_fit = n
 
+    work = host
+    if max_fit_points is not None and n_fit > int(max_fit_points):
+        rng = np.random.default_rng(int(seed))
+        work = host[_sample_indices(n_fit, int(max_fit_points), rng)]
+
+    plane, thr, converged, it = _robust_fit_iterate_cpu(
+        work,
+        threshold=threshold,
+        sigma_factor=sigma_factor,
+        max_iterations=max_iterations,
+        init=init,
+        min_inlier_fraction=min_inlier_fraction,
+        seed=seed,
+        lsq_max_points=max_fit_points,
+    )
+
+    eval_r = plane.signed_distances(points)
+    inlier = np.abs(eval_r) <= thr
+    if fit_mask is not None:
+        inlier &= np.asarray(fit_mask, dtype=bool)
+        stats_all = residual_stats(eval_r[fit_mask])
+    else:
+        stats_all = residual_stats(eval_r)
     return FitResult(
         plane=plane,
-        inlier_mask=mask,
+        inlier_mask=inlier,
         n_iterations=it,
         converged=converged,
         threshold=float(thr),
-        stats_inliers=residual_stats(r[mask]),
-        stats_all=residual_stats(r),
+        stats_inliers=residual_stats(eval_r[inlier]),
+        stats_all=stats_all,
     )
+
+
+def _robust_fit_iterate_cupy(
+    work_pts,
+    ctx: ArrayContext,
+    *,
+    threshold: float | None,
+    sigma_factor: float,
+    max_iterations: int,
+    init: Plane | None,
+    min_inlier_fraction: float,
+    seed: int,
+    lsq_max_points: int | None,
+) -> tuple[Plane, float, bool, int]:
+    xp = ctx.xp
+    n_fit = int(work_pts.shape[0])
+    if init is not None:
+        plane = init
+    else:
+        plane = fit_plane_lsq_device(work_pts, ctx)
+    normal = ctx.to_device(plane.normal)
+    d = float(plane.d)
+    mask = xp.ones(n_fit, dtype=bool)
+    rng = np.random.default_rng(int(seed))
+    converged = False
+    thr = threshold if threshold is not None else float("nan")
+    r = work_pts @ normal + d
+
+    for it in range(1, max_iterations + 1):
+        if threshold is None:
+            thr = sigma_factor * mad_sigma(r[mask], max_samples=_MAD_MAX_SAMPLES, seed=seed, ctx=ctx)
+            if not np.isfinite(thr) or thr <= 0:
+                raise ValueError("adaptive threshold collapsed (degenerate residuals)")
+        new_mask = xp.abs(r) <= thr
+        n_in = int(xp.count_nonzero(new_mask).item())
+        if n_in < max(3, int(min_inlier_fraction * n_fit)):
+            raise ValueError(
+                f"too few inliers ({n_in}) at threshold {thr:.6g}"
+            )
+        if xp.array_equal(new_mask, mask) and it > 1:
+            converged = True
+            break
+        mask = new_mask
+        n_lsq = int(xp.count_nonzero(mask).item())
+        if lsq_max_points is not None and n_lsq > int(lsq_max_points):
+            idx = xp.flatnonzero(mask)
+            sel = xp.asarray(
+                _sample_indices(n_lsq, int(lsq_max_points), rng), dtype=xp.int64
+            )
+            plane = fit_plane_lsq_device(work_pts[idx[sel]], ctx)
+        else:
+            plane = fit_plane_lsq_device(work_pts, ctx, mask=mask)
+        normal = ctx.to_device(plane.normal)
+        d = float(plane.d)
+        r = work_pts @ normal + d
+    return plane, float(thr), converged, it
 
 
 def _robust_fit_plane_cupy(
@@ -589,65 +733,67 @@ def _robust_fit_plane_cupy(
     *,
     pts_dev=None,
     fit_mask: np.ndarray | None = None,
+    max_fit_points: int | None = _LSQ_MAX_POINTS,
+    seed: int = 0,
 ) -> FitResult:
     xp = ctx.xp
     n = len(points)
     pts = pts_dev if pts_dev is not None else ctx.to_device(points)
     fit_mask_g = ctx.to_device_bool(fit_mask) if fit_mask is not None else None
-    n_fit = int(xp.count_nonzero(fit_mask_g)) if fit_mask_g is not None else n
+    n_fit = int(xp.count_nonzero(fit_mask_g).item()) if fit_mask_g is not None else n
 
-    if init is not None:
-        plane = init
-    elif fit_mask_g is not None:
-        plane = fit_plane_lsq_device(pts, ctx, mask=fit_mask_g)
+    if fit_mask_g is not None:
+        fit_idx = xp.flatnonzero(fit_mask_g)
     else:
-        plane = fit_plane_lsq_device(pts, ctx)
+        fit_idx = None
+
+    if max_fit_points is not None and n_fit > int(max_fit_points):
+        rng = np.random.default_rng(int(seed))
+        if fit_idx is not None:
+            sel = xp.asarray(
+                _sample_indices(n_fit, int(max_fit_points), rng), dtype=xp.int64
+            )
+            work_pts = pts[fit_idx[sel]]
+        else:
+            sel = xp.asarray(
+                _sample_indices(n, int(max_fit_points), rng), dtype=xp.int64
+            )
+            work_pts = pts[sel]
+    elif fit_idx is not None:
+        work_pts = pts[fit_idx]
+    else:
+        work_pts = pts
+
+    plane, thr, converged, it = _robust_fit_iterate_cupy(
+        work_pts,
+        ctx,
+        threshold=threshold,
+        sigma_factor=sigma_factor,
+        max_iterations=max_iterations,
+        init=init,
+        min_inlier_fraction=min_inlier_fraction,
+        seed=seed,
+        lsq_max_points=max_fit_points,
+    )
 
     normal = ctx.to_device(plane.normal)
-    d = float(plane.d)
+    r = pts @ normal + plane.d
+    inlier = xp.abs(r) <= thr
     if fit_mask_g is not None:
-        mask = fit_mask_g.copy()
-    else:
-        mask = xp.ones(n, dtype=bool)
-    converged = False
-    thr = threshold if threshold is not None else float("nan")
-    r = pts @ normal + d
-
-    for it in range(1, max_iterations + 1):
-        if threshold is None:
-            thr = sigma_factor * mad_sigma(r[mask], ctx=ctx)
-            if not np.isfinite(thr) or thr <= 0:
-                raise ValueError("adaptive threshold collapsed (degenerate residuals)")
-        new_mask = xp.abs(r) <= thr
-        if fit_mask_g is not None:
-            new_mask = new_mask & fit_mask_g
-        n_in = int(xp.count_nonzero(new_mask).item())
-        if n_in < max(3, int(min_inlier_fraction * n_fit)):
-            raise ValueError(
-                f"too few inliers ({n_in}) at threshold {thr:.6g}"
-            )
-        if xp.array_equal(new_mask, mask) and it > 1:
-            converged = True
-            break
-        mask = new_mask
-        plane = fit_plane_lsq_device(pts, ctx, mask=mask)
-        normal = ctx.to_device(plane.normal)
-        d = float(plane.d)
-        r = pts @ normal + d
-
-    mask_np = ctx.asbool(mask)
+        inlier = inlier & fit_mask_g
+    inlier_np = ctx.asbool(inlier)
     r_np = ctx.asnumpy(r)
-    if fit_mask_g is not None:
-        fit_mask_np = ctx.asbool(fit_mask_g)
+    if fit_mask is not None:
+        fit_mask_np = np.asarray(fit_mask, dtype=bool)
         stats_all = residual_stats(r_np[fit_mask_np])
     else:
         stats_all = residual_stats(r_np)
     return FitResult(
         plane=plane,
-        inlier_mask=mask_np,
+        inlier_mask=inlier_np,
         n_iterations=it,
         converged=converged,
         threshold=float(thr),
-        stats_inliers=residual_stats(r_np[mask_np]),
+        stats_inliers=residual_stats(r_np[inlier_np]),
         stats_all=stats_all,
     )

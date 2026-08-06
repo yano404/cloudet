@@ -1480,7 +1480,6 @@ class PickerWindow(QMainWindow):
                         "neighbor_s",
                         "grid_build_s",
                         "neighbor_query_s",
-                        "n_neighbors",
                         "local_fit_s",
                         "progressive_s",
                         "accumulate_s",

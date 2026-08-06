@@ -161,6 +161,32 @@ def test_extract_main_plane_gpu_connectivity():
     assert res.status in ("ok", "suspect")
 
 
+def test_robust_fit_subsample_matches_full_on_plane():
+    """Large clouds refit on a subsample then score once on the full input."""
+    pts, init = _synthetic_plane(n_pts=800_000)
+    kw = dict(threshold=0.2, init=init, min_inlier_fraction=0.0, seed=3)
+    full = robust_fit_plane(pts, max_fit_points=None, compute_backend="numpy", **kw)
+    sub = robust_fit_plane(pts, max_fit_points=120_000, compute_backend="numpy", **kw)
+    assert full.plane.angle_to(sub.plane) < 1e-3
+    assert abs(full.n_inliers - sub.n_inliers) / full.n_inliers < 0.02
+
+
+@pytest.mark.skipif(not HAS_CUPY, reason="cupy not available")
+def test_extract_main_plane_skips_ransac_with_coarse_plane():
+    from cloudet.mainplane import MainPlaneParams, extract_main_plane
+
+    pts, coarse = _synthetic_plane(n_pts=120_000)
+    clicked = pts[len(pts) // 2]
+    res = extract_main_plane(
+        pts,
+        MainPlaneParams(compute_backend="cupy", skip_ransac_min_points=50_000),
+        clicked=clicked,
+        coarse_plane=coarse.as_array(),
+    )
+    assert res.diagnostics.get("ransac_skipped") is True
+    assert res.status in ("ok", "suspect")
+
+
 @pytest.mark.skipif(not HAS_CUPY, reason="cupy not available")
 def test_ransac_cpu_gpu_parity():
     pts, true = _synthetic_plane(n_pts=60_000)
