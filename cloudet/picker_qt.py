@@ -1478,6 +1478,9 @@ class PickerWindow(QMainWindow):
                     f"{k}={detail[k]:.3f}s"
                     for k in (
                         "neighbor_s",
+                        "grid_build_s",
+                        "neighbor_query_s",
+                        "n_neighbors",
                         "local_fit_s",
                         "progressive_s",
                         "accumulate_s",
@@ -1490,6 +1493,8 @@ class PickerWindow(QMainWindow):
             )
             if "n_candidates" in detail:
                 parts.append(f"n_candidates={detail['n_candidates']:,}")
+            if "n_neighbors" in detail:
+                parts.append(f"n_neighbors={detail['n_neighbors']:,}")
         parts.append(f"fit={timing['fit_s']:.3f}s")
         parts.append(f"uv={timing['uv_s']:.3f}s")
         if timing.get("post_s") is not None:
@@ -2752,16 +2757,23 @@ class PickerWindow(QMainWindow):
         )
         self._update_source_meta()
         self._sync_action_states()
+        self._ensure_grid()
 
     def _ensure_grid(self) -> VoxelHashGrid:
-        if self.grid is None:
-            if len(self.full_points) == 0:
-                raise ValueError("no cloud loaded")
-            self._status("building spatial index ...")
-            QApplication.processEvents()
-            cell = max(self.settings.detection.local_radius_mm, 1.0)
-            self.grid = VoxelHashGrid(self.full_points, cell_size=cell)
-            self._status("spatial index ready")
+        if len(self.full_points) == 0:
+            raise ValueError("no cloud loaded")
+        cell = VoxelHashGrid.cell_size_for_radius(
+            self.settings.detection.local_radius_mm
+        )
+        if self.grid is not None and self.grid.cell_size == cell:
+            return self.grid
+        self._status(
+            f"building spatial index ({len(self.full_points):,} pts, "
+            f"cell={cell:.1f} mm) ..."
+        )
+        QApplication.processEvents()
+        self.grid = VoxelHashGrid(self.full_points, cell_size=cell)
+        self._status("spatial index ready")
         return self.grid
 
     # ------------------------------------------------------------------
@@ -3094,12 +3106,27 @@ class PickerWindow(QMainWindow):
 
         t_pick0 = time.perf_counter()
         depth_s = (t_pick0 - wall_t0) if wall_t0 is not None else None
+        want_cell = VoxelHashGrid.cell_size_for_radius(
+            self.settings.detection.local_radius_mm
+        )
+        had_grid = (
+            self.grid is not None and self.grid.cell_size == want_cell
+        )
+        t_grid0 = time.perf_counter()
         grid = self._ensure_grid()
+        grid_build_s = 0.0 if had_grid else time.perf_counter() - t_grid0
         self._status(f"picking ({depth_tag}): local plane + refine ...")
         QApplication.processEvents()
+        t_query0 = time.perf_counter()
         nb = grid.radius_indices(world, self.settings.detection.local_radius_mm)
-        neighbor_s = time.perf_counter() - t_pick0
-        pick_detail: dict = {}
+        neighbor_query_s = time.perf_counter() - t_query0
+        neighbor_s = grid_build_s + neighbor_query_s
+        pick_detail: dict = {
+            "grid_build_s": grid_build_s,
+            "neighbor_query_s": neighbor_query_s,
+            "neighbor_s": neighbor_s,
+            "n_neighbors": len(nb),
+        }
         compute = resolve_compute_backend(
             self.settings.view.compute_backend, n_points=len(self.full_points)
         )
@@ -3112,7 +3139,6 @@ class PickerWindow(QMainWindow):
             timings=pick_detail,
         )
         pick_s = time.perf_counter() - t_pick0
-        pick_detail["neighbor_s"] = neighbor_s
 
         if (
             not replace

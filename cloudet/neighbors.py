@@ -21,6 +21,9 @@ __all__ = [
     "depth_layers_along_ray",
 ]
 
+# Above this many grid cells the Python cell walk loses to one vectorized pass.
+_MAX_QUERY_CELLS = 8_000
+
 
 class VoxelHashGrid:
     """Uniform-grid spatial index for fixed-radius neighbour queries.
@@ -49,6 +52,43 @@ class VoxelHashGrid:
         self._cell_keys, self._cell_starts = np.unique(sorted_keys, return_index=True)
         self._order = order
 
+    @classmethod
+    def cell_size_for_radius(cls, radius_mm: float) -> float:
+        """Grid resolution matched to the neighbour query radius."""
+        return max(float(radius_mm), 1.0)
+
+    def _bruteforce_radius_indices(self, center: np.ndarray, radius: float) -> np.ndarray:
+        d2 = np.einsum(
+            "ij,ij->i", self.points - center, self.points - center, optimize=True
+        )
+        return np.flatnonzero(d2 <= radius * radius)
+
+    def _collect_cell_candidates(
+        self, lo: np.ndarray, hi: np.ndarray
+    ) -> np.ndarray:
+        ii = np.arange(lo[0], hi[0] + 1, dtype=np.int64)
+        jj = np.arange(lo[1], hi[1] + 1, dtype=np.int64)
+        kk = np.arange(lo[2], hi[2] + 1, dtype=np.int64)
+        I, J, K = np.meshgrid(ii, jj, kk, indexing="ij")
+        keys = ((I * self.dims[1] + J) * self.dims[2] + K).ravel()
+        pos = np.searchsorted(self._cell_keys, keys)
+        in_range = pos < len(self._cell_keys)
+        pos = pos[in_range]
+        keys = keys[in_range]
+        match = self._cell_keys[pos] == keys
+        pos = pos[match]
+        if len(pos) == 0:
+            return np.empty(0, dtype=np.int64)
+        chunks = [
+            self._order[self._cell_starts[p] : (
+                self._cell_starts[p + 1]
+                if p + 1 < len(self._cell_starts)
+                else len(self._order)
+            )]
+            for p in pos
+        ]
+        return np.concatenate(chunks)
+
     def _cell_indices(self, key: int) -> np.ndarray:
         pos = np.searchsorted(self._cell_keys, key)
         if pos == len(self._cell_keys) or self._cell_keys[pos] != key:
@@ -64,6 +104,7 @@ class VoxelHashGrid:
     def radius_indices(self, center, radius: float) -> np.ndarray:
         """Indices of all points within ``radius`` of ``center``."""
         center = np.asarray(center, dtype=np.float64)
+        radius = float(radius)
         lo = np.floor((center - radius - self.origin) / self.cell_size).astype(np.int64)
         hi = np.floor((center + radius - self.origin) / self.cell_size).astype(np.int64)
         lo = np.maximum(lo, 0)
@@ -71,19 +112,18 @@ class VoxelHashGrid:
         if np.any(hi < lo):
             return np.empty(0, dtype=np.int64)
 
-        chunks = []
-        for i in range(lo[0], hi[0] + 1):
-            for j in range(lo[1], hi[1] + 1):
-                base = (i * self.dims[1] + j) * self.dims[2]
-                for k in range(lo[2], hi[2] + 1):
-                    idx = self._cell_indices(base + k)
-                    if len(idx):
-                        chunks.append(idx)
-        if not chunks:
-            return np.empty(0, dtype=np.int64)
-        cand = np.concatenate(chunks)
+        n_cells = int(np.prod(hi - lo + 1))
+        if n_cells > _MAX_QUERY_CELLS:
+            return self._bruteforce_radius_indices(center, radius)
+
+        cand = self._collect_cell_candidates(lo, hi)
+        if len(cand) == 0:
+            return cand
         d2 = np.einsum(
-            "ij,ij->i", self.points[cand] - center, self.points[cand] - center
+            "ij,ij->i",
+            self.points[cand] - center,
+            self.points[cand] - center,
+            optimize=True,
         )
         return cand[d2 <= radius * radius]
 
