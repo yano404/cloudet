@@ -1,6 +1,6 @@
 # cloudet
 
-FARO Quantum-S で測定した原子核実験用検出器の三次元点群から、検出器の位置・位置関係をリダクションするツール群。既存の ChatGPT 実装（`survey2026/March/DELTA_survey_20260312/`）の再設計版。
+FARO Quantum-S などで取得した三次元点群から、原子核実験用検出器の位置・位置関係をリダクションするツールです。
 
 ## 設計方針
 
@@ -8,7 +8,7 @@ FARO Quantum-S で測定した原子核実験用検出器の三次元点群か�
   クリック点を種に面内へ成長させ、範囲は連結性で決まる（半径では打ち切らない）。
   種の法線は必ず誤差を含む前提で、蓄積 → 再フィット → 再蓄積を収束まで反復する
   （20° 傾いた種からでも面全体を復元することを確認済み）。
-  近接平行面の分離は例外モード（GUI「Split into parallel planes」/ `--multi-plane`）
+  近接平行面の分離は例外モード（GUI「Split into parallel planes」）
 - 計算コア（`cloudet/`）は numpy のみ依存、GUI と完全分離、単体テストで検証
 - RANSAC は点の選別のみに使い、最終平面は常に直交最小二乗（`robust_fit_plane`: フィット → strict 再選別 → 収束まで反復）
 - 統計は inlier（打ち切り）と全点の両方を報告し、打ち切りに頑健な `mad_sigma` を併記
@@ -23,15 +23,15 @@ cloudet/
   mainplane.py  main plane component 抽出（連結成分 + QC ゲート）
   picking.py    クリック駆動の領域抽出ロジック（GUI 非依存）
   plyio.py      PLY 読み書き（double 精度、Open3D 非依存）
-  groups.py     group 読込（新形式 + legacy groups_out 互換）
+  groups.py     group 読込
   project.py    プロジェクトディレクトリ I/O（manifest / settings / group 保存）
-  pipeline.py   バッチフィット（fit_xxx.json + CSV + 残差 u-v マップ）
-  picker_gui.py 対話的 picker（Open3D GUI の薄いシェル）
+  pipeline.py   残差 u–v マップ（GUI QC 用）
+  picker_qt.py  対話的アプリ（PySide6 + PyVista）
   cli.py        cloudet [project] [--cloud ...]（既定はアプリ起動）
 tests/          合成データによる検証（σ=0.03mm の FARO 条件を模擬）
 ```
 
-## 使い方（全工程）
+## 使い方
 
 ```bash
 pip install -e ".[dev]"       # アプリ一式（Qt UI 含む）
@@ -64,16 +64,11 @@ Cmd/Ctrl+ドラッグで矩形選択（ハンドルで調整可）。ズーム�
 Refit selection でその点だけの平面を追加フィットできる（元の fit と矩形は残る）。
 Clear refit で追加フィットだけ消せる。平面を選ぶと表示が切り替わる。
 The Groups tab mirrors depth controls with navigator buttons.
-旧 Open3D 版は `--ui open3d`（要 `pip install -e ".[viz]"`）。
 VTK 自身のエラー・警告は端末ではなく `<project_dir>/vtk.log` に出る
 （`CLOUDET_VTK_LOG=0` で PyVista 既定の挙動に戻す。別の値はログ出力先として使う）。
-
-バッチ `cloudet fit` は非推奨（GUI の Fit を使う）。互換のため当面残しています。
-`cloudet pick ...` も同じアプリ起動の別名です。
 
 ## 段階計画
 
 1. [完了] コア
-2. [完了] バッチ CLI（main component 抽出 + QC がデフォルト）
+2. [完了] GUI picker（Fit / 残差 QC / 保存）
 3. [未] 位置関係リダクション（面間距離・角度・交線・コーナー）
-4. [完了・実機検証待ち] GUI picker 再実装

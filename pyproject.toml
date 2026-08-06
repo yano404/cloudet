@@ -7,29 +7,23 @@ name = "cloudet"
 version = "0.1.0"
 description = "Detector positioning from 3D point clouds (FARO Quantum-S)"
 requires-python = ">=3.10"
+license = { text = "MIT" }
 dependencies = [
     "numpy>=1.24",
     # App UI (required: cloudet is GUI-first)
     "PySide6>=6.5",
     "pyvista>=0.43",
     "pyvistaqt>=0.11",
-    "matplotlib>=3.7",
     "pyqtgraph>=0.13",
 ]
 
 [project.optional-dependencies]
 # Faster display-only voxel decimation (Open3D C++); picking/fit stay on full cloud.
 fast = ["open3d>=0.17"]
-# Legacy Open3D UI (`cloudet --ui open3d`) and/or display backend.
-viz = ["open3d>=0.17"]
 dev = ["pytest>=7"]
-# Compat aliases for older install docs.
-gui = []
-gui_fast = ["open3d>=0.17"]
 
 [project.scripts]
 cloudet = "cloudet.cli:main"
-detpos = "cloudet.cli:main"  # compat alias
 
 [tool.setuptools.packages.find]
 include = ["cloudet*"]

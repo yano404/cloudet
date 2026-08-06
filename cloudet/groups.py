@@ -1,15 +1,10 @@
 """Group set loading.
 
 A "group" is a plane-candidate point set extracted by the interactive
-picker. Two on-disk layouts are supported:
+picker. On disk: ``groups/group_xxx.ply`` + ``group_xxx.json`` with a
+top-level ``manifest.json``.
 
-* new format (cloudet): ``groups/group_xxx.ply`` + ``group_xxx.json``
-  with a top-level ``manifest.json``
-* legacy format (ChatGPT picker): ``group_xxx.ply`` +
-  ``groups_summary.json`` in one directory (read-only compatibility)
-
-Downstream code only relies on this module's ``GroupInfo`` API, so the
-formats can evolve without touching the fitting pipeline.
+Downstream code only relies on this module's ``GroupInfo`` API.
 """
 
 from __future__ import annotations
@@ -53,34 +48,7 @@ class GroupInfo:
         return sha256_file(self.ply_path)
 
 
-def _load_legacy(directory: Path) -> list[GroupInfo]:
-    summary_path = directory / "groups_summary.json"
-    with open(summary_path, encoding="utf-8") as f:
-        summary = json.load(f)
-
-    groups = []
-    for entry in summary:
-        ply_path = directory / entry["ply_file"]
-        if not ply_path.exists():
-            raise FileNotFoundError(
-                f"group listed in {summary_path.name} is missing: {ply_path}"
-            )
-        coarse = entry.get("coarse_plane_model")
-        clicked = entry.get("clicked")
-        groups.append(
-            GroupInfo(
-                group_id=int(entry["group_id"]),
-                name=str(entry.get("name", f"G{entry['group_id']}")),
-                ply_path=ply_path,
-                num_points=int(entry["num_points"]),
-                coarse_plane=np.asarray(coarse, dtype=np.float64) if coarse else None,
-                clicked=np.asarray(clicked, dtype=np.float64) if clicked else None,
-            )
-        )
-    return groups
-
-
-def _load_new(groups_dir: Path) -> list[GroupInfo]:
+def _load_groups(groups_dir: Path) -> list[GroupInfo]:
     groups = []
     for meta_path in sorted(groups_dir.glob("group_*.json")):
         with open(meta_path, encoding="utf-8") as f:
@@ -104,11 +72,10 @@ def _load_new(groups_dir: Path) -> list[GroupInfo]:
 
 
 def load_groups(path: str | Path) -> list[GroupInfo]:
-    """Load a group set from ``path`` (auto-detects layout).
+    """Load a group set from ``path``.
 
-    Accepts either a project directory (containing ``groups/``), a
-    groups directory in the new format, or a legacy picker output
-    directory containing ``groups_summary.json``.
+    Accepts either a project directory (containing ``groups/``) or a
+    groups directory with ``group_*.json`` sidecars.
     """
     path = Path(path)
     if not path.is_dir():
@@ -118,10 +85,7 @@ def load_groups(path: str | Path) -> list[GroupInfo]:
         path = path / "groups"
 
     if list(path.glob("group_*.json")):
-        return _load_new(path)
-    if (path / "groups_summary.json").exists():
-        return _load_legacy(path)
+        return _load_groups(path)
     raise FileNotFoundError(
-        f"no group metadata found in {path} "
-        "(expected group_*.json or groups_summary.json)"
+        f"no group metadata found in {path} (expected group_*.json)"
     )

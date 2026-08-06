@@ -11,3 +11,9 @@ results/
 *.pcd
 *.npz
 .DS_Store
+CLAUDE.md
+.env
+.env.*
+session.json
+*.npy
+vtk.log

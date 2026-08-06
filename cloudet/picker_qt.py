@@ -325,11 +325,9 @@ def route_vtk_messages_to_file(path: Path) -> Path | None:
     removes the logging round-trip and keeps the original text readable.
 
     ``CLOUDET_VTK_LOG=0`` keeps PyVista's default; any other value is used as the
-    log path. ``DETPOS_VTK_LOG`` is still accepted as a compatibility alias.
+    log path.
     """
-    setting = os.environ.get("CLOUDET_VTK_LOG")
-    if setting is None:
-        setting = os.environ.get("DETPOS_VTK_LOG", "")
+    setting = os.environ.get("CLOUDET_VTK_LOG", "")
     if setting == "0":
         return None
     if setting not in ("", "1"):
@@ -1303,18 +1301,7 @@ class PickerWindow(QMainWindow):
         lay.addWidget(sel_card)
 
         try:
-            try:
-                import pyqtgraph as pg
-            except ImportError:
-                # Local editable checkout may ship wheels under code/.deps when
-                # the environment has not yet installed the package extras.
-                import sys
-                from pathlib import Path
-
-                deps = Path(__file__).resolve().parents[1] / ".deps"
-                if deps.is_dir() and str(deps) not in sys.path:
-                    sys.path.insert(0, str(deps))
-                import pyqtgraph as pg
+            import pyqtgraph as pg
 
             pg.setConfigOptions(imageAxisOrder="row-major", antialias=True)
             self._uv_cmap = _rdbu_r_colormap()
