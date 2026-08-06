@@ -3,19 +3,33 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "detpos"
+name = "cloudet"
 version = "0.1.0"
-description = "Detector position reduction from FARO Quantum-S point clouds"
+description = "Detector positioning from 3D point clouds (FARO Quantum-S)"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24"]
+dependencies = [
+    "numpy>=1.24",
+    # App UI (required: cloudet is GUI-first)
+    "PySide6>=6.5",
+    "pyvista>=0.43",
+    "pyvistaqt>=0.11",
+    "matplotlib>=3.7",
+    "pyqtgraph>=0.13",
+]
 
 [project.optional-dependencies]
-gui = ["PySide6>=6.5", "pyvista>=0.43", "pyvistaqt>=0.11", "matplotlib>=3.7"]
-viz = ["open3d>=0.17", "matplotlib>=3.7"]
+# Faster display-only voxel decimation (Open3D C++); picking/fit stay on full cloud.
+fast = ["open3d>=0.17"]
+# Legacy Open3D UI (`cloudet --ui open3d`) and/or display backend.
+viz = ["open3d>=0.17"]
 dev = ["pytest>=7"]
+# Compat aliases for older install docs.
+gui = []
+gui_fast = ["open3d>=0.17"]
 
 [project.scripts]
-detpos = "detpos.cli:main"
+cloudet = "cloudet.cli:main"
+detpos = "cloudet.cli:main"  # compat alias
 
 [tool.setuptools.packages.find]
-include = ["detpos*"]
+include = ["cloudet*"]

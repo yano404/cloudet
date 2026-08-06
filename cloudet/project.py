@@ -25,9 +25,9 @@ from pathlib import Path
 
 import numpy as np
 
-import detpos
-from detpos.picking import PickParams
-from detpos.plyio import write_ply_xyz
+import cloudet
+from cloudet.picking import PickParams
+from cloudet.plyio import write_ply_xyz
 
 __all__ = [
     "SourceInfo",
@@ -63,6 +63,8 @@ class ViewSettings:
     inactive_point_size: float = 2.5
     display_voxel_size_mm: float = 0.5  # 0 = no voxel filter
     display_max_points: int = 4_000_000  # hard cap per geometry
+    # Display-only decimation: "auto" uses Open3D C++ voxel if installed.
+    display_downsample_backend: str = "auto"  # auto | numpy | open3d
     axis_size_mm: float = 100.0
     axis_margin_mm: float = 20.0
 
@@ -126,7 +128,7 @@ def write_manifest(
         "source": asdict(source),
         "detection": asdict(detection),
         "n_groups": n_groups,
-        "software": {"detpos": detpos.__version__},
+        "software": {"cloudet": cloudet.__version__},
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     with open(path, "w", encoding="utf-8") as f:
@@ -179,7 +181,7 @@ def save_group(
         "color": None if color is None else np.asarray(color).tolist(),
         "detection": None if detection is None else asdict(detection),
         "fit": fit_summary,
-        "software": {"detpos": detpos.__version__},
+        "software": {"cloudet": cloudet.__version__},
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     json_path = groups_dir / f"group_{group_id:03d}.json"

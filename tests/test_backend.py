@@ -9,7 +9,7 @@ agree at the micrometre level.
 import numpy as np
 import pytest
 
-from detpos.plane import robust_fit_plane, run_ransac
+from cloudet.plane import robust_fit_plane, run_ransac
 
 open3d = pytest.importorskip if False else None  # noqa: F811 (see _has_open3d)
 

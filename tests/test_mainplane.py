@@ -3,8 +3,62 @@
 import numpy as np
 import pytest
 
-from detpos.mainplane import MainPlaneParams, extract_main_plane
-from detpos.plane import Plane
+from cloudet.mainplane import MainPlaneParams, _label_components, extract_main_plane
+from cloudet.plane import Plane
+
+
+def _label_components_reference(occupied):
+    """Per-cell BFS, kept only as an oracle for the vectorised labeller."""
+    from collections import deque
+
+    labels = np.zeros(occupied.shape, dtype=np.int32)
+    current = 0
+    nrows, ncols = occupied.shape
+    for i in range(nrows):
+        for j in range(ncols):
+            if occupied[i, j] and labels[i, j] == 0:
+                current += 1
+                q = deque([(i, j)])
+                labels[i, j] = current
+                while q:
+                    y, x = q.popleft()
+                    for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        yy, xx = y + dy, x + dx
+                        if (
+                            0 <= yy < nrows and 0 <= xx < ncols
+                            and occupied[yy, xx] and labels[yy, xx] == 0
+                        ):
+                            labels[yy, xx] = current
+                            q.append((yy, xx))
+    return labels
+
+
+def _same_partition(a, b):
+    """Labels may be numbered differently; compare the induced partitions."""
+    if not np.array_equal(a > 0, b > 0):
+        return False
+    pairs = set(zip(a[a > 0].tolist(), b[b > 0].tolist()))
+    return len({p[0] for p in pairs}) == len(pairs) == len({p[1] for p in pairs})
+
+
+def test_label_components_matches_bfs_reference():
+    rng = np.random.default_rng(0)
+    for density in (0.15, 0.45, 0.8):
+        occ = rng.random((40, 55)) < density
+        assert _same_partition(_label_components(occ), _label_components_reference(occ))
+
+
+def test_label_components_edge_cases():
+    empty = np.zeros((5, 5), dtype=bool)
+    assert _label_components(empty).max() == 0
+
+    full = np.ones((4, 6), dtype=bool)
+    assert _label_components(full).max() == 1
+
+    # 4-connectivity: diagonal touch is NOT one component
+    diag = np.zeros((3, 3), dtype=bool)
+    diag[0, 0] = diag[1, 1] = True
+    assert _label_components(diag).max() == 2
 
 SIGMA = 0.03
 

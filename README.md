@@ -1,10 +1,15 @@
-# detpos
+# cloudet
 
 FARO Quantum-S で測定した原子核実験用検出器の三次元点群から、検出器の位置・位置関係をリダクションするツール群。既存の ChatGPT 実装（`survey2026/March/DELTA_survey_20260312/`）の再設計版。
 
 ## 設計方針
 
-- 計算コア（`detpos/`）は numpy のみ依存、GUI と完全分離、単体テストで検証
+- **抽出の契約: 1クリック = 連結した1つの物理面 = 1 group = 1平面式**。
+  クリック点を種に面内へ成長させ、範囲は連結性で決まる（半径では打ち切らない）。
+  種の法線は必ず誤差を含む前提で、蓄積 → 再フィット → 再蓄積を収束まで反復する
+  （20° 傾いた種からでも面全体を復元することを確認済み）。
+  近接平行面の分離は例外モード（GUI「Split into parallel planes」/ `--multi-plane`）
+- 計算コア（`cloudet/`）は numpy のみ依存、GUI と完全分離、単体テストで検証
 - RANSAC は点の選別のみに使い、最終平面は常に直交最小二乗（`robust_fit_plane`: フィット → strict 再選別 → 収束まで反復）
 - 統計は inlier（打ち切り）と全点の両方を報告し、打ち切りに頑健な `mad_sigma` を併記
 - 乱数はシード固定で再現可能
@@ -13,7 +18,7 @@ FARO Quantum-S で測定した原子核実験用検出器の三次元点群か�
 ## 構成
 
 ```
-detpos/
+cloudet/
   plane.py      平面フィットコア（LSQ / RANSAC / robust 反復・残差統計）
   mainplane.py  main plane component 抽出（連結成分 + QC ゲート）
   picking.py    クリック駆動の領域抽出ロジック（GUI 非依存）
@@ -22,26 +27,49 @@ detpos/
   project.py    プロジェクトディレクトリ I/O（manifest / settings / group 保存）
   pipeline.py   バッチフィット（fit_xxx.json + CSV + 残差 u-v マップ）
   picker_gui.py 対話的 picker（Open3D GUI の薄いシェル）
-  cli.py        detpos pick / detpos fit
+  cli.py        cloudet [project] [--cloud ...]（既定はアプリ起動）
 tests/          合成データによる検証（σ=0.03mm の FARO 条件を模擬）
 ```
 
 ## 使い方（全工程）
 
 ```bash
-pip install -e ".[dev,gui]"   # Qt picker（PySide6 + PyVista）と u-v マップ
-pytest                        # テスト
+pip install -e ".[dev]"       # アプリ一式（Qt UI 含む）
+pip install -e ".[dev,fast]"  # 任意: 表示間引きを Open3D で高速化
+pytest
 
-# 1. 対話的抽出（マウス位置で P キー → group 追加。Fit で多平面分離と QC を即表示）
-detpos pick ~/surveys/proj1 --pcd /path/to/scan.ply
-
-# 2. バッチ高精度フィット（picker の保存先をそのまま入力に）
-detpos fit ~/surveys/proj1 -o ~/surveys/proj1/fits
+# アプリ起動（pick / Fit / 残差 QC / 保存はすべて GUI）
+cloudet --cloud /path/to/scan.ply
+cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
 ```
 
-Qt picker: P ピック / M append 切替 / F アクティブを fit / V solo / Ctrl+S 保存 /
-ツリーで名前編集・表示切替・平面ごとの品質確認。
+プロジェクト構成::
+
+```text
+<project>/
+  manifest.json
+  settings.json
+  groups/
+    group_000.ply / .json / _indices.npy
+    ...
+  vtk.log          # GUI 利用時
+```
+
+Qt UI: PROJECT で出力フォルダを指定 / SOURCE で点群を Load /
+`P` pick / overlap only `>` farther and `<` nearer /
+`M` append toggle / `F` fit active / `V` show only active / `Ctrl+S` save groups /
+rename in tree, visibility toggle, and per-plane quality in the tree.
+Fit 後は右ドックに pyqtgraph の残差 u–v マップと符号付き残差ヒストグラム（µm）を表示。
+Cmd/Ctrl+ドラッグで矩形選択（ハンドルで調整可）。ズーム／パン対応。
+Refit selection でその点だけの平面を追加フィットできる（元の fit と矩形は残る）。
+Clear refit で追加フィットだけ消せる。平面を選ぶと表示が切り替わる。
+The Groups tab mirrors depth controls with navigator buttons.
 旧 Open3D 版は `--ui open3d`（要 `pip install -e ".[viz]"`）。
+VTK 自身のエラー・警告は端末ではなく `<project_dir>/vtk.log` に出る
+（`CLOUDET_VTK_LOG=0` で PyVista 既定の挙動に戻す。別の値はログ出力先として使う）。
+
+バッチ `cloudet fit` は非推奨（GUI の Fit を使う）。互換のため当面残しています。
+`cloudet pick ...` も同じアプリ起動の別名です。
 
 ## 段階計画
 

@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from detpos.multiplane import MultiPlaneParams, extract_planes
-from detpos.plane import Plane
+from cloudet.multiplane import MultiPlaneParams, extract_planes
+from cloudet.plane import Plane
 
 SIGMA = 0.03
 

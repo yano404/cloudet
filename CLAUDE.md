@@ -1,4 +1,4 @@
-# detpos プロジェクトメモ
+# cloudet プロジェクトメモ
 
 FARO Quantum-S（公称精度 ~30 µm）で測定した原子核実験用検出器の三次元点群から、
 検出器の位置・位置関係をリダクションするツール群。
@@ -6,6 +6,10 @@ ChatGPT 実装（下記「参照データ」内の `interactive_plane_picker.py`
 
 ## 絶対に守ること
 
+- **抽出の契約**: 1クリック = 連結した1つの物理面 = 1 group = 1平面式。
+  範囲は面内連結性で決まり、半径では打ち切らない（`max_inplane_radius_mm` は明示指定時のみ）。
+  種の法線誤差は前提とし、`_accumulate_with_refit` が蓄積↔再フィットを収束まで反復する。
+  多平面分離はデフォルト off の例外モード（GUI チェック）。
 - **原本不可侵**: `~/work/survey2026/` 以下の既存コード・データは読み取り専用。変更・削除しない。
 - 単位は **mm**。平面は Hesse 標準形 `n·x + d = 0`（`|n|=1`、法線の最大成分が正になる符号規約）。
 - RANSAC は点の選別のみ。**最終平面は必ず直交最小二乗**（`robust_fit_plane`）。
@@ -57,8 +61,8 @@ version なし、未知キー黙殺、`settings_path` の自己参照、単位�
 
 ## 段階計画と現状
 
-1. [完了] コア: `detpos/plane.py`（LSQ/RANSAC/robust反復/統計）, `detpos/plyio.py`（PLY I/O）, テスト13本
-2. [完了] バッチ CLI: `detpos fit <groups_dir> -o <out>`（`groups.py`=legacy互換読込,
+1. [完了] コア: `cloudet/plane.py`（LSQ/RANSAC/robust反復/統計）, `cloudet/plyio.py`（PLY I/O）, テスト13本
+2. [完了] バッチ CLI（非推奨化）: 本線は GUI Fit。旧 `cloudet fit` は互換のため残置。
    `pipeline.py`=fit_xxx.json+CSV+u-vマップ, `cli.py`）。全17group実行済み →
    `../results/DELTA_survey_20260312/fits/`。
    結果: 品質は group 間で大差。良: G9=39µm, G16=47µm。悪: G11=1223µm(平面ですらない,
@@ -70,8 +74,9 @@ version なし、未知キー黙殺、`settings_path` の自己参照、単位�
    全17group 再実行 → `../results/DELTA_survey_20260312/fits_main/`: ok=9, suspect=8, fail=0。
    G11 は 1223µm のゴミ → main 292k点で 49µm ok に回復。suspect 8つは mad_sigma 100-200µm
    （パス間段差が主因の見込み、u-vマップ参照）
-2.7 [完了] 多平面分離（`multiplane.py`、CLI デフォルト。--single-plane で単一平面）:
-   **データモデルは 1 group = N 平面**。逐次抽出（fit→inlier除去→繰り返し）、
+2.7 [完了] 多平面分離（`multiplane.py`、**opt-in**: `--multi-plane` / GUI チェック。
+   デフォルトは単一平面 = 1クリック契約に合わせて 2026-07 に反転）:
+   データモデル上は 1 group = N 平面を許容。逐次抽出（fit→inlier除去→繰り返し）、
    平面ごとの threshold は細め（RANSAC 0.1 / 上限 0.15mm）で近接平行面を解像。
    合成テストで 0.4mm 分離を確認。実データ G13 は d=-1733.35/-1733.62/-1733.05 の
    **0.3mm 間隔の3面に分離**（前は 116µm suspect で混合していた）。
@@ -80,11 +85,12 @@ version なし、未知キー黙殺、`settings_path` の自己参照、単位�
    平面方程式は Hesse 標準形 n·x + d = 0 [mm]（`plane.abcd`）。
 3. [未] 位置関係リダクション: 面間距離・角度・交線・コーナー → 検出器位置・姿勢。
    平面の安定命名（例 "det1_top"）の仕様決めが必要（GUI からラベル付け予定）
-4b. [実装済み・実機未検証] **Qt picker**（`picker_qt.py`、PySide6 + PyVista/VTK、
-   `detpos pick <dir> --pcd <cloud>` のデフォルト。`pip install -e ".[gui]"`）。
+4b. [実装済み・実機未検証] **Qt picker**（`picker_qt.py`、PySide6 + PyVista/VTK +
+   pyqtgraph 残差ビュー、
+   `cloudet [dir] --cloud <cloud>` のデフォルト。`pip install -e .`）。
    Open3D 依存ゼロ（近傍探索は `neighbors.py` VoxelHashGrid、表示間引きも numpy）。
-   group/plane ツリー（1 group = N 平面を反映）、P キーでピック、Fit で多平面分離+QC即表示、
-   ツリーで rename/visibility。旧 Open3D 版は `--ui open3d` で残存。
+   group/plane ツリー、P キーでピック、Fit で平面+QC即表示（デフォルト単一平面）、
+   ツリーで rename/visibility/複数選択→Merge。旧 Open3D 版は `--ui open3d` で残存。
 4. [動作確認済み] Open3D 版 picker（`picker_gui.py` + `picking.py` + `project.py`）。
    - ロジック（クリック抽出=連結性制限付き accumulate、新形式保存）は GUI から分離しテスト済み
    - 保存(S)時に全 group を extract_main_plane で fit し QC/mad_sigma を即表示、manifest 書込

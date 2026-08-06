@@ -89,32 +89,55 @@ class Plane:
 # ----------------------------------------------------------------------
 
 
-def mad_sigma(signed_residuals: np.ndarray) -> float:
+def mad_sigma(
+    signed_residuals: np.ndarray,
+    *,
+    max_samples: int | None = None,
+    seed: int = 0,
+) -> float:
     """Robust sigma estimate: 1.4826 * median absolute deviation.
 
     Insensitive to outliers and much less biased by threshold
     truncation than the plain standard deviation.
+
+    If ``max_samples`` is set and the array is larger, MAD is estimated
+    on a seeded subsample (for iterative loops). Final QC should leave
+    ``max_samples=None``.
     """
     r = np.asarray(signed_residuals, dtype=np.float64)
     if r.size == 0:
         return float("nan")
+    if max_samples is not None and r.size > int(max_samples):
+        rng = np.random.default_rng(int(seed))
+        r = r[rng.choice(r.size, size=int(max_samples), replace=False)]
     return float(1.4826 * np.median(np.abs(r - np.median(r))))
 
 
-def residual_stats(signed_residuals: np.ndarray) -> dict:
+def residual_stats(
+    signed_residuals: np.ndarray,
+    *,
+    lite: bool = False,
+) -> dict:
+    """Summary residual statistics.
+
+    ``lite=True`` skips ``std`` / ``rms`` / ``p95_abs`` (keeps ``mad_sigma``
+    and ``max_abs``) for hot paths that only need the robust scale.
+    """
     r = np.asarray(signed_residuals, dtype=np.float64)
-    a = np.abs(r)
     if r.size == 0:
         return {"n": 0}
-    return {
+    a = np.abs(r)
+    out = {
         "n": int(r.size),
         "mean": float(np.mean(r)),
-        "std": float(np.std(r)),
-        "rms": float(np.sqrt(np.mean(r * r))),
         "mad_sigma": mad_sigma(r),
         "max_abs": float(np.max(a)),
-        "p95_abs": float(np.percentile(a, 95)),
     }
+    if not lite:
+        out["std"] = float(np.std(r))
+        out["rms"] = float(np.sqrt(np.mean(r * r)))
+        out["p95_abs"] = float(np.percentile(a, 95))
+    return out
 
 
 # ----------------------------------------------------------------------
@@ -135,9 +158,11 @@ def fit_plane_lsq(points: np.ndarray) -> Plane:
     if len(points) < 3:
         raise ValueError("need at least 3 points")
 
+    n = len(points)
     centroid = points.mean(axis=0)
-    centered = points - centroid
-    cov = centered.T @ centered
+    # Scatter without an N×3 centered copy: XᵀX − n c cᵀ.
+    cov = points.T @ points
+    cov -= n * np.outer(centroid, centroid)
     eigvals, eigvecs = np.linalg.eigh(cov)
     normal = eigvecs[:, 0]  # smallest eigenvalue
     if not np.isfinite(eigvals).all() or eigvals[0] < -1e-9 * max(eigvals[-1], 1.0):
@@ -307,10 +332,13 @@ def robust_fit_plane(
     mask = np.ones(n, dtype=bool)
     converged = False
     thr = threshold if threshold is not None else float("nan")
+    # Reuse residual vector across the stable-mask exit; recompute after each LSQ.
+    r = plane.signed_distances(points)
 
     for it in range(1, max_iterations + 1):
-        r = plane.signed_distances(points)
         if threshold is None:
+            # Exact MAD every iteration: subsampled MAD jitters the threshold
+            # enough that the inlier mask never becomes identical (no converge).
             thr = sigma_factor * mad_sigma(r[mask])
             if not np.isfinite(thr) or thr <= 0:
                 raise ValueError("adaptive threshold collapsed (degenerate residuals)")
@@ -325,14 +353,14 @@ def robust_fit_plane(
             break
         mask = new_mask
         plane = fit_plane_lsq(points[mask])
+        r = plane.signed_distances(points)
 
-    r_final = plane.signed_distances(points)
     return FitResult(
         plane=plane,
         inlier_mask=mask,
         n_iterations=it,
         converged=converged,
         threshold=float(thr),
-        stats_inliers=residual_stats(r_final[mask]),
-        stats_all=residual_stats(r_final),
+        stats_inliers=residual_stats(r[mask]),
+        stats_all=residual_stats(r),
     )

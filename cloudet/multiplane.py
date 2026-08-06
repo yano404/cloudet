@@ -19,7 +19,7 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from detpos.mainplane import MainPlaneParams, MainPlaneResult, extract_main_plane
+from cloudet.mainplane import MainPlaneParams, MainPlaneResult, extract_main_plane
 
 __all__ = ["MultiPlaneParams", "extract_planes"]
 

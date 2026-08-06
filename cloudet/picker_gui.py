@@ -1,6 +1,6 @@
-"""Interactive plane picker GUI (thin Open3D shell over detpos core).
+"""Interactive plane picker GUI (thin Open3D shell over cloudet core).
 
-Usage: ``detpos pick <project_dir> [--pcd <cloud file>]``
+Usage: ``cloudet [project_dir] [--cloud <cloud file>]``
 
 All state lives in the project directory (settings.json, groups/,
 manifest.json). On every save the current fit quality (main plane
@@ -27,10 +27,10 @@ import open3d as o3d
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
 
-from detpos.groups import load_groups
-from detpos.mainplane import MainPlaneParams, extract_main_plane
-from detpos.picking import pick_plane_region
-from detpos.project import (
+from cloudet.groups import load_groups
+from cloudet.mainplane import MainPlaneParams, extract_main_plane
+from cloudet.picking import pick_plane_region
+from cloudet.project import (
     PickerSettings,
     SourceInfo,
     load_group_indices,
@@ -77,7 +77,7 @@ class PlanePickerApp:
         app = gui.Application.instance
         app.initialize()
         self.window = app.create_window(
-            f"detpos picker - {self.project_dir.name}", 1760, 980
+            f"cloudet - {self.project_dir.name}", 1760, 980
         )
         self.window.set_on_layout(self._on_layout)
 
@@ -242,8 +242,8 @@ class PlanePickerApp:
     # ------------------------------------------------------------------
 
     def _apply_settings(self):
-        from detpos.picking import PickParams
-        from detpos.project import ViewSettings
+        from cloudet.picking import PickParams
+        from cloudet.project import ViewSettings
 
         self.settings.detection = PickParams(
             local_radius_mm=self.e_radius.double_value,

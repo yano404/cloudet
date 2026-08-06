@@ -20,12 +20,11 @@ grid, which is at most ``grid_bins**2`` cells.
 
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from detpos.plane import FitResult, Plane, fit_plane_lsq, robust_fit_plane, run_ransac
+from cloudet.plane import FitResult, Plane, fit_plane_lsq, robust_fit_plane, run_ransac
 
 __all__ = ["MainPlaneParams", "MainPlaneResult", "extract_main_plane"]
 
@@ -78,27 +77,35 @@ def _inplane_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _label_components(occupied: np.ndarray) -> np.ndarray:
-    """4-connectivity labelling of a boolean grid. Returns int labels, 0 = empty."""
-    labels = np.zeros(occupied.shape, dtype=np.int32)
-    current = 0
-    nrows, ncols = occupied.shape
-    for i in range(nrows):
-        for j in range(ncols):
-            if occupied[i, j] and labels[i, j] == 0:
-                current += 1
-                q = deque([(i, j)])
-                labels[i, j] = current
-                while q:
-                    y, x = q.popleft()
-                    for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                        yy, xx = y + dy, x + dx
-                        if (
-                            0 <= yy < nrows and 0 <= xx < ncols
-                            and occupied[yy, xx] and labels[yy, xx] == 0
-                        ):
-                            labels[yy, xx] = current
-                            q.append((yy, xx))
-    return labels
+    """4-connectivity labelling of a boolean grid. Returns int labels, 0 = empty.
+
+    Vectorised max-label propagation: a per-cell Python BFS was the picker's
+    dominant cost once the in-plane grid grew to hundreds of cells per side.
+    """
+    occupied = np.asarray(occupied, dtype=bool)
+    if occupied.size == 0 or not occupied.any():
+        return np.zeros(occupied.shape, dtype=np.int32)
+
+    lab = np.where(
+        occupied,
+        np.arange(1, occupied.size + 1, dtype=np.int64).reshape(occupied.shape),
+        0,
+    )
+    while True:
+        m = lab.copy()
+        m[1:, :] = np.maximum(m[1:, :], lab[:-1, :])
+        m[:-1, :] = np.maximum(m[:-1, :], lab[1:, :])
+        m[:, 1:] = np.maximum(m[:, 1:], lab[:, :-1])
+        m[:, :-1] = np.maximum(m[:, :-1], lab[:, 1:])
+        m[~occupied] = 0
+        if np.array_equal(m, lab):
+            break
+        lab = m
+
+    uniq = np.unique(lab[occupied])
+    remap = np.zeros(int(lab.max()) + 1, dtype=np.int32)
+    remap[uniq] = np.arange(1, len(uniq) + 1, dtype=np.int32)
+    return remap[lab]
 
 
 def _bounded_robust_fit(points, params: MainPlaneParams, init: Plane) -> FitResult:

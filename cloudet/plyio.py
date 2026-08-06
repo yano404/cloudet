@@ -112,7 +112,7 @@ def write_ply_xyz(path: str | Path, points: np.ndarray, binary: bool = True) -> 
     header = (
         "ply\n"
         f"format {fmt} 1.0\n"
-        "comment Created by detpos\n"
+        "comment Created by cloudet\n"
         f"element vertex {len(points)}\n"
         "property double x\n"
         "property double y\n"

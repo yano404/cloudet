@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from detpos.plyio import read_ply_xyz, write_ply_xyz
+from cloudet.plyio import read_ply_xyz, write_ply_xyz
 
 
 def test_roundtrip_binary(tmp_path):

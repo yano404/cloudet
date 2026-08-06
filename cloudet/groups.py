@@ -3,7 +3,7 @@
 A "group" is a plane-candidate point set extracted by the interactive
 picker. Two on-disk layouts are supported:
 
-* new format (detpos): ``groups/group_xxx.ply`` + ``group_xxx.json``
+* new format (cloudet): ``groups/group_xxx.ply`` + ``group_xxx.json``
   with a top-level ``manifest.json``
 * legacy format (ChatGPT picker): ``group_xxx.ply`` +
   ``groups_summary.json`` in one directory (read-only compatibility)
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from detpos.plyio import read_ply_xyz
+from cloudet.plyio import read_ply_xyz
 
 __all__ = ["GroupInfo", "load_groups", "sha256_file"]
 

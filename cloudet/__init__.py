@@ -1,9 +1,9 @@
-"""detpos: detector position reduction from FARO Quantum-S point clouds.
+"""cloudet: detector positioning from 3D point clouds.
 
 Units are millimetres throughout (FARO export convention).
 """
 
-from detpos.plane import (
+from cloudet.plane import (
     Plane,
     FitResult,
     fit_plane_lsq,
@@ -12,7 +12,7 @@ from detpos.plane import (
     residual_stats,
     mad_sigma,
 )
-from detpos.plyio import read_ply_xyz, write_ply_xyz
+from cloudet.plyio import read_ply_xyz, write_ply_xyz
 
 __all__ = [
     "Plane",
