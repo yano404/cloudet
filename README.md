@@ -1,49 +1,51 @@
 # cloudet
 
-FARO Quantum-S などで取得した三次元点群から、原子核実験用検出器の位置・位置関係をリダクションするツールです。
+日本語版は [README.ja.md](README.ja.md) を参照。
 
-## 設計方針
+Tool for reducing detector positions and relative geometry from 3D point clouds (e.g. FARO Quantum-S), aimed at nuclear-physics detector surveys.
 
-- **抽出の契約: 1クリック = 連結した1つの物理面 = 1 group = 1平面式**。
-  クリック点を種に面内へ成長させ、範囲は連結性で決まる（半径では打ち切らない）。
-  種の法線は必ず誤差を含む前提で、蓄積 → 再フィット → 再蓄積を収束まで反復する
-  （20° 傾いた種からでも面全体を復元することを確認済み）。
-  近接平行面の分離は例外モード（GUI「Split into parallel planes」）
-- 計算コア（`cloudet/`）は numpy のみ依存、GUI と完全分離、単体テストで検証
-- RANSAC は点の選別のみに使い、最終平面は常に直交最小二乗（`robust_fit_plane`: フィット → strict 再選別 → 収束まで反復）
-- 統計は inlier（打ち切り）と全点の両方を報告し、打ち切りに頑健な `mad_sigma` を併記
-- 乱数はシード固定で再現可能
-- 単位は mm、平面は Hesse 標準形 `n·x + d = 0`（`|n|=1`、符号規約あり）
+## Design
 
-## 構成
+- **Extraction contract: one click = one connected physical face = one group = one plane equation.**
+  Growth starts at the click seed and expands in-plane; extent is set by connectivity (not by a radius cutoff).
+  The seed normal is assumed noisy: accumulate → refit → re-accumulate until convergence
+  (full-face recovery from a ~20° tilted seed has been verified).
+  Separating nearby parallel faces is an exception mode (GUI “Split into parallel planes”).
+- The compute core (`cloudet/`) depends only on NumPy, is fully decoupled from the GUI, and is covered by unit tests.
+- RANSAC is used only to select points; the final plane is always an orthogonal least-squares fit (`robust_fit_plane`: fit → strict reselection → iterate to convergence).
+- Statistics are reported for both inliers (truncated) and all points, together with a truncation-robust `mad_sigma`.
+- Randomness is seeded for reproducibility.
+- Units are mm; planes use Hesse normal form `n·x + d = 0` (`|n|=1`, with a defined sign convention).
+
+## Layout
 
 ```
 cloudet/
-  plane.py      平面フィットコア（LSQ / RANSAC / robust 反復・残差統計）
-  mainplane.py  main plane component 抽出（連結成分 + QC ゲート）
-  picking.py    クリック駆動の領域抽出ロジック（GUI 非依存）
-  plyio.py      PLY 読み書き（double 精度、Open3D 非依存）
-  groups.py     group 読込
-  project.py    プロジェクトディレクトリ I/O（manifest / settings / group 保存）
-  pipeline.py   残差 u–v マップ（GUI QC 用）
-  picker_qt.py  対話的アプリ（PySide6 + PyVista）
-  cli.py        cloudet [project] [--cloud ...]（既定はアプリ起動）
-tests/          合成データによる検証（σ=0.03mm の FARO 条件を模擬）
+  plane.py      Plane fit core (LSQ / RANSAC / robust iteration / residual stats)
+  mainplane.py  Main plane component extraction (connected components + QC gates)
+  picking.py    Click-driven region extraction (GUI-independent)
+  plyio.py      PLY I/O (double precision, Open3D-free)
+  groups.py     Group loading
+  project.py    Project directory I/O (manifest / settings / group save)
+  pipeline.py   Residual u–v maps (for GUI QC)
+  picker_qt.py  Interactive app (PySide6 + PyVista)
+  cli.py        cloudet [project] [--cloud ...] (default: launch the app)
+tests/          Synthetic validation (FARO-like σ ≈ 0.03 mm)
 ```
 
-## 使い方
+## Usage
 
 ```bash
-pip install -e ".[dev]"       # アプリ一式（Qt UI 含む）
-pip install -e ".[dev,fast]"  # 任意: 表示間引きを Open3D で高速化
+pip install -e ".[dev]"       # full app (includes Qt UI)
+pip install -e ".[dev,fast]"  # optional: faster display decimation via Open3D
 pytest
 
-# アプリ起動（pick / Fit / 残差 QC / 保存はすべて GUI）
+# Launch the app (pick / Fit / residual QC / save are all in the GUI)
 cloudet --cloud /path/to/scan.ply
 cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
 ```
 
-プロジェクト構成::
+Project layout:
 
 ```text
 <project>/
@@ -52,23 +54,23 @@ cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
   groups/
     group_000.ply / .json / _indices.npy
     ...
-  vtk.log          # GUI 利用時
+  vtk.log          # when using the GUI
 ```
 
-Qt UI: PROJECT で出力フォルダを指定 / SOURCE で点群を Load /
+Qt UI: set the output folder under PROJECT / Load the cloud under SOURCE /
 `P` pick / overlap only `>` farther and `<` nearer /
 `M` append toggle / `F` fit active / `V` show only active / `Ctrl+S` save groups /
-rename in tree, visibility toggle, and per-plane quality in the tree.
-Fit 後は右ドックに pyqtgraph の残差 u–v マップと符号付き残差ヒストグラム（µm）を表示。
-Cmd/Ctrl+ドラッグで矩形選択（ハンドルで調整可）。ズーム／パン対応。
-Refit selection でその点だけの平面を追加フィットできる（元の fit と矩形は残る）。
-Clear refit で追加フィットだけ消せる。平面を選ぶと表示が切り替わる。
+rename in the tree, toggle visibility, and see per-plane quality in the tree.
+After Fit, the right dock shows a pyqtgraph residual u–v map and a signed-residual histogram (µm).
+Cmd/Ctrl+drag for rectangle selection (handles for adjustment). Zoom / pan supported.
+Refit selection fits an extra plane on those points only (original fit and rectangle remain).
+Clear refit removes only the extra fit. Selecting a plane switches the display.
 The Groups tab mirrors depth controls with navigator buttons.
-VTK 自身のエラー・警告は端末ではなく `<project_dir>/vtk.log` に出る
-（`CLOUDET_VTK_LOG=0` で PyVista 既定の挙動に戻す。別の値はログ出力先として使う）。
+VTK’s own errors and warnings go to `<project_dir>/vtk.log` instead of the terminal
+(`CLOUDET_VTK_LOG=0` restores PyVista’s default; any other value is used as the log path).
 
-## 段階計画
+## Roadmap
 
-1. [完了] コア
-2. [完了] GUI picker（Fit / 残差 QC / 保存）
-3. [未] 位置関係リダクション（面間距離・角度・交線・コーナー）
+1. [done] Core
+2. [done] GUI picker (Fit / residual QC / save)
+3. [todo] Relative-geometry reduction (inter-face distances, angles, intersections, corners)
