@@ -47,7 +47,7 @@ class PickParams:
     connect: bool = True  # restrict to the component containing the click
     cell_size_mm: float = 5.0
     min_points_per_cell: int = 3
-    ransac_backend: str = "numpy"  # seeded (GPU when compute=cupy) or open3d
+    ransac_backend: str = "seeded"  # seeded (GPU) | seeded_cpu | open3d
     seed: int = 0
     # Progressive expand + refit (diagonal-cut mitigation)
     expand_step_mm: float = 25.0  # 0 disables progressive refine

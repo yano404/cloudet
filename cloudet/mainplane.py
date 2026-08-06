@@ -38,7 +38,7 @@ class MainPlaneParams:
     # step 1: RANSAC seed
     ransac_threshold_mm: float = 0.3
     ransac_iterations: int = 1000
-    ransac_backend: str = "numpy"  # seeded (reproducible; GPU when compute=cupy) or open3d
+    ransac_backend: str = "seeded"  # seeded (GPU) | seeded_cpu | open3d
     seed: int = 0
     # step 2/4: robust refit
     sigma_factor: float = 3.0

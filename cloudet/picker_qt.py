@@ -904,17 +904,22 @@ class PickerWindow(QMainWindow):
         )
         self.s_maxinplane.setSuffix(" mm")
         self.s_backend = QComboBox()
-        self.s_backend.addItem("seeded (recommended)", "numpy")
-        self.s_backend.addItem("open3d (CPU only)", "open3d")
-        idx = self.s_backend.findData(getattr(d, "ransac_backend", "numpy"))
+        self.s_backend.addItem("built-in (GPU)", "seeded")
+        self.s_backend.addItem("built-in (CPU)", "seeded_cpu")
+        self.s_backend.addItem("open3d (CPU)", "open3d")
+        ransac_raw = getattr(d, "ransac_backend", "seeded")
+        if ransac_raw == "numpy":
+            ransac_raw = "seeded"
+        idx = self.s_backend.findData(ransac_raw)
         self.s_backend.setCurrentIndex(idx if idx >= 0 else 0)
         self.s_backend.setToolTip(
             setting_tip(
-                "RANSAC algorithm",
-                "Seeded RANSAC is reproducible and runs on the GPU when "
-                "Compute backend is cupy (or auto with enough points). "
-                "Open3D uses segment_plane on the CPU only.",
-                "Initial RANSAC near the click",
+                "RANSAC backend",
+                "Built-in (GPU) uses cloudet's reproducible RANSAC and scores on "
+                "the GPU when CuPy is available (falls back to CPU otherwise). "
+                "Built-in (CPU) forces NumPy. Open3D uses segment_plane on CPU only. "
+                "Independent of the global Compute backend used for Fit / Pick.",
+                "Initial RANSAC near the click (and Fit seed when RANSAC runs)",
                 "ransac_backend",
             )
         )
@@ -954,7 +959,7 @@ class PickerWindow(QMainWindow):
             self.s_lociter,
         )
         det_form.addRow(
-            labeled("RANSAC algorithm", self.s_backend.toolTip()),
+            labeled("RANSAC backend", self.s_backend.toolTip()),
             self.s_backend,
         )
 
@@ -1040,10 +1045,11 @@ class PickerWindow(QMainWindow):
         self.s_compute_backend.setToolTip(
             setting_tip(
                 "Compute backend",
-                "Chooses CPU (NumPy) or GPU (CuPy) for Fit and residual u–v maps. "
-                "auto uses CuPy when CUDA is available; cupy forces GPU even on "
-                "small groups. RANSAC scoring and robust refit run on GPU when enabled.",
-                "Fit and residual QC",
+                "Chooses CPU (NumPy) or GPU (CuPy) for Fit, Pick distances, and "
+                "residual u–v maps. auto uses CuPy when CUDA is available; cupy "
+                "forces GPU even on small groups. RANSAC device is chosen "
+                "separately under RANSAC backend.",
+                "Fit, Pick, and residual QC (not RANSAC)",
                 "compute_backend",
             )
         )
@@ -2515,7 +2521,7 @@ class PickerWindow(QMainWindow):
             accumulate_threshold_mm=self.s_accthr.value(),
             connect=self.s_connect.isChecked(),
             cell_size_mm=self.s_cell.value(),
-            ransac_backend=self.s_backend.currentData() or "numpy",
+            ransac_backend=self.s_backend.currentData() or "seeded",
             seed=self.settings.detection.seed,
             min_points_per_cell=self.settings.detection.min_points_per_cell,
             expand_step_mm=self.s_expand.value(),
@@ -2643,7 +2649,10 @@ class PickerWindow(QMainWindow):
             self.s_maxexp.setValue(getattr(d, "max_expand_rounds", 40))
             max_in = getattr(d, "max_inplane_radius_mm", None)
             self.s_maxinplane.setValue(float(max_in) if max_in is not None else 0.0)
-            idx = self.s_backend.findData(getattr(d, "ransac_backend", "numpy"))
+            ransac_raw = getattr(d, "ransac_backend", "seeded")
+            if ransac_raw == "numpy":
+                ransac_raw = "seeded"
+            idx = self.s_backend.findData(ransac_raw)
             self.s_backend.setCurrentIndex(idx if idx >= 0 else 0)
             self.s_voxel.setValue(v.display_voxel_size_mm)
             self.s_maxdisp.setValue(v.display_max_points)

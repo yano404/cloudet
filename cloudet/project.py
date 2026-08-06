@@ -110,8 +110,15 @@ def load_settings(project_dir: str | Path, warn=print) -> PickerSettings:
             warn(f"settings: ignoring unknown keys in [{section}]: {sorted(unknown)}")
         return cls(**known)
 
+    detection = build(PickParams, "detection")
+    # Legacy ransac_backend "numpy" → "seeded"
+    if detection.ransac_backend == "numpy":
+        from dataclasses import replace
+
+        detection = replace(detection, ransac_backend="seeded")
+
     return PickerSettings(
-        detection=build(PickParams, "detection"),
+        detection=detection,
         view=build(ViewSettings, "view"),
     )
 

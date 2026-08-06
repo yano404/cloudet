@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cloudet.array_backend import ArrayContext, DevicePoints, get_context
+from cloudet.array_backend import ArrayContext, DevicePoints, cupy_available, get_context
 
 __all__ = [
     "Plane",
@@ -33,6 +33,8 @@ __all__ = [
     "robust_fit_plane",
     "residual_stats",
     "mad_sigma",
+    "RANSAC_BACKENDS",
+    "normalize_ransac_backend",
 ]
 
 _LSQ_MAX_POINTS = 300_000
@@ -397,7 +399,22 @@ def ransac_plane_open3d(
     return plane, mask
 
 
-RANSAC_BACKENDS = ("numpy", "open3d")
+RANSAC_BACKENDS = ("seeded", "seeded_cpu", "open3d")
+
+
+def normalize_ransac_backend(backend: str | None) -> str:
+    """Map UI / settings values to a canonical RANSAC backend name.
+
+    Legacy ``numpy`` is treated as ``seeded`` (GPU preferred when available).
+    """
+    name = (backend or "seeded").lower()
+    if name == "numpy":
+        return "seeded"
+    if name in RANSAC_BACKENDS:
+        return name
+    raise ValueError(
+        f"unknown RANSAC backend {backend!r} (choose from {RANSAC_BACKENDS})"
+    )
 
 
 def run_ransac(
@@ -405,7 +422,7 @@ def run_ransac(
     threshold: float,
     n_iterations: int = 1000,
     seed: int = 0,
-    backend: str = "numpy",
+    backend: str = "seeded",
     n_hypo_points: int | None = 100_000,
     *,
     compute_backend: str = "auto",
@@ -418,34 +435,14 @@ def run_ransac(
     :func:`robust_fit_plane` (orthogonal least squares), so the backend
     choice affects only which points seed the refit.
 
-    When ``backend`` is ``numpy`` (seeded, reproducible) and
-    ``compute_backend`` resolves to CuPy, hypothesis scoring runs on the
-    GPU. The value ``numpy`` refers to the algorithm, not the compute device.
+    ``seeded`` prefers GPU scoring when CuPy is available (independent of
+    the caller's ``compute_backend`` when a device buffer is absent).
+    ``seeded_cpu`` always uses NumPy. ``open3d`` uses Open3D on CPU.
+    Legacy ``numpy`` is an alias for ``seeded``.
     """
-    if backend == "numpy":
-        if device_points is not None and device_points.ctx.name == "cupy":
-            ctx = device_points.ctx
-            return ransac_plane_cupy(
-                points,
-                threshold,
-                n_iterations,
-                seed,
-                n_hypo_points,
-                ctx,
-                pts_dev=device_points.pts,
-                return_inlier_mask=return_inlier_mask,
-            )
-        ctx = get_context(compute_backend, n_points=len(points))
-        if ctx.name == "cupy":
-            return ransac_plane_cupy(
-                points,
-                threshold,
-                n_iterations,
-                seed,
-                n_hypo_points,
-                ctx,
-                return_inlier_mask=return_inlier_mask,
-            )
+    backend = normalize_ransac_backend(backend)
+
+    if backend == "seeded_cpu":
         return ransac_plane(
             points,
             threshold,
@@ -454,9 +451,58 @@ def run_ransac(
             n_hypo_points,
             return_inlier_mask=return_inlier_mask,
         )
+
     if backend == "open3d":
         return ransac_plane_open3d(points, threshold, n_iterations, seed)
-    raise ValueError(f"unknown RANSAC backend {backend!r} (choose from {RANSAC_BACKENDS})")
+
+    # seeded: prefer GPU
+    if device_points is not None and device_points.ctx.name == "cupy":
+        return ransac_plane_cupy(
+            points,
+            threshold,
+            n_iterations,
+            seed,
+            n_hypo_points,
+            device_points.ctx,
+            pts_dev=device_points.pts,
+            return_inlier_mask=return_inlier_mask,
+        )
+
+    # Prefer cupy when available; fall back to caller compute / numpy.
+    if cupy_available():
+        try:
+            ctx = get_context("cupy", n_points=len(points))
+            return ransac_plane_cupy(
+                points,
+                threshold,
+                n_iterations,
+                seed,
+                n_hypo_points,
+                ctx,
+                return_inlier_mask=return_inlier_mask,
+            )
+        except Exception:
+            pass
+
+    ctx = get_context(compute_backend, n_points=len(points))
+    if ctx.name == "cupy":
+        return ransac_plane_cupy(
+            points,
+            threshold,
+            n_iterations,
+            seed,
+            n_hypo_points,
+            ctx,
+            return_inlier_mask=return_inlier_mask,
+        )
+    return ransac_plane(
+        points,
+        threshold,
+        n_iterations,
+        seed,
+        n_hypo_points,
+        return_inlier_mask=return_inlier_mask,
+    )
 
 
 @dataclass
