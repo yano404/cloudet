@@ -304,3 +304,36 @@ def test_settings_roundtrip_and_unknown_keys(tmp_path):
 def test_settings_missing_file_defaults(tmp_path):
     s = load_settings(tmp_path)
     assert s.detection == PickParams()
+
+
+def test_legacy_view_compute_backend_migrates_to_detection(tmp_path):
+    """Old settings stored compute_backend under view; load into detection."""
+    from cloudet.project import ViewSettings
+
+    doc = {
+        "version": 1,
+        "detection": {"local_radius_mm": 12.0},
+        "view": {
+            "display_max_points": 1_000_000,
+            "compute_backend": "cupy",
+        },
+    }
+    (tmp_path / "settings.json").write_text(json.dumps(doc))
+    warnings = []
+    loaded = load_settings(tmp_path, warn=warnings.append)
+    assert loaded.detection.compute_backend == "cupy"
+    assert loaded.detection.local_radius_mm == 12.0
+    assert "compute_backend" not in ViewSettings.__dataclass_fields__
+    # Migrated key must not be reported as unknown view key.
+    assert not any("compute_backend" in w for w in warnings)
+
+
+def test_detection_compute_backend_wins_over_legacy_view(tmp_path):
+    doc = {
+        "version": 1,
+        "detection": {"compute_backend": "numpy"},
+        "view": {"compute_backend": "cupy"},
+    }
+    (tmp_path / "settings.json").write_text(json.dumps(doc))
+    loaded = load_settings(tmp_path, warn=lambda *_: None)
+    assert loaded.detection.compute_backend == "numpy"

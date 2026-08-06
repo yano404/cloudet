@@ -48,6 +48,7 @@ class PickParams:
     cell_size_mm: float = 5.0
     min_points_per_cell: int = 3
     ransac_backend: str = "seeded"  # seeded (GPU) | seeded_cpu | open3d
+    compute_backend: str = "auto"  # auto | numpy | cupy (Fit / Pick / UV)
     seed: int = 0
     # Progressive expand + refit (diagonal-cut mitigation)
     expand_step_mm: float = 25.0  # 0 disables progressive refine

@@ -356,7 +356,7 @@ class PickerWindow(QMainWindow):
         self._vtk_log_path = route_vtk_messages_to_file(self.project_dir / "vtk.log")
         self._fit_log_path = self.project_dir / "fit.log"
         self.settings = load_settings(self.project_dir, warn=self._status)
-        set_default_backend(self.settings.view.compute_backend)
+        set_default_backend(self.settings.detection.compute_backend)
 
         self.full_points: np.ndarray = np.zeros((0, 3))
         self.grid: VoxelHashGrid | None = None
@@ -918,9 +918,25 @@ class PickerWindow(QMainWindow):
                 "Built-in (GPU) uses cloudet's reproducible RANSAC and scores on "
                 "the GPU when CuPy is available (falls back to CPU otherwise). "
                 "Built-in (CPU) forces NumPy. Open3D uses segment_plane on CPU only. "
-                "Independent of the global Compute backend used for Fit / Pick.",
+                "Independent of Compute backend (robust Fit / Pick distances / UV).",
                 "Initial RANSAC near the click (and Fit seed when RANSAC runs)",
                 "ransac_backend",
+            )
+        )
+        self.s_compute_backend = QComboBox()
+        self.s_compute_backend.addItems(["auto", "cupy", "numpy"])
+        self.s_compute_backend.setCurrentText(
+            getattr(d, "compute_backend", "auto")
+        )
+        self.s_compute_backend.setToolTip(
+            setting_tip(
+                "Compute backend",
+                "Chooses CPU (NumPy) or GPU (CuPy) for Fit, Pick distances, and "
+                "residual u–v maps. auto uses CuPy when CUDA is available; cupy "
+                "forces GPU even on small groups. RANSAC device is chosen "
+                "separately under RANSAC backend.",
+                "Fit, Pick, and residual QC (not RANSAC)",
+                "compute_backend",
             )
         )
 
@@ -961,6 +977,10 @@ class PickerWindow(QMainWindow):
         det_form.addRow(
             labeled("RANSAC backend", self.s_backend.toolTip()),
             self.s_backend,
+        )
+        det_form.addRow(
+            labeled("Compute backend", self.s_compute_backend.toolTip()),
+            self.s_compute_backend,
         )
 
         face_stage = QLabel(
@@ -1037,22 +1057,6 @@ class PickerWindow(QMainWindow):
                 "display_downsample_backend",
             )
         )
-        self.s_compute_backend = QComboBox()
-        self.s_compute_backend.addItems(["auto", "cupy", "numpy"])
-        self.s_compute_backend.setCurrentText(
-            getattr(v, "compute_backend", "auto")
-        )
-        self.s_compute_backend.setToolTip(
-            setting_tip(
-                "Compute backend",
-                "Chooses CPU (NumPy) or GPU (CuPy) for Fit, Pick distances, and "
-                "residual u–v maps. auto uses CuPy when CUDA is available; cupy "
-                "forces GPU even on small groups. RANSAC device is chosen "
-                "separately under RANSAC backend.",
-                "Fit, Pick, and residual QC (not RANSAC)",
-                "compute_backend",
-            )
-        )
         self.s_ptsize = dspin(
             v.base_point_size,
             lo=0.5,
@@ -1113,10 +1117,6 @@ class PickerWindow(QMainWindow):
             self.s_ds_backend,
         )
         view_form.addRow(
-            labeled("Compute backend", self.s_compute_backend.toolTip()),
-            self.s_compute_backend,
-        )
-        view_form.addRow(
             labeled("Source cloud point size", self.s_ptsize.toolTip()),
             self.s_ptsize,
         )
@@ -1171,8 +1171,9 @@ class PickerWindow(QMainWindow):
         self._settings_controls = [
             self.s_radius, self.s_locthr, self.s_lociter, self.s_minnb, self.s_minin,
             self.s_accthr, self.s_connect, self.s_cell, self.s_expand, self.s_maxexp,
-            self.s_maxinplane, self.s_backend, self.s_voxel, self.s_maxdisp,
-            self.s_ds_backend, self.s_compute_backend, self.s_ptsize, self.s_active_pt, self.s_inactive_pt,
+            self.s_maxinplane, self.s_backend, self.s_compute_backend,
+            self.s_voxel, self.s_maxdisp,
+            self.s_ds_backend, self.s_ptsize, self.s_active_pt, self.s_inactive_pt,
         ]
         for w in self._settings_controls:
             help_text = w.toolTip()
@@ -1433,14 +1434,14 @@ class PickerWindow(QMainWindow):
 
     def _compute_status_suffix(self) -> str:
         try:
-            resolved = resolve_compute_backend(self.settings.view.compute_backend)
+            resolved = resolve_compute_backend(self.settings.detection.compute_backend)
         except ImportError as e:
             return f"compute: error ({e})"
         if resolved == "cupy":
             name = device_name() or "CUDA"
             return f"compute: cupy ({name})"
         reason = cupy_unavailable_reason()
-        if reason and self.settings.view.compute_backend in ("auto", "cupy"):
+        if reason and self.settings.detection.compute_backend in ("auto", "cupy"):
             short = reason.splitlines()[0]
             if len(short) > 80:
                 short = short[:77] + "..."
@@ -1656,7 +1657,7 @@ class PickerWindow(QMainWindow):
             mask=mask,
             bins=bins,
             return_points=False,
-            compute_backend=self.settings.view.compute_backend,
+            compute_backend=self.settings.detection.compute_backend,
         )
         mad = float(plane_entry["mad_sigma_mm"])
         threshold = float(self._uv_vlim_mm())
@@ -1721,7 +1722,7 @@ class PickerWindow(QMainWindow):
         else:
             uv = residual_uv_map(
                 pts, plane, mask=None, bins=self._uv_bins_value(), return_points=True,
-                compute_backend=self.settings.view.compute_backend,
+                compute_backend=self.settings.detection.compute_backend,
             )
             uu, vv, r = uv["u"], uv["v"], uv["r"]
         plane_entry["uv_samples"] = {
@@ -2138,7 +2139,7 @@ class PickerWindow(QMainWindow):
         backend = self.settings.detection.ransac_backend
         min_pts = min(1000, max(50, n_sel // 5))
         compute = resolve_compute_backend(
-            self.settings.view.compute_backend, n_points=n_sel
+            self.settings.detection.compute_backend, n_points=n_sel
         )
         self._status(
             f"refitting {g['name']}/p{p['plane_index']} on {n_sel:,} selected pts "
@@ -2153,7 +2154,7 @@ class PickerWindow(QMainWindow):
                 ransac_backend=backend,
                 max_threshold_mm=FIT_MAX_THRESHOLD_MM,
                 min_points=min_pts,
-                compute_backend=self.settings.view.compute_backend,
+                compute_backend=self.settings.detection.compute_backend,
             ),
             clicked=None,
             coarse_plane=np.asarray(p["abcd"], dtype=np.float64),
@@ -2522,6 +2523,7 @@ class PickerWindow(QMainWindow):
             connect=self.s_connect.isChecked(),
             cell_size_mm=self.s_cell.value(),
             ransac_backend=self.s_backend.currentData() or "seeded",
+            compute_backend=self.s_compute_backend.currentText(),
             seed=self.settings.detection.seed,
             min_points_per_cell=self.settings.detection.min_points_per_cell,
             expand_step_mm=self.s_expand.value(),
@@ -2540,7 +2542,6 @@ class PickerWindow(QMainWindow):
             display_voxel_size_mm=self.s_voxel.value(),
             display_max_points=self.s_maxdisp.value(),
             display_downsample_backend=self.s_ds_backend.currentText(),
-            compute_backend=self.s_compute_backend.currentText(),
             axis_size_mm=old.axis_size_mm,
             axis_margin_mm=old.axis_margin_mm,
         )
@@ -2559,7 +2560,7 @@ class PickerWindow(QMainWindow):
 
         self.settings.detection = new_det
         self.settings.view = new_view
-        set_default_backend(new_view.compute_backend)
+        set_default_backend(new_det.compute_backend)
 
         if effects.invalidate_grid:
             self.grid = None
@@ -2660,7 +2661,7 @@ class PickerWindow(QMainWindow):
                 getattr(v, "display_downsample_backend", "auto")
             )
             self.s_compute_backend.setCurrentText(
-                getattr(v, "compute_backend", "auto")
+                getattr(d, "compute_backend", "auto")
             )
             self.s_ptsize.setValue(v.base_point_size)
             self.s_active_pt.setValue(v.active_point_size)
@@ -2704,7 +2705,7 @@ class PickerWindow(QMainWindow):
         self._vtk_log_path = route_vtk_messages_to_file(self.project_dir / "vtk.log")
         self._fit_log_path = self.project_dir / "fit.log"
         self.settings = load_settings(self.project_dir, warn=self._status)
-        set_default_backend(self.settings.view.compute_backend)
+        set_default_backend(self.settings.detection.compute_backend)
         self._write_form_from_settings()
         self.grid = None
 
@@ -3136,7 +3137,7 @@ class PickerWindow(QMainWindow):
             "n_neighbors": len(nb),
         }
         compute = resolve_compute_backend(
-            self.settings.view.compute_backend, n_points=len(self.full_points)
+            self.settings.detection.compute_backend, n_points=len(self.full_points)
         )
         indices, plane = pick_plane_region(
             self.full_points,
@@ -3196,7 +3197,7 @@ class PickerWindow(QMainWindow):
         if self.autofit_cb.isChecked():
             n_g = len(g["indices"])
             compute = resolve_compute_backend(
-                self.settings.view.compute_backend, n_points=n_g
+                self.settings.detection.compute_backend, n_points=n_g
             )
             self._status(f"{coarse_msg} → fitting {n_g:,} pts ({compute}) ...")
             QApplication.processEvents()
@@ -3228,7 +3229,7 @@ class PickerWindow(QMainWindow):
                 "group": g["name"],
                 "n_pts": len(g["indices"]),
                 "compute": resolve_compute_backend(
-                    self.settings.view.compute_backend, n_points=len(g["indices"])
+                    self.settings.detection.compute_backend, n_points=len(g["indices"])
                 ),
                 "ransac_backend": self.settings.detection.ransac_backend,
                 "multi": False,
@@ -3261,7 +3262,7 @@ class PickerWindow(QMainWindow):
         n_pts = len(pts)
         backend = self.settings.detection.ransac_backend
         compute = resolve_compute_backend(
-            self.settings.view.compute_backend, n_points=n_pts
+            self.settings.detection.compute_backend, n_points=n_pts
         )
         multi = self.multiplane_cb.isChecked()
         if multi:
@@ -3340,7 +3341,7 @@ class PickerWindow(QMainWindow):
             raise ValueError("no active group")
         n_pts = len(g["indices"])
         compute = resolve_compute_backend(
-            self.settings.view.compute_backend, n_points=n_pts
+            self.settings.detection.compute_backend, n_points=n_pts
         )
         wall_t0 = time.perf_counter()
         self._status(f"fitting {g['name']} ({n_pts:,} pts, {compute}) ...")
@@ -3372,7 +3373,7 @@ class PickerWindow(QMainWindow):
         for g in self.groups:
             n_pts = len(g["indices"])
             compute = resolve_compute_backend(
-                self.settings.view.compute_backend, n_points=n_pts
+                self.settings.detection.compute_backend, n_points=n_pts
             )
             self._status(f"fitting {g['name']} ({n_pts:,} pts, {compute}) ...")
             QApplication.processEvents()
