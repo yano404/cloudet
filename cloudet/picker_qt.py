@@ -900,13 +900,16 @@ class PickerWindow(QMainWindow):
         )
         self.s_maxinplane.setSuffix(" mm")
         self.s_backend = QComboBox()
-        self.s_backend.addItems(["numpy", "open3d"])
-        self.s_backend.setCurrentText(getattr(d, "ransac_backend", "numpy"))
+        self.s_backend.addItem("seeded (recommended)", "numpy")
+        self.s_backend.addItem("open3d (CPU only)", "open3d")
+        idx = self.s_backend.findData(getattr(d, "ransac_backend", "numpy"))
+        self.s_backend.setCurrentIndex(idx if idx >= 0 else 0)
         self.s_backend.setToolTip(
             setting_tip(
-                "RANSAC engine",
-                "Chooses the implementation used for the initial plane search. "
-                "numpy is seeded and reproducible; open3d uses segment_plane.",
+                "RANSAC algorithm",
+                "Seeded RANSAC is reproducible and runs on the GPU when "
+                "Compute backend is cupy (or auto with enough points). "
+                "Open3D uses segment_plane on the CPU only.",
                 "Initial RANSAC near the click",
                 "ransac_backend",
             )
@@ -947,7 +950,7 @@ class PickerWindow(QMainWindow):
             self.s_lociter,
         )
         det_form.addRow(
-            labeled("RANSAC engine", self.s_backend.toolTip()),
+            labeled("RANSAC algorithm", self.s_backend.toolTip()),
             self.s_backend,
         )
 
@@ -2399,7 +2402,7 @@ class PickerWindow(QMainWindow):
             accumulate_threshold_mm=self.s_accthr.value(),
             connect=self.s_connect.isChecked(),
             cell_size_mm=self.s_cell.value(),
-            ransac_backend=self.s_backend.currentText(),
+            ransac_backend=self.s_backend.currentData() or "numpy",
             seed=self.settings.detection.seed,
             min_points_per_cell=self.settings.detection.min_points_per_cell,
             expand_step_mm=self.s_expand.value(),
@@ -2527,7 +2530,8 @@ class PickerWindow(QMainWindow):
             self.s_maxexp.setValue(getattr(d, "max_expand_rounds", 40))
             max_in = getattr(d, "max_inplane_radius_mm", None)
             self.s_maxinplane.setValue(float(max_in) if max_in is not None else 0.0)
-            self.s_backend.setCurrentText(getattr(d, "ransac_backend", "numpy"))
+            idx = self.s_backend.findData(getattr(d, "ransac_backend", "numpy"))
+            self.s_backend.setCurrentIndex(idx if idx >= 0 else 0)
             self.s_voxel.setValue(v.display_voxel_size_mm)
             self.s_maxdisp.setValue(v.display_max_points)
             self.s_ds_backend.setCurrentText(

@@ -188,8 +188,9 @@ def residual_uv_map(
         xp = ctx.xp
         pts_dev = ctx.to_device(pts)
         normal_dev = ctx.to_device(plane.normal)
-        r = ctx.asnumpy(pts_dev @ normal_dev + plane.d)
+        r_g = pts_dev @ normal_dev + plane.d
     else:
+        r_g = None
         r = plane.signed_distances(pts)
 
     u, v, center, uu, vv = _aligned_inplane_basis(
@@ -202,13 +203,13 @@ def residual_uv_map(
         xp = ctx.xp
         uu_g = xp.asarray(uu)
         vv_g = xp.asarray(vv)
-        r_g = xp.asarray(r)
         counts, ue, ve = xp.histogram2d(uu_g, vv_g, bins=bins)
         sums, _, _ = xp.histogram2d(uu_g, vv_g, bins=[ue, ve], weights=r_g)
         counts = ctx.asnumpy(counts)
         ue = ctx.asnumpy(ue)
         ve = ctx.asnumpy(ve)
         sums = ctx.asnumpy(sums)
+        r = ctx.asnumpy(r_g)
     else:
         counts, ue, ve = np.histogram2d(uu, vv, bins=bins)
         sums, _, _ = np.histogram2d(uu, vv, bins=[ue, ve], weights=r)

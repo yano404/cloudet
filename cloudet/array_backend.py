@@ -10,6 +10,7 @@ import numpy as np
 __all__ = [
     "COMPUTE_BACKENDS",
     "DISPLAY_BACKENDS",
+    "DevicePoints",
     "GPU_MIN_POINTS",
     "ArrayContext",
     "cupy_available",
@@ -135,12 +136,26 @@ class ArrayContext:
             return cp
         return np
 
-    def to_device(self, x: np.ndarray):
+    def to_device(self, x):
         xp = self.xp
-        arr = np.asarray(x, dtype=np.float64)
-        if self.name == "numpy":
-            return arr
-        return xp.asarray(arr)
+        if self.name == "cupy":
+            import cupy as cp
+
+            if isinstance(x, cp.ndarray):
+                return x if x.dtype == xp.float64 else x.astype(xp.float64)
+            arr = np.asarray(x, dtype=np.float64)
+            return xp.asarray(arr)
+        return np.asarray(x, dtype=np.float64)
+
+    def to_device_bool(self, x):
+        xp = self.xp
+        if self.name == "cupy":
+            import cupy as cp
+
+            if isinstance(x, cp.ndarray):
+                return x if x.dtype == bool else x.astype(bool)
+            return xp.asarray(np.asarray(x, dtype=bool))
+        return np.asarray(x, dtype=bool)
 
     def asnumpy(self, x) -> np.ndarray:
         if self.name == "numpy":
@@ -157,3 +172,22 @@ class ArrayContext:
 
 def get_context(backend: str = "auto", *, n_points: int | None = None) -> ArrayContext:
     return ArrayContext(resolve_compute_backend(backend, n_points=n_points))
+
+
+@dataclass(frozen=True)
+class DevicePoints:
+    """Host points uploaded once; reused across multi-stage GPU fits."""
+
+    ctx: ArrayContext
+    pts: object  # numpy.ndarray | cupy.ndarray
+
+    @classmethod
+    def create(
+        cls, points: np.ndarray, compute_backend: str = "auto"
+    ) -> "DevicePoints | None":
+        """Return a GPU buffer, or ``None`` when compute resolves to numpy."""
+        points = np.asarray(points, dtype=np.float64)
+        ctx = get_context(compute_backend, n_points=len(points))
+        if ctx.name == "numpy":
+            return None
+        return cls(ctx=ctx, pts=ctx.to_device(points))

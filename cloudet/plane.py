@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cloudet.array_backend import ArrayContext, get_context
+from cloudet.array_backend import ArrayContext, DevicePoints, get_context
 
 __all__ = [
     "Plane",
@@ -109,7 +109,12 @@ def mad_sigma(
     """
     if ctx is not None and ctx.name == "cupy":
         xp = ctx.xp
-        r = ctx.to_device(signed_residuals).ravel()
+        import cupy as cp
+
+        if isinstance(signed_residuals, cp.ndarray):
+            r = signed_residuals.ravel()
+        else:
+            r = ctx.to_device(signed_residuals).ravel()
         if r.size == 0:
             return float("nan")
         if max_samples is not None and r.size > int(max_samples):
@@ -277,11 +282,13 @@ def ransac_plane_cupy(
     seed: int,
     n_hypo_points: int | None,
     ctx: ArrayContext,
+    *,
+    pts_dev=None,
 ) -> tuple[Plane, np.ndarray]:
     """GPU-batched inlier scoring for plane RANSAC (selector only)."""
     xp = ctx.xp
     points = np.asarray(points, dtype=np.float64)
-    pts = ctx.to_device(points)
+    pts = pts_dev if pts_dev is not None else ctx.to_device(points)
     rng = np.random.default_rng(seed)
     n = len(points)
     if n_hypo_points is not None and n > n_hypo_points:
@@ -308,7 +315,7 @@ def ransac_plane_cupy(
     ds_g = xp.asarray(ds[valid], dtype=xp.float64)
     dists = xp.abs(hypo_pts @ normals_g.T + ds_g)
     counts = (dists <= threshold).sum(axis=0)
-    best_j = int(xp.argmax(counts))
+    best_j = int(xp.argmax(counts).item())
     best_i = int(valid_idx[best_j])
 
     plane = Plane(normals[best_i], float(ds[best_i]))
@@ -374,6 +381,7 @@ def run_ransac(
     n_hypo_points: int | None = 100_000,
     *,
     compute_backend: str = "auto",
+    device_points: DevicePoints | None = None,
 ) -> tuple[Plane, np.ndarray]:
     """Dispatch plane RANSAC to the selected backend.
 
@@ -381,10 +389,22 @@ def run_ransac(
     :func:`robust_fit_plane` (orthogonal least squares), so the backend
     choice affects only which points seed the refit.
 
-    When ``backend`` is ``numpy`` and ``compute_backend`` resolves to
-    CuPy, hypothesis scoring runs on the GPU (same seeded hypotheses).
+    When ``backend`` is ``numpy`` (seeded, reproducible) and
+    ``compute_backend`` resolves to CuPy, hypothesis scoring runs on the
+    GPU. The value ``numpy`` refers to the algorithm, not the compute device.
     """
     if backend == "numpy":
+        if device_points is not None and device_points.ctx.name == "cupy":
+            ctx = device_points.ctx
+            return ransac_plane_cupy(
+                points,
+                threshold,
+                n_iterations,
+                seed,
+                n_hypo_points,
+                ctx,
+                pts_dev=device_points.pts,
+            )
         ctx = get_context(compute_backend, n_points=len(points))
         if ctx.name == "cupy":
             return ransac_plane_cupy(
@@ -420,6 +440,8 @@ def robust_fit_plane(
     min_inlier_fraction: float = 0.1,
     *,
     compute_backend: str = "auto",
+    device_points: DevicePoints | None = None,
+    fit_mask: np.ndarray | None = None,
 ) -> FitResult:
     """Iterative reweighted plane fit: LSQ -> reselect -> refit.
 
@@ -433,6 +455,36 @@ def robust_fit_plane(
     n = len(points)
     if n < 3:
         raise ValueError("need at least 3 points")
+    if fit_mask is not None:
+        fit_mask = np.asarray(fit_mask, dtype=bool)
+        if fit_mask.shape != (n,):
+            raise ValueError("fit_mask must have shape (N,)")
+        if np.count_nonzero(fit_mask) < 3:
+            raise ValueError("need at least 3 points in fit_mask")
+
+    if device_points is not None:
+        ctx = device_points.ctx
+        if ctx.name == "numpy":
+            return _robust_fit_plane_cpu(
+                points,
+                threshold,
+                sigma_factor,
+                max_iterations,
+                init,
+                min_inlier_fraction,
+                fit_mask=fit_mask,
+            )
+        return _robust_fit_plane_cupy(
+            points,
+            threshold,
+            sigma_factor,
+            max_iterations,
+            init,
+            min_inlier_fraction,
+            ctx,
+            pts_dev=device_points.pts,
+            fit_mask=fit_mask,
+        )
 
     ctx = get_context(compute_backend, n_points=n)
     if ctx.name == "numpy":
@@ -443,6 +495,7 @@ def robust_fit_plane(
             max_iterations,
             init,
             min_inlier_fraction,
+            fit_mask=fit_mask,
         )
     return _robust_fit_plane_cupy(
         points,
@@ -452,6 +505,7 @@ def robust_fit_plane(
         init,
         min_inlier_fraction,
         ctx,
+        fit_mask=fit_mask,
     )
 
 
@@ -462,13 +516,24 @@ def _robust_fit_plane_cpu(
     max_iterations: int,
     init: Plane | None,
     min_inlier_fraction: float,
+    fit_mask: np.ndarray | None = None,
 ) -> FitResult:
     n = len(points)
-    plane = init if init is not None else fit_plane_lsq(points, compute_backend="numpy")
-    mask = np.ones(n, dtype=bool)
+    n_fit = int(np.count_nonzero(fit_mask)) if fit_mask is not None else n
+    if fit_mask is not None:
+        sub = points[fit_mask]
+        plane = init if init is not None else fit_plane_lsq(sub, compute_backend="numpy")
+        mask = np.ones(n_fit, dtype=bool)
+        r = plane.signed_distances(sub)
+        host = sub
+    else:
+        plane = init if init is not None else fit_plane_lsq(points, compute_backend="numpy")
+        mask = np.ones(n, dtype=bool)
+        r = plane.signed_distances(points)
+        host = points
+
     converged = False
     thr = threshold if threshold is not None else float("nan")
-    r = plane.signed_distances(points)
 
     for it in range(1, max_iterations + 1):
         if threshold is None:
@@ -476,7 +541,7 @@ def _robust_fit_plane_cpu(
             if not np.isfinite(thr) or thr <= 0:
                 raise ValueError("adaptive threshold collapsed (degenerate residuals)")
         new_mask = np.abs(r) <= thr
-        if np.count_nonzero(new_mask) < max(3, int(min_inlier_fraction * n)):
+        if np.count_nonzero(new_mask) < max(3, int(min_inlier_fraction * n_fit)):
             raise ValueError(
                 f"too few inliers ({int(np.count_nonzero(new_mask))}) "
                 f"at threshold {thr:.6g}"
@@ -485,8 +550,22 @@ def _robust_fit_plane_cpu(
             converged = True
             break
         mask = new_mask
-        plane = fit_plane_lsq(points[mask], compute_backend="numpy")
-        r = plane.signed_distances(points)
+        plane = fit_plane_lsq(host[mask], compute_backend="numpy")
+        r = plane.signed_distances(host)
+
+    if fit_mask is not None:
+        full_mask = np.zeros(n, dtype=bool)
+        full_mask[np.flatnonzero(fit_mask)] = mask
+        full_r = plane.signed_distances(points)
+        return FitResult(
+            plane=plane,
+            inlier_mask=full_mask,
+            n_iterations=it,
+            converged=converged,
+            threshold=float(thr),
+            stats_inliers=residual_stats(r[mask]),
+            stats_all=residual_stats(r),
+        )
 
     return FitResult(
         plane=plane,
@@ -507,14 +586,29 @@ def _robust_fit_plane_cupy(
     init: Plane | None,
     min_inlier_fraction: float,
     ctx: ArrayContext,
+    *,
+    pts_dev=None,
+    fit_mask: np.ndarray | None = None,
 ) -> FitResult:
     xp = ctx.xp
     n = len(points)
-    pts = ctx.to_device(points)
-    plane = init if init is not None else fit_plane_lsq_device(pts, ctx)
+    pts = pts_dev if pts_dev is not None else ctx.to_device(points)
+    fit_mask_g = ctx.to_device_bool(fit_mask) if fit_mask is not None else None
+    n_fit = int(xp.count_nonzero(fit_mask_g)) if fit_mask_g is not None else n
+
+    if init is not None:
+        plane = init
+    elif fit_mask_g is not None:
+        plane = fit_plane_lsq_device(pts, ctx, mask=fit_mask_g)
+    else:
+        plane = fit_plane_lsq_device(pts, ctx)
+
     normal = ctx.to_device(plane.normal)
     d = float(plane.d)
-    mask = xp.ones(n, dtype=bool)
+    if fit_mask_g is not None:
+        mask = fit_mask_g.copy()
+    else:
+        mask = xp.ones(n, dtype=bool)
     converged = False
     thr = threshold if threshold is not None else float("nan")
     r = pts @ normal + d
@@ -525,8 +619,10 @@ def _robust_fit_plane_cupy(
             if not np.isfinite(thr) or thr <= 0:
                 raise ValueError("adaptive threshold collapsed (degenerate residuals)")
         new_mask = xp.abs(r) <= thr
-        n_in = int(xp.count_nonzero(new_mask))
-        if n_in < max(3, int(min_inlier_fraction * n)):
+        if fit_mask_g is not None:
+            new_mask = new_mask & fit_mask_g
+        n_in = int(xp.count_nonzero(new_mask).item())
+        if n_in < max(3, int(min_inlier_fraction * n_fit)):
             raise ValueError(
                 f"too few inliers ({n_in}) at threshold {thr:.6g}"
             )
@@ -541,6 +637,11 @@ def _robust_fit_plane_cupy(
 
     mask_np = ctx.asbool(mask)
     r_np = ctx.asnumpy(r)
+    if fit_mask_g is not None:
+        fit_mask_np = ctx.asbool(fit_mask_g)
+        stats_all = residual_stats(r_np[fit_mask_np])
+    else:
+        stats_all = residual_stats(r_np)
     return FitResult(
         plane=plane,
         inlier_mask=mask_np,
@@ -548,5 +649,5 @@ def _robust_fit_plane_cupy(
         converged=converged,
         threshold=float(thr),
         stats_inliers=residual_stats(r_np[mask_np]),
-        stats_all=residual_stats(r_np),
+        stats_all=stats_all,
     )

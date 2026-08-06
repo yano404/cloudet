@@ -109,6 +109,59 @@ def test_forced_cupy_uses_gpu_on_small_clouds():
 
 
 @pytest.mark.skipif(not HAS_CUPY, reason="cupy not available")
+def test_robust_fit_fit_mask_matches_subset():
+    """fit_mask avoids host subset copy; same plane as points[mask] refit."""
+    pts, init = _synthetic_plane(n_pts=40_000)
+    fit_mask = np.ones(len(pts), dtype=bool)
+    fit_mask[::17] = False
+    sub = robust_fit_plane(
+        pts[fit_mask],
+        threshold=0.2,
+        init=init,
+        compute_backend="numpy",
+        min_inlier_fraction=0.0,
+    )
+    full = robust_fit_plane(
+        pts,
+        threshold=0.2,
+        init=init,
+        compute_backend="numpy",
+        min_inlier_fraction=0.0,
+        fit_mask=fit_mask,
+    )
+    assert sub.plane.angle_to(full.plane) < 1e-9
+    rebased = np.zeros(len(pts), dtype=bool)
+    rebased[np.flatnonzero(fit_mask)] = sub.inlier_mask
+    assert np.array_equal(rebased, full.inlier_mask)
+
+
+@pytest.mark.skipif(not HAS_CUPY, reason="cupy not available")
+def test_robust_fit_plane_adaptive_threshold_gpu():
+    """Adaptive threshold calls mad_sigma on masked CuPy residuals."""
+    pts, init = _synthetic_plane()
+    gpu = robust_fit_plane(
+        pts, threshold=None, init=init, compute_backend="cupy"
+    )
+    assert gpu.n_inliers >= 3
+    assert np.isfinite(gpu.threshold)
+
+
+@pytest.mark.skipif(not HAS_CUPY, reason="cupy not available")
+def test_extract_main_plane_gpu_connectivity():
+    from cloudet.mainplane import MainPlaneParams, extract_main_plane
+
+    pts, _ = _synthetic_plane(n_pts=50_000)
+    clicked = pts[len(pts) // 2]
+    res = extract_main_plane(
+        pts,
+        MainPlaneParams(compute_backend="cupy"),
+        clicked=clicked,
+    )
+    assert res.n_main >= 1000
+    assert res.status in ("ok", "suspect")
+
+
+@pytest.mark.skipif(not HAS_CUPY, reason="cupy not available")
 def test_ransac_cpu_gpu_parity():
     pts, true = _synthetic_plane(n_pts=60_000)
     kw = dict(threshold=0.2, n_iterations=200, seed=5, compute_backend="numpy")
