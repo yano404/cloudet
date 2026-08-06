@@ -130,6 +130,8 @@ def _select_candidates(
     clicked: np.ndarray,
     params: PickParams,
     inplane_radius_mm: float | None,
+    *,
+    connect: bool | None = None,
 ) -> np.ndarray:
     """Slab (+ optional in-plane radius) (+ optional connectivity)."""
     dists = plane.distances(points)
@@ -139,7 +141,8 @@ def _select_candidates(
     candidate_idx = np.flatnonzero(mask)
     if len(candidate_idx) == 0:
         return candidate_idx
-    if params.connect:
+    do_connect = params.connect if connect is None else bool(connect)
+    if do_connect:
         candidate_idx = _connected_indices(
             points, candidate_idx, plane, clicked, params
         )
@@ -295,7 +298,16 @@ def _accumulate_with_refit(
     would split one physical face across several picks.
     """
     cap = params.max_inplane_radius_mm
-    idx = _select_candidates(points, plane, clicked, params, inplane_radius_mm=cap)
+    # Connectivity on tens of millions of points dominates runtime.
+    # Do broad slab/refit iterations first, then apply connectivity once.
+    idx = _select_candidates(
+        points,
+        plane,
+        clicked,
+        params,
+        inplane_radius_mm=cap,
+        connect=False,
+    )
     if len(idx) == 0:
         raise ValueError("accumulation selected no points")
 
@@ -304,7 +316,12 @@ def _accumulate_with_refit(
             break
         new_plane = fit_plane_lsq(points[idx])
         new_idx = _select_candidates(
-            points, new_plane, clicked, params, inplane_radius_mm=cap
+            points,
+            new_plane,
+            clicked,
+            params,
+            inplane_radius_mm=cap,
+            connect=False,
         )
         if len(new_idx) < 3:
             break
@@ -313,6 +330,8 @@ def _accumulate_with_refit(
         if grew < params.final_refit_tolerance:
             break
 
+    if params.connect and len(idx):
+        idx = _connected_indices(points, idx, plane, clicked, params)
     return idx, plane
 
 
