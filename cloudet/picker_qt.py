@@ -1470,6 +1470,26 @@ class PickerWindow(QMainWindow):
             parts.append(f"depth={timing['depth_s']:.3f}s")
         if timing.get("pick_s") is not None:
             parts.append(f"pick={timing['pick_s']:.3f}s")
+        detail = timing.get("pick_detail") or {}
+        if detail:
+            parts.append(
+                "pick_detail="
+                + ",".join(
+                    f"{k}={detail[k]:.3f}s"
+                    for k in (
+                        "neighbor_s",
+                        "local_fit_s",
+                        "progressive_s",
+                        "accumulate_s",
+                        "accumulate_dist_s",
+                        "accumulate_lsq_s",
+                        "accumulate_connect_s",
+                    )
+                    if k in detail
+                )
+            )
+            if "n_candidates" in detail:
+                parts.append(f"n_candidates={detail['n_candidates']:,}")
         parts.append(f"fit={timing['fit_s']:.3f}s")
         parts.append(f"uv={timing['uv_s']:.3f}s")
         if timing.get("post_s") is not None:
@@ -3078,10 +3098,21 @@ class PickerWindow(QMainWindow):
         self._status(f"picking ({depth_tag}): local plane + refine ...")
         QApplication.processEvents()
         nb = grid.radius_indices(world, self.settings.detection.local_radius_mm)
+        neighbor_s = time.perf_counter() - t_pick0
+        pick_detail: dict = {}
+        compute = resolve_compute_backend(
+            self.settings.view.compute_backend, n_points=len(self.full_points)
+        )
         indices, plane = pick_plane_region(
-            self.full_points, world, nb, self.settings.detection
+            self.full_points,
+            world,
+            nb,
+            self.settings.detection,
+            compute_backend=compute,
+            timings=pick_detail,
         )
         pick_s = time.perf_counter() - t_pick0
+        pick_detail["neighbor_s"] = neighbor_s
 
         if (
             not replace
@@ -3145,6 +3176,7 @@ class PickerWindow(QMainWindow):
                 timing["depth_s"] = depth_s
             timing["post_s"] = time.perf_counter() - t_post0
             timing["wall_s"] = time.perf_counter() - flow_t0
+            timing["pick_detail"] = pick_detail
             self._log_fit_timing(timing, kind="pick+fit")
             planes = g["fit"]["planes"]
             self._status(
@@ -3170,6 +3202,7 @@ class PickerWindow(QMainWindow):
                 "uv_s": 0.0,
                 "total_s": 0.0,
                 "pick_s": pick_s,
+                "pick_detail": pick_detail,
                 "planes": [],
             }
             if depth_s is not None:
