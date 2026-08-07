@@ -38,7 +38,7 @@ tests/          合成データによる検証（σ=0.03mm の FARO 条件を模
 
 ```bash
 pip install -e ".[dev]"       # アプリ一式（Qt UI 含む）
-pip install -e ".[dev,fast]"  # 任意: 表示間引きを Open3D で高速化
+pip install -e ".[dev,open3d]"  # 任意: Open3D 表示間引きと RANSAC バックエンド
 pip install -e ".[dev,gpu]"   # 任意: Fit / 残差 QC / 表示 voxel を CuPy で GPU 化
 pytest
 

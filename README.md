@@ -38,7 +38,7 @@ tests/          Synthetic validation (FARO-like σ ≈ 0.03 mm)
 
 ```bash
 pip install -e ".[dev]"       # full app (includes Qt UI)
-pip install -e ".[dev,fast]"  # optional: faster display decimation via Open3D
+pip install -e ".[dev,open3d]"  # optional: Open3D display decimation and RANSAC backend
 pip install -e ".[dev,gpu]"   # optional: CuPy GPU for Fit / residual QC / display voxel
 pytest
 
