@@ -27,7 +27,9 @@ full-resolution cloud.
 from __future__ import annotations
 
 import os
+import time
 import traceback
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -64,6 +66,12 @@ from PySide6.QtWidgets import (
 
 from pyvistaqt import QtInteractor
 
+from cloudet.array_backend import (
+    cupy_unavailable_reason,
+    device_name,
+    resolve_compute_backend,
+    set_default_backend,
+)
 from cloudet.groups import load_groups
 from cloudet.mainplane import MainPlaneParams, extract_main_plane
 from cloudet.multiplane import MultiPlaneParams, _bimodality_flag, extract_planes
@@ -346,7 +354,9 @@ class PickerWindow(QMainWindow):
         self.project_dir = Path(project_dir)
         self.project_dir.mkdir(parents=True, exist_ok=True)
         self._vtk_log_path = route_vtk_messages_to_file(self.project_dir / "vtk.log")
+        self._fit_log_path = self.project_dir / "fit.log"
         self.settings = load_settings(self.project_dir, warn=self._status)
+        set_default_backend(self.settings.detection.compute_backend)
 
         self.full_points: np.ndarray = np.zeros((0, 3))
         self.grid: VoxelHashGrid | None = None
@@ -404,8 +414,10 @@ class PickerWindow(QMainWindow):
         self._build_uv_dock()
         self._build_shortcuts()
         ready = "Ready"
+        ready += f"  |  {self._compute_status_suffix()}"
         if self._vtk_log_path is not None:
             ready += f"  |  VTK messages -> {self._vtk_log_path}"
+        ready += f"  |  fit timing -> {self._fit_log_path}"
         self._status_default = ready
         self.statusBar().showMessage(ready)
 
@@ -892,15 +904,39 @@ class PickerWindow(QMainWindow):
         )
         self.s_maxinplane.setSuffix(" mm")
         self.s_backend = QComboBox()
-        self.s_backend.addItems(["numpy", "open3d"])
-        self.s_backend.setCurrentText(getattr(d, "ransac_backend", "numpy"))
+        self.s_backend.addItem("built-in (GPU)", "seeded")
+        self.s_backend.addItem("built-in (CPU)", "seeded_cpu")
+        self.s_backend.addItem("open3d (CPU)", "open3d")
+        ransac_raw = getattr(d, "ransac_backend", "seeded")
+        if ransac_raw == "numpy":
+            ransac_raw = "seeded"
+        idx = self.s_backend.findData(ransac_raw)
+        self.s_backend.setCurrentIndex(idx if idx >= 0 else 0)
         self.s_backend.setToolTip(
             setting_tip(
-                "RANSAC engine",
-                "Chooses the implementation used for the initial plane search. "
-                "numpy is seeded and reproducible; open3d uses segment_plane.",
-                "Initial RANSAC near the click",
+                "RANSAC backend",
+                "Built-in (GPU) uses cloudet's reproducible RANSAC and scores on "
+                "the GPU when CuPy is available (falls back to CPU otherwise). "
+                "Built-in (CPU) forces NumPy. Open3D uses segment_plane on CPU only. "
+                "Independent of Compute backend (robust Fit / Pick distances / UV).",
+                "Initial RANSAC near the click (and Fit seed when RANSAC runs)",
                 "ransac_backend",
+            )
+        )
+        self.s_compute_backend = QComboBox()
+        self.s_compute_backend.addItems(["auto", "cupy", "numpy"])
+        self.s_compute_backend.setCurrentText(
+            getattr(d, "compute_backend", "auto")
+        )
+        self.s_compute_backend.setToolTip(
+            setting_tip(
+                "Compute backend",
+                "Chooses CPU (NumPy) or GPU (CuPy) for Fit, Pick distances, and "
+                "residual u–v maps. auto uses CuPy when CUDA is available; cupy "
+                "forces GPU even on small groups. RANSAC device is chosen "
+                "separately under RANSAC backend.",
+                "Fit, Pick, and residual QC (not RANSAC)",
+                "compute_backend",
             )
         )
 
@@ -939,8 +975,12 @@ class PickerWindow(QMainWindow):
             self.s_lociter,
         )
         det_form.addRow(
-            labeled("RANSAC engine", self.s_backend.toolTip()),
+            labeled("RANSAC backend", self.s_backend.toolTip()),
             self.s_backend,
+        )
+        det_form.addRow(
+            labeled("Compute backend", self.s_compute_backend.toolTip()),
+            self.s_compute_backend,
         )
 
         face_stage = QLabel(
@@ -1004,15 +1044,15 @@ class PickerWindow(QMainWindow):
             ),
         )
         self.s_ds_backend = QComboBox()
-        self.s_ds_backend.addItems(["auto", "open3d", "numpy"])
+        self.s_ds_backend.addItems(["auto", "cupy", "open3d", "numpy"])
         self.s_ds_backend.setCurrentText(
             getattr(v, "display_downsample_backend", "auto")
         )
         self.s_ds_backend.setToolTip(
             setting_tip(
                 "Display downsampling method",
-                "Chooses how display points are thinned. auto prefers Open3D "
-                "when available; rendering remains in Qt / PyVista.",
+                "Chooses how display points are thinned. auto prefers CuPy, "
+                "then Open3D when available; rendering remains in Qt / PyVista.",
                 "3D display preparation only",
                 "display_downsample_backend",
             )
@@ -1131,7 +1171,8 @@ class PickerWindow(QMainWindow):
         self._settings_controls = [
             self.s_radius, self.s_locthr, self.s_lociter, self.s_minnb, self.s_minin,
             self.s_accthr, self.s_connect, self.s_cell, self.s_expand, self.s_maxexp,
-            self.s_maxinplane, self.s_backend, self.s_voxel, self.s_maxdisp,
+            self.s_maxinplane, self.s_backend, self.s_compute_backend,
+            self.s_voxel, self.s_maxdisp,
             self.s_ds_backend, self.s_ptsize, self.s_active_pt, self.s_inactive_pt,
         ]
         for w in self._settings_controls:
@@ -1391,8 +1432,105 @@ class PickerWindow(QMainWindow):
                 self.settings_help_label.setText(SETTINGS_HELP_DEFAULT)
         return super().eventFilter(watched, event)
 
+    def _compute_status_suffix(self) -> str:
+        try:
+            resolved = resolve_compute_backend(self.settings.detection.compute_backend)
+        except ImportError as e:
+            return f"compute: error ({e})"
+        if resolved == "cupy":
+            name = device_name() or "CUDA"
+            return f"compute: cupy ({name})"
+        reason = cupy_unavailable_reason()
+        if reason and self.settings.detection.compute_backend in ("auto", "cupy"):
+            short = reason.splitlines()[0]
+            if len(short) > 80:
+                short = short[:77] + "..."
+            return f"compute: numpy ({short})"
+        return "compute: numpy"
+
     def _status(self, msg):
         self.statusBar().showMessage(str(msg)) if hasattr(self, "statusBar") else print(msg)
+
+    def _append_fit_log(self, message: str) -> None:
+        """Append one line to project ``fit.log`` (fit timings and breakdown)."""
+        try:
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(self._fit_log_path, "a", encoding="utf-8") as f:
+                f.write(f"{stamp}  {message}\n")
+        except OSError:
+            pass
+
+    def _format_fit_log_line(self, timing: dict, *, kind: str = "fit") -> str:
+        plane_bits = " | ".join(
+            f"p{p['plane_index']}:{p['status']} n={p['n_points']:,} "
+            f"mad={p['mad_sigma_mm'] * 1e3:.0f}um"
+            + (" BIMODAL" if p.get("bimodal") else "")
+            for p in timing.get("planes") or []
+        )
+        mode = "multi" if timing.get("multi") else "single"
+        parts = [
+            f"{kind}  {timing['group']}  n_pts={timing['n_pts']:,}  "
+            f"compute={timing['compute']}  ransac={timing.get('ransac_backend', '?')}  "
+            f"mode={mode}",
+        ]
+        if timing.get("depth_s") is not None:
+            parts.append(f"depth={timing['depth_s']:.3f}s")
+        if timing.get("pick_s") is not None:
+            parts.append(f"pick={timing['pick_s']:.3f}s")
+        detail = timing.get("pick_detail") or {}
+        if detail:
+            parts.append(
+                "pick_detail="
+                + ",".join(
+                    f"{k}={detail[k]:.3f}s"
+                    for k in (
+                        "neighbor_s",
+                        "grid_build_s",
+                        "neighbor_query_s",
+                        "local_fit_s",
+                        "progressive_s",
+                        "accumulate_s",
+                        "accumulate_dist_s",
+                        "accumulate_lsq_s",
+                        "accumulate_connect_s",
+                    )
+                    if k in detail
+                )
+            )
+            if "n_candidates" in detail:
+                parts.append(f"n_candidates={detail['n_candidates']:,}")
+            if "n_neighbors" in detail:
+                parts.append(f"n_neighbors={detail['n_neighbors']:,}")
+        parts.append(f"fit={timing['fit_s']:.3f}s")
+        parts.append(f"uv={timing['uv_s']:.3f}s")
+        if timing.get("post_s") is not None:
+            parts.append(f"post={timing['post_s']:.3f}s")
+        if timing.get("wall_s") is not None:
+            parts.append(f"wall={timing['wall_s']:.3f}s")
+        else:
+            parts.append(f"total={timing['total_s']:.3f}s")
+        parts.append(plane_bits)
+        return "  ".join(parts)
+
+    def _fit_timing_status(self, timing: dict) -> str:
+        if timing.get("wall_s") is not None:
+            bits = []
+            if timing.get("depth_s") is not None and timing["depth_s"] > 0.005:
+                bits.append(f"depth {timing['depth_s']:.2f}s")
+            if timing.get("pick_s") is not None:
+                bits.append(f"pick {timing['pick_s']:.2f}s")
+            bits.append(f"fit {timing['fit_s']:.2f}s")
+            bits.append(f"uv {timing['uv_s']:.2f}s")
+            if timing.get("post_s") is not None:
+                bits.append(f"ui {timing['post_s']:.2f}s")
+            return " + ".join(bits) + f" = {timing['wall_s']:.2f}s"
+        return (
+            f"fit {timing['fit_s']:.2f}s + uv {timing['uv_s']:.2f}s "
+            f"= {timing['total_s']:.2f}s"
+        )
+
+    def _log_fit_timing(self, timing: dict, *, kind: str = "fit") -> None:
+        self._append_fit_log(self._format_fit_log_line(timing, kind=kind))
 
     def _set_settings_dirty(self, dirty: bool):
         self._settings_dirty = bool(dirty)
@@ -1513,7 +1651,14 @@ class PickerWindow(QMainWindow):
         plane = Plane.from_array(plane_entry["abcd"])
         bins = self._uv_bins_value()
         # Map + hist only; per-point u/v samples are built lazily on selection.
-        uv = residual_uv_map(pts, plane, mask=mask, bins=bins, return_points=False)
+        uv = residual_uv_map(
+            pts,
+            plane,
+            mask=mask,
+            bins=bins,
+            return_points=False,
+            compute_backend=self.settings.detection.compute_backend,
+        )
         mad = float(plane_entry["mad_sigma_mm"])
         threshold = float(self._uv_vlim_mm())
         plane_entry["threshold_mm"] = float(
@@ -1576,7 +1721,8 @@ class PickerWindow(QMainWindow):
             r = plane.signed_distances(pts)
         else:
             uv = residual_uv_map(
-                pts, plane, mask=None, bins=self._uv_bins_value(), return_points=True
+                pts, plane, mask=None, bins=self._uv_bins_value(), return_points=True,
+                compute_backend=self.settings.detection.compute_backend,
             )
             uu, vv, r = uv["u"], uv["v"], uv["r"]
         plane_entry["uv_samples"] = {
@@ -1992,21 +2138,28 @@ class PickerWindow(QMainWindow):
         subset = pts[local]
         backend = self.settings.detection.ransac_backend
         min_pts = min(1000, max(50, n_sel // 5))
+        compute = resolve_compute_backend(
+            self.settings.detection.compute_backend, n_points=n_sel
+        )
         self._status(
-            f"refitting {g['name']}/p{p['plane_index']} on {n_sel:,} selected pts ..."
+            f"refitting {g['name']}/p{p['plane_index']} on {n_sel:,} selected pts "
+            f"({compute}) ..."
         )
         QApplication.processEvents()
 
+        t0 = time.perf_counter()
         res = extract_main_plane(
             subset,
             MainPlaneParams(
                 ransac_backend=backend,
                 max_threshold_mm=FIT_MAX_THRESHOLD_MM,
                 min_points=min_pts,
+                compute_backend=self.settings.detection.compute_backend,
             ),
             clicked=None,
             coarse_plane=np.asarray(p["abcd"], dtype=np.float64),
         )
+        t_fit = time.perf_counter()
         if res.n_main < 50:
             raise ValueError("refit produced too few main-component points")
 
@@ -2052,6 +2205,26 @@ class PickerWindow(QMainWindow):
             ),
             "uv": refit_uv,
         }
+        t_end = time.perf_counter()
+        timing = {
+            "group": f"{g['name']}/p{p['plane_index']}",
+            "n_pts": n_sel,
+            "compute": compute,
+            "ransac_backend": backend,
+            "multi": False,
+            "fit_s": t_fit - t0,
+            "uv_s": t_end - t_fit,
+            "total_s": t_end - t0,
+            "wall_s": t_end - t0,
+            "planes": [{
+                "plane_index": p["plane_index"],
+                "status": res.status,
+                "n_points": int(res.n_main),
+                "mad_sigma_mm": mad,
+                "bimodal": bimodal,
+            }],
+        }
+        self._log_fit_timing(timing, kind="selection_refit")
         self._uv_map_mode = "refit"
         self._sync_uv_action_buttons()
         self._show_uv_for_selection()
@@ -2059,7 +2232,8 @@ class PickerWindow(QMainWindow):
             f"{g['name']}/p{p['plane_index']}: selection refit on {n_sel:,} pts → "
             f"mad {mad*1e3:.0f} µm  |  {res.status}"
             + (" BIMODAL" if bimodal else "")
-            + f"  (base mad {float(p['mad_sigma_mm'])*1e3:.0f} µm kept)"
+            + f"  |  {self._fit_timing_status(timing)}"
+            + f"  (base mad {float(p['mad_sigma_mm'])*1e3:.0f} µm kept)  |  fit.log"
         )
         self._sync_action_states()
 
@@ -2348,7 +2522,8 @@ class PickerWindow(QMainWindow):
             accumulate_threshold_mm=self.s_accthr.value(),
             connect=self.s_connect.isChecked(),
             cell_size_mm=self.s_cell.value(),
-            ransac_backend=self.s_backend.currentText(),
+            ransac_backend=self.s_backend.currentData() or "seeded",
+            compute_backend=self.s_compute_backend.currentText(),
             seed=self.settings.detection.seed,
             min_points_per_cell=self.settings.detection.min_points_per_cell,
             expand_step_mm=self.s_expand.value(),
@@ -2385,6 +2560,7 @@ class PickerWindow(QMainWindow):
 
         self.settings.detection = new_det
         self.settings.view = new_view
+        set_default_backend(new_det.compute_backend)
 
         if effects.invalidate_grid:
             self.grid = None
@@ -2474,11 +2650,18 @@ class PickerWindow(QMainWindow):
             self.s_maxexp.setValue(getattr(d, "max_expand_rounds", 40))
             max_in = getattr(d, "max_inplane_radius_mm", None)
             self.s_maxinplane.setValue(float(max_in) if max_in is not None else 0.0)
-            self.s_backend.setCurrentText(getattr(d, "ransac_backend", "numpy"))
+            ransac_raw = getattr(d, "ransac_backend", "seeded")
+            if ransac_raw == "numpy":
+                ransac_raw = "seeded"
+            idx = self.s_backend.findData(ransac_raw)
+            self.s_backend.setCurrentIndex(idx if idx >= 0 else 0)
             self.s_voxel.setValue(v.display_voxel_size_mm)
             self.s_maxdisp.setValue(v.display_max_points)
             self.s_ds_backend.setCurrentText(
                 getattr(v, "display_downsample_backend", "auto")
+            )
+            self.s_compute_backend.setCurrentText(
+                getattr(d, "compute_backend", "auto")
             )
             self.s_ptsize.setValue(v.base_point_size)
             self.s_active_pt.setValue(v.active_point_size)
@@ -2520,7 +2703,9 @@ class PickerWindow(QMainWindow):
         path.mkdir(parents=True, exist_ok=True)
         self.project_dir = path
         self._vtk_log_path = route_vtk_messages_to_file(self.project_dir / "vtk.log")
+        self._fit_log_path = self.project_dir / "fit.log"
         self.settings = load_settings(self.project_dir, warn=self._status)
+        set_default_backend(self.settings.detection.compute_backend)
         self._write_form_from_settings()
         self.grid = None
 
@@ -2534,8 +2719,10 @@ class PickerWindow(QMainWindow):
 
         self._update_project_labels()
         ready = "Ready"
+        ready += f"  |  {self._compute_status_suffix()}"
         if self._vtk_log_path is not None:
             ready += f"  |  VTK messages -> {self._vtk_log_path}"
+        ready += f"  |  fit timing -> {self._fit_log_path}"
         self._status_default = ready
         self._status(f"project set to {self.project_dir.resolve()}")
 
@@ -2579,16 +2766,23 @@ class PickerWindow(QMainWindow):
         )
         self._update_source_meta()
         self._sync_action_states()
+        self._ensure_grid()
 
     def _ensure_grid(self) -> VoxelHashGrid:
-        if self.grid is None:
-            if len(self.full_points) == 0:
-                raise ValueError("no cloud loaded")
-            self._status("building spatial index ...")
-            QApplication.processEvents()
-            cell = max(self.settings.detection.local_radius_mm, 1.0)
-            self.grid = VoxelHashGrid(self.full_points, cell_size=cell)
-            self._status("spatial index ready")
+        if len(self.full_points) == 0:
+            raise ValueError("no cloud loaded")
+        cell = VoxelHashGrid.cell_size_for_radius(
+            self.settings.detection.local_radius_mm
+        )
+        if self.grid is not None and self.grid.cell_size == cell:
+            return self.grid
+        self._status(
+            f"building spatial index ({len(self.full_points):,} pts, "
+            f"cell={cell:.1f} mm) ..."
+        )
+        QApplication.processEvents()
+        self.grid = VoxelHashGrid(self.full_points, cell_size=cell)
+        self._status("spatial index ready")
         return self.grid
 
     # ------------------------------------------------------------------
@@ -2809,6 +3003,7 @@ class PickerWindow(QMainWindow):
         """Fresh screen pick: snap to the frontmost surface on the view ray."""
         if len(self.full_points) == 0:
             raise ValueError("load a cloud first")
+        wall_t0 = time.perf_counter()
         if self.snap_front_cb.isChecked():
             self._pick_layers = self._build_pick_layers(world)
         else:
@@ -2822,7 +3017,7 @@ class PickerWindow(QMainWindow):
         self._pick_layer_i = 0  # frontmost = what the user sees
         self._pick_replace_gid = None
         self._pick_raw_hit = np.asarray(world, dtype=np.float64)
-        self._extract_at_current_layer(replace=False)
+        self._extract_at_current_layer(replace=False, wall_t0=wall_t0)
 
     def _cycle_pick_depth(self, delta: int):
         if not self._pick_layers:
@@ -2891,7 +3086,8 @@ class PickerWindow(QMainWindow):
             # add_text uses vtkCornerAnnotation; slot 2 is upper-left.
             actor.SetText(2, text)
 
-    def _extract_at_current_layer(self, *, replace: bool):
+    def _extract_at_current_layer(self, *, replace: bool, wall_t0: float | None = None):
+        flow_t0 = wall_t0 if wall_t0 is not None else time.perf_counter()
         self._update_depth_controls()
         layer = self._pick_layers[self._pick_layer_i]
         world = np.asarray(layer["seed"], dtype=np.float64)
@@ -2917,13 +3113,41 @@ class PickerWindow(QMainWindow):
         else:
             reuse_gid = None
 
+        t_pick0 = time.perf_counter()
+        depth_s = (t_pick0 - wall_t0) if wall_t0 is not None else None
+        want_cell = VoxelHashGrid.cell_size_for_radius(
+            self.settings.detection.local_radius_mm
+        )
+        had_grid = (
+            self.grid is not None and self.grid.cell_size == want_cell
+        )
+        t_grid0 = time.perf_counter()
         grid = self._ensure_grid()
+        grid_build_s = 0.0 if had_grid else time.perf_counter() - t_grid0
         self._status(f"picking ({depth_tag}): local plane + refine ...")
         QApplication.processEvents()
+        t_query0 = time.perf_counter()
         nb = grid.radius_indices(world, self.settings.detection.local_radius_mm)
-        indices, plane = pick_plane_region(
-            self.full_points, world, nb, self.settings.detection
+        neighbor_query_s = time.perf_counter() - t_query0
+        neighbor_s = grid_build_s + neighbor_query_s
+        pick_detail: dict = {
+            "grid_build_s": grid_build_s,
+            "neighbor_query_s": neighbor_query_s,
+            "neighbor_s": neighbor_s,
+            "n_neighbors": len(nb),
+        }
+        compute = resolve_compute_backend(
+            self.settings.detection.compute_backend, n_points=len(self.full_points)
         )
+        indices, plane = pick_plane_region(
+            self.full_points,
+            world,
+            nb,
+            self.settings.detection,
+            compute_backend=compute,
+            timings=pick_detail,
+        )
+        pick_s = time.perf_counter() - t_pick0
 
         if (
             not replace
@@ -2972,39 +3196,83 @@ class PickerWindow(QMainWindow):
 
         if self.autofit_cb.isChecked():
             n_g = len(g["indices"])
-            self._status(f"{coarse_msg} → fitting {n_g:,} pts ...")
+            compute = resolve_compute_backend(
+                self.settings.detection.compute_backend, n_points=n_g
+            )
+            self._status(f"{coarse_msg} → fitting {n_g:,} pts ({compute}) ...")
             QApplication.processEvents()
-            self._fit_group(g)
+            timing = self._fit_group(g, log=False)
+            t_post0 = time.perf_counter()
             self._active_plane_index = 0
             self._refresh_tree()
             self._show_uv_for_selection()
+            timing["pick_s"] = pick_s
+            if depth_s is not None:
+                timing["depth_s"] = depth_s
+            timing["post_s"] = time.perf_counter() - t_post0
+            timing["wall_s"] = time.perf_counter() - flow_t0
+            timing["pick_detail"] = pick_detail
+            self._log_fit_timing(timing, kind="pick+fit")
             planes = g["fit"]["planes"]
             self._status(
-                f"{g['name']}: {len(planes)} plane(s): "
+                f"{g['name']}: {len(planes)} plane(s) [{compute}, "
+                f"{self._fit_timing_status(timing)}]: "
                 + " | ".join(
                     f"p{p['plane_index']} {p['mad_sigma_mm']*1e3:.0f}um {p['status']}"
                     + (" BIMODAL" if p["bimodal"] else "")
                     for p in planes
                 )
-                + f"  | {depth_tag}"
+                + f"  | {depth_tag}  |  fit.log"
+            )
+        else:
+            timing = {
+                "group": g["name"],
+                "n_pts": len(g["indices"]),
+                "compute": resolve_compute_backend(
+                    self.settings.detection.compute_backend, n_points=len(g["indices"])
+                ),
+                "ransac_backend": self.settings.detection.ransac_backend,
+                "multi": False,
+                "fit_s": 0.0,
+                "uv_s": 0.0,
+                "total_s": 0.0,
+                "pick_s": pick_s,
+                "pick_detail": pick_detail,
+                "planes": [],
+            }
+            if depth_s is not None:
+                timing["depth_s"] = depth_s
+            timing["wall_s"] = time.perf_counter() - flow_t0
+            self._log_fit_timing(timing, kind="pick")
+            self._status(
+                f"{coarse_msg}  |  pick {pick_s:.2f}s"
+                + (f" + depth {depth_s:.2f}s" if depth_s is not None else "")
+                + f" = {timing['wall_s']:.2f}s  |  fit.log"
             )
 
     def _handle_pick(self, world: np.ndarray):
         # Kept for compatibility with any external callers / tests.
         self._start_pick_at(world)
 
-    def _fit_group(self, g):
+    def _fit_group(self, g, *, log: bool = True) -> dict:
         from dataclasses import replace
 
+        t0 = time.perf_counter()
         pts = self.full_points[g["indices"]]
+        n_pts = len(pts)
         backend = self.settings.detection.ransac_backend
-        if self.multiplane_cb.isChecked():
+        compute = resolve_compute_backend(
+            self.settings.detection.compute_backend, n_points=n_pts
+        )
+        multi = self.multiplane_cb.isChecked()
+        if multi:
             mp = MultiPlaneParams()
             mp = MultiPlaneParams(
                 plane=replace(
                     mp.plane,
                     ransac_backend=backend,
                     max_threshold_mm=FIT_MAX_THRESHOLD_MM,
+                    compute_backend=compute,
                 )
             )
             extracted = extract_planes(
@@ -3016,6 +3284,7 @@ class PickerWindow(QMainWindow):
                 MainPlaneParams(
                     ransac_backend=backend,
                     max_threshold_mm=FIT_MAX_THRESHOLD_MM,
+                    compute_backend=compute,
                 ),
                 clicked=g["clicked"],
                 coarse_plane=g["coarse_plane"],
@@ -3032,6 +3301,7 @@ class PickerWindow(QMainWindow):
                     )
                 ),
             }]
+        t_fit = time.perf_counter()
         g["fit"] = {
             "planes": [
                 {
@@ -3049,36 +3319,79 @@ class PickerWindow(QMainWindow):
         }
         for entry, p in zip(g["fit"]["planes"], extracted):
             self._cache_uv_for_plane(pts, entry, p["mask"])
+        t_end = time.perf_counter()
+        timing = {
+            "group": g["name"],
+            "n_pts": n_pts,
+            "compute": compute,
+            "ransac_backend": backend,
+            "multi": multi,
+            "fit_s": t_fit - t0,
+            "uv_s": t_end - t_fit,
+            "total_s": t_end - t0,
+            "planes": g["fit"]["planes"],
+        }
+        if log:
+            self._log_fit_timing(timing)
+        return timing
 
     def _fit_active(self):
         g = self._active_group()
         if g is None:
             raise ValueError("no active group")
-        self._status(f"fitting {g['name']} ...")
+        n_pts = len(g["indices"])
+        compute = resolve_compute_backend(
+            self.settings.detection.compute_backend, n_points=n_pts
+        )
+        wall_t0 = time.perf_counter()
+        self._status(f"fitting {g['name']} ({n_pts:,} pts, {compute}) ...")
         QApplication.processEvents()
-        self._fit_group(g)
+        timing = self._fit_group(g, log=False)
+        t_post0 = time.perf_counter()
         self._active_plane_index = 0
         self._refresh_tree()
         self._show_uv_for_selection()
+        timing["post_s"] = time.perf_counter() - t_post0
+        timing["wall_s"] = time.perf_counter() - wall_t0
+        self._log_fit_timing(timing)
         planes = g["fit"]["planes"]
         self._status(
-            f"{g['name']}: {len(planes)} plane(s): "
+            f"{g['name']}: {len(planes)} plane(s) [{compute}, "
+            f"{self._fit_timing_status(timing)}]: "
             + " | ".join(
                 f"p{p['plane_index']} {p['mad_sigma_mm']*1e3:.0f}um {p['status']}"
                 + (" BIMODAL" if p["bimodal"] else "")
                 for p in planes
             )
+            + "  |  fit.log"
         )
         self._sync_action_states()
 
     def _fit_all(self):
+        totals: list[dict] = []
+        all_t0 = time.perf_counter()
         for g in self.groups:
-            self._status(f"fitting {g['name']} ...")
+            n_pts = len(g["indices"])
+            compute = resolve_compute_backend(
+                self.settings.detection.compute_backend, n_points=n_pts
+            )
+            self._status(f"fitting {g['name']} ({n_pts:,} pts, {compute}) ...")
             QApplication.processEvents()
-            self._fit_group(g)
+            wall_t0 = time.perf_counter()
+            timing = self._fit_group(g, log=False)
+            timing["wall_s"] = time.perf_counter() - wall_t0
+            self._log_fit_timing(timing)
+            totals.append(timing)
         self._refresh_tree()
         self._show_uv_for_selection()
-        self._status("fit all done")
+        total_s = sum(t["wall_s"] for t in totals)
+        self._append_fit_log(
+            f"fit_all  groups={len(totals)}  wall={total_s:.3f}s  "
+            f"session={time.perf_counter() - all_t0:.3f}s"
+        )
+        self._status(
+            f"fit all done ({len(totals)} groups, {total_s:.1f}s) — see fit.log"
+        )
         self._sync_action_states()
 
     def _save_all(self):

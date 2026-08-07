@@ -63,8 +63,8 @@ class ViewSettings:
     inactive_point_size: float = 2.5
     display_voxel_size_mm: float = 0.5  # 0 = no voxel filter
     display_max_points: int = 4_000_000  # hard cap per geometry
-    # Display-only decimation: "auto" uses Open3D C++ voxel if installed.
-    display_downsample_backend: str = "auto"  # auto | numpy | open3d
+    # Display-only decimation: "auto" prefers CuPy, then Open3D, else numpy.
+    display_downsample_backend: str = "auto"  # auto | numpy | open3d | cupy
     axis_size_mm: float = 100.0
     axis_margin_mm: float = 20.0
 
@@ -101,17 +101,30 @@ def load_settings(project_dir: str | Path, warn=print) -> PickerSettings:
     if doc.get("version", 1) != 1:
         warn(f"settings version {doc.get('version')} is newer than supported (1)")
 
-    def build(cls, section: str):
-        data = doc.get(section, {})
-        known = {f: data[f] for f in cls.__dataclass_fields__ if f in data}
-        unknown = set(data) - set(known)
+    from dataclasses import replace
+
+    def build(cls, section: str, data: dict | None = None):
+        raw = dict(data if data is not None else doc.get(section, {}))
+        known = {f: raw[f] for f in cls.__dataclass_fields__ if f in raw}
+        unknown = set(raw) - set(known)
         if unknown:
             warn(f"settings: ignoring unknown keys in [{section}]: {sorted(unknown)}")
         return cls(**known)
 
+    det_raw = dict(doc.get("detection", {}))
+    view_raw = dict(doc.get("view", {}))
+    # Legacy: compute_backend lived under view; prefer detection if both exist.
+    legacy_compute = view_raw.pop("compute_backend", None)
+    if "compute_backend" not in det_raw and legacy_compute is not None:
+        det_raw["compute_backend"] = legacy_compute
+
+    detection = build(PickParams, "detection", det_raw)
+    if detection.ransac_backend == "numpy":
+        detection = replace(detection, ransac_backend="seeded")
+
     return PickerSettings(
-        detection=build(PickParams, "detection"),
-        view=build(ViewSettings, "view"),
+        detection=detection,
+        view=build(ViewSettings, "view", view_raw),
     )
 
 

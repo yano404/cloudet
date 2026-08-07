@@ -27,6 +27,7 @@ cloudet/
   plyio.py      PLY I/O (double precision, Open3D-free)
   groups.py     Group loading
   project.py    Project directory I/O (manifest / settings / group save)
+  array_backend.py  Optional CuPy GPU backend (auto fallback to NumPy)
   pipeline.py   Residual u–v maps (for GUI QC)
   picker_qt.py  Interactive app (PySide6 + PyVista)
   cli.py        cloudet [project] [--cloud ...] (default: launch the app)
@@ -38,12 +39,31 @@ tests/          Synthetic validation (FARO-like σ ≈ 0.03 mm)
 ```bash
 pip install -e ".[dev]"       # full app (includes Qt UI)
 pip install -e ".[dev,fast]"  # optional: faster display decimation via Open3D
+pip install -e ".[dev,gpu]"   # optional: CuPy GPU for Fit / residual QC / display voxel
 pytest
 
 # Launch the app (pick / Fit / residual QC / save are all in the GUI)
 cloudet --cloud /path/to/scan.ply
 cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
 ```
+
+On Linux/WSL, the `[gpu]` extra installs `cupy-cuda12x[ctk]` (CUDA headers for kernel compile). If CuPy is installed without headers, cloudet falls back to NumPy automatically in `auto` mode.
+
+### GPU (optional, NVIDIA + CUDA 12.x)
+
+3D **rendering** already uses the GPU via VTK/OpenGL. Optional **CuPy** accelerates Fit, residual u–v maps, and display voxel downsampling on large clouds.
+
+```bat
+pip install -e ".[dev,gpu]"
+pip install "cupy-cuda12x[ctk]"   # if GPU probe fails: missing CUDA headers (common on WSL)
+python -c "import cupy as cp; print(cp.cuda.runtime.getDeviceProperties(0)['name'])"
+cloudet --cloud C:\path\to\scan.ply
+```
+
+In Settings → **Compute backend**: `auto` (CuPy when available), `numpy`, or `cupy`.  
+**Display downsampling method** `auto` also prefers CuPy over Open3D when installed.
+
+CuPy is not required: Mac and CPU-only machines keep using NumPy. Clouds under ~50k points stay on CPU even in `auto` mode. Set `CLOUDET_COMPUTE_BACKEND=numpy` to force CPU.
 
 Project layout:
 

@@ -27,6 +27,7 @@ cloudet/
   plyio.py      PLY 読み書き（double 精度、Open3D 非依存）
   groups.py     group 読込
   project.py    プロジェクトディレクトリ I/O（manifest / settings / group 保存）
+  array_backend.py  任意 CuPy GPU バックエンド（無ければ NumPy）
   pipeline.py   残差 u–v マップ（GUI QC 用）
   picker_qt.py  対話的アプリ（PySide6 + PyVista）
   cli.py        cloudet [project] [--cloud ...]（既定はアプリ起動）
@@ -38,12 +39,31 @@ tests/          合成データによる検証（σ=0.03mm の FARO 条件を模
 ```bash
 pip install -e ".[dev]"       # アプリ一式（Qt UI 含む）
 pip install -e ".[dev,fast]"  # 任意: 表示間引きを Open3D で高速化
+pip install -e ".[dev,gpu]"   # 任意: Fit / 残差 QC / 表示 voxel を CuPy で GPU 化
 pytest
 
 # アプリ起動（pick / Fit / 残差 QC / 保存はすべて GUI）
 cloudet --cloud /path/to/scan.ply
 cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
 ```
+
+Linux/WSL では `[gpu]` が `cupy-cuda12x[ctk]`（カーネルコンパイル用 CUDA ヘッダ）を入れます。ヘッダ無しで CuPy だけ入っている場合、`auto` では NumPy に自動フォールバックします。
+
+### GPU（任意・NVIDIA + CUDA 12.x）
+
+3D **表示**はもともと VTK/OpenGL で GPU を使います。任意の **CuPy** で、大点群の Fit・残差 u–v マップ・表示用 voxel 間引きを加速できます。
+
+```bat
+pip install -e ".[dev,gpu]"
+pip install "cupy-cuda12x[ctk]"   # GPU プローブ失敗時（WSL でヘッダ不足になりがち）
+python -c "import cupy as cp; print(cp.cuda.runtime.getDeviceProperties(0)['name'])"
+cloudet --cloud C:\path\to\scan.ply
+```
+
+Settings → **Compute backend**: `auto`（CuPy が使えるとき）/ `numpy` / `cupy`。  
+**Display downsampling method** の `auto` も CuPy を Open3D より優先します。
+
+CuPy なし（Mac 等）でも従来どおり NumPy のみで動作します。約 5 万点未満は `auto` でも CPU のままです。`CLOUDET_COMPUTE_BACKEND=numpy` で CPU 固定も可能です。
 
 プロジェクト構成::
 

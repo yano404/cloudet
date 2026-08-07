@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from cloudet.array_backend import get_context
 from cloudet.plane import Plane
 
 __all__ = ["residual_uv_map"]
@@ -164,6 +165,7 @@ def residual_uv_map(
     bins: int = 200,
     *,
     return_points: bool = False,
+    compute_backend: str = "auto",
 ) -> dict:
     """Bin signed residuals on an in-plane (u, v) grid.
 
@@ -180,8 +182,16 @@ def residual_uv_map(
     ``center``, and ``extents_uvn`` ``(lo, hi)`` in the (u, v, n) frame.
     If ``return_points`` is True, also include per-point ``u`` and ``v``.
     """
-    pts = points if mask is None else points[mask]
-    r = plane.signed_distances(pts)
+    pts = np.asarray(points if mask is None else points[mask], dtype=np.float64)
+    ctx = get_context(compute_backend, n_points=len(pts))
+    if ctx.name == "cupy":
+        xp = ctx.xp
+        pts_dev = ctx.to_device(pts)
+        normal_dev = ctx.to_device(plane.normal)
+        r_g = pts_dev @ normal_dev + plane.d
+    else:
+        r_g = None
+        r = plane.signed_distances(pts)
 
     u, v, center, uu, vv = _aligned_inplane_basis(
         pts, plane.normal, return_coords=True
@@ -189,8 +199,20 @@ def residual_uv_map(
     n_ax = np.asarray(plane.normal, dtype=np.float64)
     nn = (pts - center) @ n_ax
 
-    counts, ue, ve = np.histogram2d(uu, vv, bins=bins)
-    sums, _, _ = np.histogram2d(uu, vv, bins=[ue, ve], weights=r)
+    if ctx.name == "cupy":
+        xp = ctx.xp
+        uu_g = xp.asarray(uu)
+        vv_g = xp.asarray(vv)
+        counts, ue, ve = xp.histogram2d(uu_g, vv_g, bins=bins)
+        sums, _, _ = xp.histogram2d(uu_g, vv_g, bins=[ue, ve], weights=r_g)
+        counts = ctx.asnumpy(counts)
+        ue = ctx.asnumpy(ue)
+        ve = ctx.asnumpy(ve)
+        sums = ctx.asnumpy(sums)
+        r = ctx.asnumpy(r_g)
+    else:
+        counts, ue, ve = np.histogram2d(uu, vv, bins=bins)
+        sums, _, _ = np.histogram2d(uu, vv, bins=[ue, ve], weights=r)
     with np.errstate(invalid="ignore"):
         mean_map = np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
 
