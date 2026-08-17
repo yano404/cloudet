@@ -21,8 +21,85 @@ __all__ = [
     "depth_layers_along_ray",
 ]
 
+_INDEX_CHUNK = 1_000_000
 # Above this many grid cells the Python cell walk loses to one vectorized pass.
 _MAX_QUERY_CELLS = 8_000
+# Display voxel/Open3D must not see the full survey cloud: Vector3dVector /
+# (N,3) int64 keys would duplicate tens of millions of points in RAM.
+_DISPLAY_WORK_CAP = 8_000_000
+
+
+def _as_xyz(points: np.ndarray) -> np.ndarray:
+    points = np.asarray(points, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("points must have shape (N, 3)")
+    return points
+
+
+def _compact_ids(n_points: int, *arrays: np.ndarray) -> tuple[np.ndarray, ...]:
+    """Use int32 indices when N fits, to cut RAM/disk of the spatial index."""
+    if n_points <= np.iinfo(np.int32).max:
+        return tuple(np.asarray(a, dtype=np.int32) for a in arrays)
+    return tuple(np.asarray(a, dtype=np.int64) for a in arrays)
+
+
+def _precap_points(points: np.ndarray, cap: int, seed: int) -> np.ndarray:
+    """Subset so display downsample never walks the full cloud.
+
+    Uses a strided sample rather than ``choice(..., replace=False)``, which
+    can permute all N indices in RAM.
+    """
+    n = len(points)
+    cap = int(cap)
+    if n <= cap:
+        return points
+    idx = np.linspace(0, n - 1, cap, dtype=np.int64)
+    return points[idx]
+
+
+def _keys_chunked(points: np.ndarray, origin: np.ndarray, cell_size: float):
+    """Linear voxel keys without an (N, 3) int64 index (that alone is 8 bytes × 3N)."""
+    n = len(points)
+    inv = 1.0 / float(cell_size)
+    mx = np.zeros(3, dtype=np.int64)
+    for i in range(0, n, _INDEX_CHUNK):
+        sl = points[i : i + _INDEX_CHUNK]
+        ijk = np.floor((sl - origin) * inv).astype(np.int64)
+        np.maximum(mx, ijk.max(axis=0), out=mx)
+    dims = mx + 1
+    keys = np.empty(n, dtype=np.int64)
+    for i in range(0, n, _INDEX_CHUNK):
+        sl = points[i : i + _INDEX_CHUNK]
+        ijk = np.floor((sl - origin) * inv).astype(np.int64)
+        keys[i : i + len(sl)] = (
+            (ijk[:, 0] * dims[1] + ijk[:, 1]) * dims[2] + ijk[:, 2]
+        )
+    return keys, dims
+
+
+def _unique_runs(keys: np.ndarray, order: np.ndarray):
+    """Cell keys / start offsets from argsort, without copying all keys."""
+    n = len(order)
+    if n == 0:
+        empty = np.empty(0, dtype=keys.dtype)
+        return empty, np.empty(0, dtype=np.int64)
+    mask = np.empty(n, dtype=np.bool_)
+    mask[0] = True
+    for i in range(0, n - 1, _INDEX_CHUNK):
+        j = min(i + _INDEX_CHUNK, n - 1)
+        mask[i + 1 : j + 1] = keys[order[i + 1 : j + 1]] != keys[order[i:j]]
+    starts = np.flatnonzero(mask)
+    return keys[order[starts]], starts
+
+
+def _build_voxel_index(points: np.ndarray, cell_size: float):
+    origin = points.min(axis=0)
+    keys, dims = _keys_chunked(points, origin, cell_size)
+    order = np.argsort(keys, kind="quicksort")
+    cell_keys, cell_starts = _unique_runs(keys, order)
+    del keys
+    order, cell_starts = _compact_ids(len(points), order, cell_starts)
+    return origin, dims, cell_keys, cell_starts, order
 
 
 class VoxelHashGrid:
@@ -33,24 +110,76 @@ class VoxelHashGrid:
     """
 
     def __init__(self, points: np.ndarray, cell_size: float):
-        points = np.asarray(points, dtype=np.float64)
-        if points.ndim != 2 or points.shape[1] != 3:
-            raise ValueError("points must have shape (N, 3)")
+        points = _as_xyz(points)
         if cell_size <= 0:
             raise ValueError("cell_size must be positive")
         self.points = points
         self.cell_size = float(cell_size)
-        self.origin = points.min(axis=0)
+        (
+            self.origin,
+            self.dims,
+            self._cell_keys,
+            self._cell_starts,
+            self._order,
+        ) = _build_voxel_index(points, self.cell_size)
 
-        ijk = np.floor((points - self.origin) / self.cell_size).astype(np.int64)
-        self.dims = ijk.max(axis=0) + 1
-        keys = (ijk[:, 0] * self.dims[1] + ijk[:, 1]) * self.dims[2] + ijk[:, 2]
+    @classmethod
+    def from_arrays(
+        cls,
+        points: np.ndarray,
+        *,
+        cell_size: float,
+        origin: np.ndarray,
+        dims: np.ndarray,
+        cell_keys: np.ndarray,
+        cell_starts: np.ndarray,
+        order: np.ndarray,
+        validate_range: bool = True,
+    ) -> "VoxelHashGrid":
+        """Rebuild from arrays produced by :meth:`index_arrays` (no re-index).
 
-        order = np.argsort(keys, kind="stable")
-        sorted_keys = keys[order]
-        # unique cells with start offsets into `order`
-        self._cell_keys, self._cell_starts = np.unique(sorted_keys, return_index=True)
-        self._order = order
+        ``validate_range`` scans every index; skip it when loading a trusted
+        cache so a 60 M-point memmap is not read twice.
+        """
+        points = _as_xyz(points)
+        if cell_size <= 0:
+            raise ValueError("cell_size must be positive")
+        order = np.asarray(order).reshape(-1)
+        if order.dtype.kind not in "iu":
+            raise ValueError("order must be integer")
+        if len(order) != len(points):
+            raise ValueError("order length must match number of points")
+        origin = np.asarray(origin, dtype=np.float64).reshape(3)
+        dims = np.asarray(dims, dtype=np.int64).reshape(3)
+        cell_keys = np.asarray(cell_keys).reshape(-1)
+        cell_starts = np.asarray(cell_starts).reshape(-1)
+        if len(cell_keys) != len(cell_starts):
+            raise ValueError("cell_keys and cell_starts length mismatch")
+        if validate_range and order.size:
+            if int(order.min()) < 0 or int(order.max()) >= len(points):
+                raise ValueError("order contains out-of-range indices")
+            if not np.allclose(origin, points.min(axis=0)):
+                raise ValueError("cached origin does not match points")
+        obj = cls.__new__(cls)
+        obj.points = points
+        obj.cell_size = float(cell_size)
+        obj.origin = origin
+        obj.dims = dims
+        obj._cell_keys = cell_keys
+        obj._cell_starts = cell_starts
+        obj._order = order
+        return obj
+
+    def index_arrays(self) -> dict:
+        """Arrays needed to persist this index (points themselves are omitted)."""
+        return {
+            "cell_size": float(self.cell_size),
+            "origin": np.asarray(self.origin, dtype=np.float64),
+            "dims": np.asarray(self.dims, dtype=np.int64),
+            "cell_keys": np.asarray(self._cell_keys),
+            "cell_starts": np.asarray(self._cell_starts),
+            "order": np.asarray(self._order),
+        }
 
     @classmethod
     def cell_size_for_radius(cls, radius_mm: float) -> float:
@@ -266,6 +395,9 @@ def display_xyz(
     """
     points = np.asarray(points, dtype=np.float64)
     resolved = resolve_display_backend(backend)
+    work_cap = min(_DISPLAY_WORK_CAP, max(int(max_points) * 4, int(max_points)))
+    if len(points) > work_cap:
+        points = _precap_points(points, work_cap, seed)
     if resolved == "open3d":
         return _display_xyz_open3d(points, voxel_size, max_points, seed)
     compute = "cupy" if resolved == "cupy" else "numpy"
