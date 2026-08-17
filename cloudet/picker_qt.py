@@ -133,6 +133,17 @@ _RD_SELECTED_RING = "#ffffff"
 _RD_NORMAL = "#2ecc71"
 _RD_MEASURE = "#16a085"
 _RD_KIND_LABEL = {"plane": "plane", "line": "line", "point": "point"}
+# GUI OPERATION keys ↔ recipe construct ``op`` (intersect_three is the exception).
+_RD_GUI_TO_RECIPE_OP = {
+    "offset": "offset",
+    "intersect_planes": "intersect_planes",
+    "intersect_line_plane": "intersect_line_plane",
+    "intersect_three": "intersect_three_planes",
+    "line_from_point_normal": "line_from_point_normal",
+    "line_from_two_points": "line_from_two_points",
+    "midpoint_line_planes": "midpoint_line_planes",
+}
+_RD_RECIPE_TO_GUI_OP = {v: k for k, v in _RD_GUI_TO_RECIPE_OP.items()}
 
 
 DEPTH_TIP = (
@@ -542,6 +553,8 @@ class PickerWindow(QMainWindow):
         self._reduction_actor_names: list[str] = []
         self._reduction_measure_actor_names: list[str] = []
         self._rd_offset_sync = False
+        self._rd_loading_step = False
+        self._rd_form_entity_id: str | None = None
         self._view_frame: RigidFrame | None = None
 
         self.setWindowTitle(f"cloudet - {self.project_dir.name}")
@@ -1574,6 +1587,7 @@ class PickerWindow(QMainWindow):
         self.rd_id_edit = QLineEdit()
         self.rd_id_edit.setPlaceholderText("result id (optional, auto if empty)")
         id_form.addRow("New id", self.rd_id_edit)
+        self.rd_id_form = id_form
         op_lay.addLayout(id_form)
 
         def _entity_combo() -> QComboBox:
@@ -2516,8 +2530,11 @@ class PickerWindow(QMainWindow):
         kind: str | None = None,
         keep: str | None = None,
         placeholder: str = "(choose)",
+        allowed: set[str] | None = None,
     ) -> None:
         ids = self._reduction.ids(kind=kind) if kind else self._reduction.ids()
+        if allowed is not None:
+            ids = [eid for eid in ids if eid in allowed]
         combo.blockSignals(True)
         _reset_combo(combo)
         combo.addItem(placeholder, None)
@@ -2581,32 +2598,56 @@ class PickerWindow(QMainWindow):
         if rename:
             old, new = rename
             keep = {k: (new if v == old else v) for k, v in keep.items()}
+        allowed = self._reduction_operand_allowlist()
+        fill_kw = {"allowed": allowed} if allowed is not None else {}
         if hasattr(self, "rd_offset_plane"):
             self._reduction_fill_combo(
-                self.rd_offset_plane, kind="plane", keep=keep["offset"]
-            )
-            self._reduction_fill_combo(self.rd_p2_a, kind="plane", keep=keep["p2a"])
-            self._reduction_fill_combo(self.rd_p2_b, kind="plane", keep=keep["p2b"])
-            self._reduction_fill_combo(self.rd_lp_line, kind="line", keep=keep["lp_line"])
-            self._reduction_fill_combo(
-                self.rd_lp_plane, kind="plane", keep=keep["lp_plane"]
-            )
-            self._reduction_fill_combo(self.rd_p3_a, kind="plane", keep=keep["p3a"])
-            self._reduction_fill_combo(self.rd_p3_b, kind="plane", keep=keep["p3b"])
-            self._reduction_fill_combo(self.rd_p3_c, kind="plane", keep=keep["p3c"])
-            self._reduction_fill_combo(
-                self.rd_pn_point, kind="point", keep=keep["pn_point"]
+                self.rd_offset_plane, kind="plane", keep=keep["offset"], **fill_kw
             )
             self._reduction_fill_combo(
-                self.rd_pn_plane, kind="plane", keep=keep["pn_plane"]
+                self.rd_p2_a, kind="plane", keep=keep["p2a"], **fill_kw
+            )
+            self._reduction_fill_combo(
+                self.rd_p2_b, kind="plane", keep=keep["p2b"], **fill_kw
+            )
+            self._reduction_fill_combo(
+                self.rd_lp_line, kind="line", keep=keep["lp_line"], **fill_kw
+            )
+            self._reduction_fill_combo(
+                self.rd_lp_plane, kind="plane", keep=keep["lp_plane"], **fill_kw
+            )
+            self._reduction_fill_combo(
+                self.rd_p3_a, kind="plane", keep=keep["p3a"], **fill_kw
+            )
+            self._reduction_fill_combo(
+                self.rd_p3_b, kind="plane", keep=keep["p3b"], **fill_kw
+            )
+            self._reduction_fill_combo(
+                self.rd_p3_c, kind="plane", keep=keep["p3c"], **fill_kw
+            )
+            self._reduction_fill_combo(
+                self.rd_pn_point, kind="point", keep=keep["pn_point"], **fill_kw
+            )
+            self._reduction_fill_combo(
+                self.rd_pn_plane, kind="plane", keep=keep["pn_plane"], **fill_kw
             )
             if hasattr(self, "rd_pp_a"):
-                self._reduction_fill_combo(self.rd_pp_a, kind="point", keep=keep["pp_a"])
-                self._reduction_fill_combo(self.rd_pp_b, kind="point", keep=keep["pp_b"])
+                self._reduction_fill_combo(
+                    self.rd_pp_a, kind="point", keep=keep["pp_a"], **fill_kw
+                )
+                self._reduction_fill_combo(
+                    self.rd_pp_b, kind="point", keep=keep["pp_b"], **fill_kw
+                )
             if hasattr(self, "rd_mp_line"):
-                self._reduction_fill_combo(self.rd_mp_line, kind="line", keep=keep["mp_line"])
-                self._reduction_fill_combo(self.rd_mp_a, kind="plane", keep=keep["mp_a"])
-                self._reduction_fill_combo(self.rd_mp_b, kind="plane", keep=keep["mp_b"])
+                self._reduction_fill_combo(
+                    self.rd_mp_line, kind="line", keep=keep["mp_line"], **fill_kw
+                )
+                self._reduction_fill_combo(
+                    self.rd_mp_a, kind="plane", keep=keep["mp_a"], **fill_kw
+                )
+                self._reduction_fill_combo(
+                    self.rd_mp_b, kind="plane", keep=keep["mp_b"], **fill_kw
+                )
             if hasattr(self, "rd_frame_axis"):
                 self._reduction_fill_combo(
                     self.rd_frame_axis, kind="line", keep=keep.get("frame_axis")
@@ -2683,6 +2724,198 @@ class PickerWindow(QMainWindow):
             return "bind"
         return str(self.rd_op_combo.currentData())
 
+    def _reduction_editing_id(self) -> str | None:
+        """Construct entity id when ENTITIES has exactly one construct selected."""
+        ids = self._reduction_tree_selected_ids()
+        if len(ids) != 1:
+            return None
+        eid = ids[0]
+        step = self._reduction.construct_step(eid)
+        if step is None:
+            return None
+        if step.get("op") not in _RD_RECIPE_TO_GUI_OP:
+            return None
+        return eid
+
+    def _reduction_operand_allowlist(self) -> set[str] | None:
+        eid = self._reduction_editing_id()
+        if eid is None:
+            return None
+        return self._reduction.operand_ids_before(eid)
+
+    def _reduction_set_combo(self, combo: QComboBox | None, eid: str | None) -> None:
+        if combo is None:
+            return
+        combo.blockSignals(True)
+        idx = combo.findData(eid) if eid else -1
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.blockSignals(False)
+
+    def _reduction_sync_apply_button(self) -> None:
+        editing = self._reduction_editing_id() is not None
+        op = self._reduction_current_op()
+        show_id = not editing or op == "bind"
+        if hasattr(self, "rd_id_edit"):
+            if not show_id and self.rd_id_edit.isVisible():
+                self.rd_id_edit.clear()
+            self.rd_id_edit.setVisible(show_id)
+            self.rd_id_edit.setEnabled(show_id)
+            label = None
+            if hasattr(self, "rd_id_form"):
+                label = self.rd_id_form.labelForField(self.rd_id_edit)
+            if label is not None:
+                label.setVisible(show_id)
+        if not hasattr(self, "rd_apply_btn"):
+            return
+        if editing and op != "bind":
+            self.rd_apply_btn.setText("Update")
+            return
+        labels = {
+            "bind": "Import plane",
+            "offset": "Apply offset",
+            "intersect_planes": "Create axis",
+            "intersect_line_plane": "Create point",
+            "intersect_three": "Create corner",
+            "line_from_point_normal": "Create axis",
+            "line_from_two_points": "Create axis",
+            "midpoint_line_planes": "Create midpoint",
+        }
+        self.rd_apply_btn.setText(labels.get(op, "Apply"))
+
+    def _reduction_sync_operation_from_selection(self) -> None:
+        eid = self._reduction_editing_id()
+        if eid == getattr(self, "_rd_form_entity_id", None):
+            self._reduction_sync_apply_button()
+            return
+        self._rd_form_entity_id = eid
+        if eid is None:
+            self._reduction_sync_apply_button()
+            return
+        step = self._reduction.construct_step(eid)
+        if step is None:
+            self._reduction_sync_apply_button()
+            return
+        self._reduction_load_step_into_form(step)
+        self._reduction_sync_apply_button()
+
+    def _reduction_load_step_into_form(self, step: dict) -> None:
+        gui_op = _RD_RECIPE_TO_GUI_OP.get(str(step.get("op")))
+        if gui_op is None or not hasattr(self, "rd_op_combo"):
+            return
+        self._rd_loading_step = True
+        try:
+            idx = self.rd_op_combo.findData(gui_op)
+            if idx >= 0:
+                self.rd_op_combo.setCurrentIndex(idx)
+            self._reduction_refresh_operand_combos()
+            if gui_op == "offset":
+                self._reduction_set_combo(self.rd_offset_plane, step.get("of"))
+                dist = float(step.get("distance_mm", 0.0))
+                if hasattr(self, "rd_offset_spin"):
+                    self.rd_offset_spin.setValue(dist)
+            elif gui_op == "intersect_planes":
+                self._reduction_set_combo(self.rd_p2_a, step.get("a"))
+                self._reduction_set_combo(self.rd_p2_b, step.get("b"))
+            elif gui_op == "intersect_line_plane":
+                self._reduction_set_combo(self.rd_lp_line, step.get("line"))
+                self._reduction_set_combo(self.rd_lp_plane, step.get("plane"))
+            elif gui_op == "intersect_three":
+                self._reduction_set_combo(self.rd_p3_a, step.get("a"))
+                self._reduction_set_combo(self.rd_p3_b, step.get("b"))
+                self._reduction_set_combo(self.rd_p3_c, step.get("c"))
+            elif gui_op == "line_from_point_normal":
+                self._reduction_set_combo(self.rd_pn_point, step.get("point"))
+                self._reduction_set_combo(self.rd_pn_plane, step.get("plane"))
+            elif gui_op == "line_from_two_points":
+                self._reduction_set_combo(self.rd_pp_a, step.get("a"))
+                self._reduction_set_combo(self.rd_pp_b, step.get("b"))
+            elif gui_op == "midpoint_line_planes":
+                self._reduction_set_combo(self.rd_mp_line, step.get("line"))
+                self._reduction_set_combo(self.rd_mp_a, step.get("a"))
+                self._reduction_set_combo(self.rd_mp_b, step.get("b"))
+        finally:
+            self._rd_loading_step = False
+        self._reduction_update_selection_label()
+        self._refresh_reduction_actors()
+        self._reduction_update_live_preview()
+
+    def _reduction_step_from_form(self, entity_id: str) -> dict:
+        op = self._reduction_current_op()
+        recipe_op = _RD_GUI_TO_RECIPE_OP.get(op)
+        if recipe_op is None:
+            raise ValueError(f"cannot update with operation {op!r}")
+        if op == "offset":
+            of = self._reduction_combo_id(getattr(self, "rd_offset_plane", None))
+            if not of:
+                raise ValueError("Offset needs a plane")
+            return {
+                "id": entity_id,
+                "op": "offset",
+                "of": of,
+                "distance_mm": float(self.rd_offset_spin.value()),
+            }
+        if op == "intersect_planes":
+            a = self._reduction_combo_id(getattr(self, "rd_p2_a", None))
+            b = self._reduction_combo_id(getattr(self, "rd_p2_b", None))
+            if not a or not b:
+                raise ValueError("Intersect planes needs 2 planes")
+            return {"id": entity_id, "op": "intersect_planes", "a": a, "b": b}
+        if op == "intersect_line_plane":
+            line = self._reduction_combo_id(getattr(self, "rd_lp_line", None))
+            plane = self._reduction_combo_id(getattr(self, "rd_lp_plane", None))
+            if not line or not plane:
+                raise ValueError("Line ∩ plane needs a line and a plane")
+            return {
+                "id": entity_id,
+                "op": "intersect_line_plane",
+                "line": line,
+                "plane": plane,
+            }
+        if op == "intersect_three":
+            a = self._reduction_combo_id(getattr(self, "rd_p3_a", None))
+            b = self._reduction_combo_id(getattr(self, "rd_p3_b", None))
+            c = self._reduction_combo_id(getattr(self, "rd_p3_c", None))
+            if not a or not b or not c:
+                raise ValueError("3 planes → point needs 3 planes")
+            return {
+                "id": entity_id,
+                "op": "intersect_three_planes",
+                "a": a,
+                "b": b,
+                "c": c,
+            }
+        if op == "line_from_point_normal":
+            point = self._reduction_combo_id(getattr(self, "rd_pn_point", None))
+            plane = self._reduction_combo_id(getattr(self, "rd_pn_plane", None))
+            if not point or not plane:
+                raise ValueError("Point + normal needs a point and a plane")
+            return {
+                "id": entity_id,
+                "op": "line_from_point_normal",
+                "point": point,
+                "plane": plane,
+            }
+        if op == "line_from_two_points":
+            a = self._reduction_combo_id(getattr(self, "rd_pp_a", None))
+            b = self._reduction_combo_id(getattr(self, "rd_pp_b", None))
+            if not a or not b:
+                raise ValueError("2 points → axis needs two points")
+            return {"id": entity_id, "op": "line_from_two_points", "a": a, "b": b}
+        if op == "midpoint_line_planes":
+            line = self._reduction_combo_id(getattr(self, "rd_mp_line", None))
+            a = self._reduction_combo_id(getattr(self, "rd_mp_a", None))
+            b = self._reduction_combo_id(getattr(self, "rd_mp_b", None))
+            if not line or not a or not b:
+                raise ValueError("midpoint needs 1 axis and 2 planes")
+            return {
+                "id": entity_id,
+                "op": "midpoint_line_planes",
+                "line": line,
+                "a": a,
+                "b": b,
+            }
+        raise ValueError(f"cannot update with operation {op!r}")
+
     def _reduction_on_op_changed(self, *_args):
         op = self._reduction_current_op()
         page = {
@@ -2697,24 +2930,17 @@ class PickerWindow(QMainWindow):
         }.get(op, 0)
         if hasattr(self, "rd_stack"):
             self.rd_stack.setCurrentIndex(page)
-        labels = {
-            "bind": "Import plane",
-            "offset": "Apply offset",
-            "intersect_planes": "Create axis",
-            "intersect_line_plane": "Create point",
-            "intersect_three": "Create corner",
-            "line_from_point_normal": "Create axis",
-            "line_from_two_points": "Create axis",
-            "midpoint_line_planes": "Create midpoint",
-        }
-        if hasattr(self, "rd_apply_btn"):
-            self.rd_apply_btn.setText(labels.get(op, "Apply"))
+        self._reduction_sync_apply_button()
         self._reduction_refresh_operand_combos()
         self._reduction_update_selection_label()
+        if self._rd_loading_step:
+            return
         self._refresh_reduction_actors()
         self._reduction_update_live_preview()
 
     def _reduction_on_operand_combo(self, *_args):
+        if self._rd_loading_step:
+            return
         self._reduction_update_selection_label()
         self._reduction_sync_size_controls_from_selection()
         self._refresh_reduction_actors()
@@ -2763,7 +2989,8 @@ class PickerWindow(QMainWindow):
                 self.rd_offset_slider.setValue(max(lo, min(hi, ticks)))
         finally:
             self._rd_offset_sync = False
-        self._reduction_update_offset_preview()
+        if not self._rd_loading_step:
+            self._reduction_update_offset_preview()
 
     def _reduction_on_offset_slider(self, ticks: int):
         if self._rd_offset_sync:
@@ -2954,7 +3181,11 @@ class PickerWindow(QMainWindow):
         self.plotter.render()
 
     def _reduction_apply(self):
+        eid = self._reduction_editing_id()
         op = self._reduction_current_op()
+        if eid is not None and op != "bind":
+            self._reduction_update_step(eid)
+            return
         if op == "bind":
             self._reduction_bind_active()
         elif op == "offset":
@@ -2973,6 +3204,13 @@ class PickerWindow(QMainWindow):
             self._reduction_midpoint_line_planes()
         else:
             raise ValueError(f"unknown operation {op!r}")
+
+    def _reduction_update_step(self, entity_id: str) -> None:
+        step = self._reduction_step_from_form(entity_id)
+        self._reduction.replace_construct_step(entity_id, step)
+        self._rd_form_entity_id = entity_id
+        self._reduction_refresh_view()
+        self._status(f"updated {entity_id}")
 
     def _reduction_anchor_for_group(self, g: dict) -> np.ndarray:
         if g.get("clicked") is not None:
@@ -3637,6 +3875,7 @@ class PickerWindow(QMainWindow):
             )
             self.rd_reset_size_btn.setEnabled(has_size)
         self._reduction_sync_size_controls_from_selection()
+        self._reduction_sync_operation_from_selection()
 
     def _reduction_size_spin(self, kind: str) -> QDoubleSpinBox | None:
         return {
