@@ -625,3 +625,64 @@ def test_reduce_cli_writes_aligned(tmp_path):
     )
     assert doc["frame"]["kind"] == "aligned"
     assert doc["frame"]["origin"] == "beam_on_target"
+
+
+def test_session_measures_roundtrip(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["measures"] = [
+        {
+            "id": "hit_height",
+            "op": "distance_point_plane",
+            "point": "beam_on_target",
+            "plane": "target",
+        },
+        {
+            "id": "wall_angle",
+            "op": "angle_planes",
+            "a": "tracker_left",
+            "b": "tracker_front",
+        },
+    ]
+    sess = ReductionSession.from_recipe(recipe, project_dir=_make_project(tmp_path))
+    hit = sess.evaluate_measure(sess.measures[0])
+    assert hit["value"] == pytest.approx(0.0)
+    assert hit["unit"] == "mm"
+    ang = sess.evaluate_measure(sess.measures[1])
+    assert ang["value"] == pytest.approx(90.0)
+    assert ang["unit"] == "deg"
+
+    out = sess.to_recipe()
+    assert out["measures"][0]["id"] == "hit_height"
+    result = sess.to_result()
+    assert result.measures[0]["value"] == pytest.approx(0.0)
+
+    sess.rename("beam_on_target", "hit")
+    assert sess.measures[0]["point"] == "hit"
+    sess.remove("tracker_left")
+    assert sess.measures == []
+
+
+def test_add_measure_and_cli_export(tmp_path):
+    from cloudet.reduce import ReductionSession, run_reduction
+
+    project = _make_project(tmp_path)
+    sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
+    with pytest.raises(ValueError, match="must differ"):
+        sess.add_measure({
+            "id": "bad",
+            "op": "distance_points",
+            "a": "beam_on_target",
+            "b": "beam_on_target",
+        })
+    mid = sess.add_measure({
+        "op": "distance_point_plane",
+        "point": "beam_on_target",
+        "plane": "target",
+    })
+    assert mid == "dplane_1"
+    recipe = sess.to_recipe()
+    result = run_reduction(project, recipe)
+    assert result.measures[0]["id"] == "dplane_1"
+    assert result.measures[0]["value"] == pytest.approx(0.0)

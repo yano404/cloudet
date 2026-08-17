@@ -148,7 +148,9 @@ apply Align Z until you press the button.
 
 ### Interactive reduction (GUI)
 
-In the app, open the **Reduction** dock (tabified with Residuals):
+In the app, the right-hand docks are tabbed (**Residuals** / **Reduction** / **Measure**).
+
+Open **Reduction** to construct geometry:
 
 1. Choose an **operation** — only that step’s inputs appear (plane / axis pickers, offset slider, …)
 2. For **Offset**: pick a plane, drag the distance slider for a green live preview, then Apply
@@ -164,6 +166,15 @@ In the app, open the **Reduction** dock (tabified with Residuals):
    `cloudet reduce` does the same when the recipe has `frame`.
    Load recipe restores FRAME combos from `recipe.frame` but leaves the view
    in survey until you press Align Z again.
+
+Open **Measure** to read distances and angles from those entities:
+
+- Kinds: Distance (point - point / point - plane / point - line) and
+  Angle (plane - plane / line - line / line - plane).
+- Distance (point - plane) is signed along the Hesse normal.
+- Line–plane angle is 0° if the line is parallel to the plane.
+- **Add measurement** pins the row into `recipe.measures` and `geometry.json`
+  (values are recomputed). Distance measures draw a teal segment in the 3D view.
 
 ## Roadmap
 

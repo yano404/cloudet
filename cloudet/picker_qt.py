@@ -109,7 +109,12 @@ from cloudet.project import (
 )
 from cloudet.reduce import ReductionSession, load_recipe, write_geometry_json, write_recipe_json
 from cloudet.frame import RigidFrame, transform_record, with_aligned_copy
-from cloudet.geometry import line_segment_points, plane_patch_corners
+from cloudet.geometry import (
+    line_segment_points,
+    plane_patch_corners,
+    project_point_to_line,
+    project_point_to_plane,
+)
 from cloudet.settings_apply import classify_settings_apply
 
 GROUP_COLORS = [
@@ -125,6 +130,7 @@ _RD_AXIS = "#c0392b"
 _RD_POINT = "#f1c40f"
 _RD_SELECTED_RING = "#ffffff"
 _RD_NORMAL = "#2ecc71"
+_RD_MEASURE = "#16a085"
 _RD_KIND_LABEL = {"plane": "plane", "line": "line", "point": "point"}
 
 
@@ -533,6 +539,7 @@ class PickerWindow(QMainWindow):
         self._uv_map_mode = "base"  # "base" | "refit"
         self._reduction = ReductionSession()
         self._reduction_actor_names: list[str] = []
+        self._reduction_measure_actor_names: list[str] = []
         self._rd_offset_sync = False
         self._view_frame: RigidFrame | None = None
 
@@ -561,6 +568,7 @@ class PickerWindow(QMainWindow):
         self._build_dock()
         self._build_uv_dock()
         self._build_reduction_dock()
+        self._build_measure_dock()
         self._build_shortcuts()
         self._rebuild_status_default()
         self._refresh_frame_overlay()
@@ -1984,6 +1992,108 @@ class PickerWindow(QMainWindow):
         self._reduction_on_op_changed()
         self._update_frame_controls()
 
+    def _build_measure_dock(self):
+        dock = QDockWidget("Measure", self)
+        dock.setFeatures(
+            QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable
+        )
+        dock.setStyleSheet(UI_STYLE)
+
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(8)
+
+        title = QLabel("MEASURE")
+        title.setObjectName("sectionTitle")
+        lay.addWidget(title)
+        hint = QLabel(
+            "Read distances and angles from Reduction entities. "
+            "Add measurement stores the pair in the recipe; values are recomputed."
+        )
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        self.rd_measure_op = QComboBox()
+        for label, key in (
+            ("Distance (point - point)", "distance_points"),
+            ("Distance (point - plane)", "distance_point_plane"),
+            ("Distance (point - line)", "distance_point_line"),
+            ("Angle (plane - plane)", "angle_planes"),
+            ("Angle (line - line)", "angle_lines"),
+            ("Angle (line - plane)", "angle_line_plane"),
+        ):
+            self.rd_measure_op.addItem(label, key)
+        self.rd_measure_op.currentIndexChanged.connect(self._reduction_on_measure_op)
+        lay.addWidget(self.rd_measure_op)
+
+        meas_form = QFormLayout()
+        meas_form.setContentsMargins(0, 0, 0, 0)
+        meas_form.setSpacing(4)
+        self.rd_measure_a = QComboBox()
+        self.rd_measure_b = QComboBox()
+        for c in (self.rd_measure_a, self.rd_measure_b):
+            c.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            c.setMinimumContentsLength(12)
+            c.currentIndexChanged.connect(self._reduction_update_live_measure)
+        self.rd_measure_a_lbl = QLabel("Point A")
+        self.rd_measure_b_lbl = QLabel("Point B")
+        meas_form.addRow(self.rd_measure_a_lbl, self.rd_measure_a)
+        meas_form.addRow(self.rd_measure_b_lbl, self.rd_measure_b)
+        lay.addLayout(meas_form)
+
+        self.rd_measure_live = QLabel("—")
+        self.rd_measure_live.setObjectName("muted")
+        self.rd_measure_live.setWordWrap(True)
+        lay.addWidget(self.rd_measure_live)
+
+        self.rd_measure_add_btn = QPushButton("Add measurement")
+        self.rd_measure_add_btn.setObjectName("primaryBtn")
+        self.rd_measure_add_btn.setEnabled(False)
+        self.rd_measure_add_btn.clicked.connect(
+            lambda: self._guard(self._reduction_add_measure, busy=False)
+        )
+        lay.addWidget(self.rd_measure_add_btn)
+
+        self.rd_measure_tree = QTreeWidget()
+        self.rd_measure_tree.setHeaderLabels(["id", "type", "value", "of"])
+        self.rd_measure_tree.setRootIsDecorated(False)
+        self.rd_measure_tree.setAlternatingRowColors(True)
+        self.rd_measure_tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.rd_measure_tree.itemSelectionChanged.connect(
+            self._sync_measure_delete_enabled
+        )
+        lay.addWidget(self.rd_measure_tree, stretch=1)
+
+        self.rd_measure_del_btn = QPushButton("Delete")
+        self.rd_measure_del_btn.setObjectName("dangerBtn")
+        self.rd_measure_del_btn.setEnabled(False)
+        self.rd_measure_del_btn.clicked.connect(
+            lambda: self._guard(self._reduction_delete_measures, busy=False)
+        )
+        lay.addWidget(self.rd_measure_del_btn)
+
+        meas_hint = QLabel(
+            "Distances in mm. Angles in degrees (0–90): "
+            "line–plane is 0° if parallel to the plane, 90° if perpendicular. "
+            "Distance (point - plane) is signed along the Hesse normal."
+        )
+        meas_hint.setObjectName("muted")
+        meas_hint.setWordWrap(True)
+        lay.addWidget(meas_hint)
+
+        dock.setWidget(w)
+        dock.setMinimumWidth(340)
+        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.measure_dock = dock
+        if hasattr(self, "uv_dock"):
+            self.tabifyDockWidget(self.uv_dock, dock)
+        elif hasattr(self, "reduction_dock"):
+            self.tabifyDockWidget(self.reduction_dock, dock)
+
+        self._reduction_on_measure_op()
+
     def _build_shortcuts(self):
         QShortcut(QKeySequence("Ctrl+S"), self, lambda: self._guard(self._save_all))
         QShortcut(QKeySequence("F"), self, lambda: self._guard(self._fit_active))
@@ -1993,6 +2103,12 @@ class PickerWindow(QMainWindow):
         rd_del.activated.connect(
             lambda: self._guard(self._reduction_delete_selected, busy=False)
         )
+        if hasattr(self, "rd_measure_tree"):
+            meas_del = QShortcut(QKeySequence("Delete"), self.rd_measure_tree)
+            meas_del.setContext(Qt.WidgetWithChildrenShortcut)
+            meas_del.activated.connect(
+                lambda: self._guard(self._reduction_delete_measures, busy=False)
+            )
         QShortcut(QKeySequence("M"), self, self.append_cb.toggle)
         QShortcut(QKeySequence("V"), self, self.solo_cb.toggle)
 
@@ -2459,6 +2575,8 @@ class PickerWindow(QMainWindow):
             "frame_origin": self._reduction_combo_id(
                 getattr(self, "rd_frame_origin", None)
             ),
+            "measure_a": self._reduction_combo_id(getattr(self, "rd_measure_a", None)),
+            "measure_b": self._reduction_combo_id(getattr(self, "rd_measure_b", None)),
         }
         if rename:
             old, new = rename
@@ -2502,6 +2620,15 @@ class PickerWindow(QMainWindow):
                     self._update_frame_controls()
                     self._rebuild_status_default()
                 self._sync_frame_align_enabled()
+            if hasattr(self, "rd_measure_a"):
+                kinds, _labels = self._measure_operand_meta()
+                self._reduction_fill_combo(
+                    self.rd_measure_a, kind=kinds[0], keep=keep.get("measure_a")
+                )
+                self._reduction_fill_combo(
+                    self.rd_measure_b, kind=kinds[1], keep=keep.get("measure_b")
+                )
+                self._reduction_update_live_measure()
 
     def _reduction_selected_ids(self) -> list[str]:
         """Operand ids for the current operation (from OPERATION combos)."""
@@ -3029,8 +3156,216 @@ class PickerWindow(QMainWindow):
     def _reduction_refresh_view(self):
         self._clear_reduction_preview()
         self._refresh_reduction_tree()
+        self._refresh_measure_tree()
         self._reduction_refresh_operand_combos()
         self._refresh_reduction_actors()
+
+    def _measure_operand_meta(self) -> tuple[tuple[str, str], tuple[str, str]]:
+        op = None
+        if hasattr(self, "rd_measure_op"):
+            op = self.rd_measure_op.currentData()
+        return {
+            "distance_points": (("point", "point"), ("Point A", "Point B")),
+            "distance_point_plane": (("point", "plane"), ("Point", "Plane")),
+            "distance_point_line": (("point", "line"), ("Point", "Line")),
+            "angle_planes": (("plane", "plane"), ("Plane A", "Plane B")),
+            "angle_lines": (("line", "line"), ("Line A", "Line B")),
+            "angle_line_plane": (("line", "plane"), ("Line", "Plane")),
+        }.get(op, (("point", "point"), ("Point A", "Point B")))
+
+    def _measure_operand_keys(self) -> tuple[str, str]:
+        op = self.rd_measure_op.currentData() if hasattr(self, "rd_measure_op") else None
+        return {
+            "distance_points": ("a", "b"),
+            "distance_point_plane": ("point", "plane"),
+            "distance_point_line": ("point", "line"),
+            "angle_planes": ("a", "b"),
+            "angle_lines": ("a", "b"),
+            "angle_line_plane": ("line", "plane"),
+        }.get(op, ("a", "b"))
+
+    def _reduction_on_measure_op(self, *_args) -> None:
+        kinds, labels = self._measure_operand_meta()
+        if hasattr(self, "rd_measure_a_lbl"):
+            self.rd_measure_a_lbl.setText(labels[0])
+            self.rd_measure_b_lbl.setText(labels[1])
+        if hasattr(self, "rd_measure_a"):
+            self._reduction_fill_combo(self.rd_measure_a, kind=kinds[0])
+            self._reduction_fill_combo(self.rd_measure_b, kind=kinds[1])
+        self._reduction_update_live_measure()
+
+    def _measure_live_spec(self) -> dict | None:
+        if not hasattr(self, "rd_measure_op"):
+            return None
+        op = self.rd_measure_op.currentData()
+        a = self._reduction_combo_id(self.rd_measure_a)
+        b = self._reduction_combo_id(self.rd_measure_b)
+        if not op or not a or not b:
+            return None
+        ka, kb = self._measure_operand_keys()
+        return {"id": "_live", "op": op, ka: a, kb: b}
+
+    def _format_measure_value(self, rec: dict) -> str:
+        v = float(rec["value"])
+        unit = rec.get("unit", "mm")
+        if unit == "deg":
+            return f"{v:.3f}°"
+        return f"{v:.3f} mm"
+
+    def _reduction_update_live_measure(self, *_args) -> None:
+        if not hasattr(self, "rd_measure_live"):
+            return
+        spec = self._measure_live_spec()
+        ok = False
+        text = "choose two operands"
+        if spec is not None:
+            try:
+                rec = self._reduction.evaluate_measure(spec)
+                text = self._format_measure_value(rec)
+                ok = True
+            except (KeyError, ValueError, TypeError) as e:
+                text = str(e)
+        self.rd_measure_live.setText(text)
+        if hasattr(self, "rd_measure_add_btn"):
+            self.rd_measure_add_btn.setEnabled(ok)
+        self._refresh_measure_overlays(render=True)
+
+    def _reduction_add_measure(self) -> None:
+        spec = self._measure_live_spec()
+        if spec is None:
+            raise ValueError("choose two operands")
+        spec = dict(spec)
+        spec.pop("id", None)
+        mid = self._reduction.add_measure(spec)
+        self._refresh_measure_tree()
+        self._refresh_measure_overlays(render=True)
+        rec = self._reduction.evaluate_measure(
+            next(m for m in self._reduction.measures if m["id"] == mid)
+        )
+        self._status(f"measure {mid}: {self._format_measure_value(rec)}")
+
+    def _sync_measure_delete_enabled(self) -> None:
+        if not hasattr(self, "rd_measure_del_btn"):
+            return
+        n = 0
+        if hasattr(self, "rd_measure_tree"):
+            n = len(self.rd_measure_tree.selectedItems())
+        self.rd_measure_del_btn.setEnabled(n > 0)
+
+    def _reduction_delete_measures(self) -> None:
+        ids = []
+        for item in self.rd_measure_tree.selectedItems():
+            mid = item.data(0, Qt.UserRole)
+            if mid:
+                ids.append(str(mid))
+        if not ids:
+            raise ValueError("select a measurement to delete")
+        for mid in ids:
+            self._reduction.remove_measure(mid)
+        self._refresh_measure_tree()
+        self._refresh_measure_overlays(render=True)
+        self._status("deleted " + ", ".join(ids))
+
+    def _refresh_measure_tree(self) -> None:
+        if not hasattr(self, "rd_measure_tree"):
+            return
+        prev = {
+            str(item.data(0, Qt.UserRole))
+            for item in self.rd_measure_tree.selectedItems()
+            if item.data(0, Qt.UserRole)
+        }
+        self.rd_measure_tree.blockSignals(True)
+        _reset_tree_widget(self.rd_measure_tree)
+        labels = {
+            "distance_points": "point - point",
+            "distance_point_plane": "point - plane",
+            "distance_point_line": "point - line",
+            "angle_planes": "plane - plane",
+            "angle_lines": "line - line",
+            "angle_line_plane": "line - plane",
+        }
+        for spec in self._reduction.measures:
+            try:
+                rec = self._reduction.evaluate_measure(spec)
+                val = self._format_measure_value(rec)
+            except (KeyError, ValueError, TypeError):
+                rec = spec
+                val = "—"
+            keys = [k for k in ("a", "b", "point", "plane", "line") if spec.get(k)]
+            of = " · ".join(str(spec[k]) for k in keys)
+            item = QTreeWidgetItem(
+                [spec["id"], labels.get(spec["op"], spec["op"]), val, of]
+            )
+            item.setData(0, Qt.UserRole, spec["id"])
+            self.rd_measure_tree.addTopLevelItem(item)
+            if spec["id"] in prev:
+                item.setSelected(True)
+        self.rd_measure_tree.blockSignals(False)
+        self.rd_measure_tree.resizeColumnToContents(0)
+        self.rd_measure_tree.resizeColumnToContents(1)
+        self._sync_measure_delete_enabled()
+
+    def _clear_measure_overlays(self) -> None:
+        for name in self._reduction_measure_actor_names:
+            self.plotter.remove_actor(name, render=False)
+        self._reduction_measure_actor_names = []
+
+    def _measure_segment_survey(self, spec: dict):
+        op = spec["op"]
+        if op == "distance_points":
+            return self._reduction.point(spec["a"]), self._reduction.point(spec["b"])
+        if op == "distance_point_plane":
+            p = self._reduction.point(spec["point"])
+            foot = project_point_to_plane(p, self._reduction.plane(spec["plane"]))
+            return p, foot
+        if op == "distance_point_line":
+            p = self._reduction.point(spec["point"])
+            foot = project_point_to_line(p, self._reduction.line(spec["line"]))
+            return p, foot
+        return None
+
+    def _add_measure_segment(self, name: str, p0, p1, *, color: str, diameter: float) -> None:
+        seg = self._to_view_points(np.stack([p0, p1], axis=0))
+        if float(np.linalg.norm(seg[1] - seg[0])) < 1e-9:
+            return
+        mesh = _line_tube_mesh(seg[0], seg[1], diameter)
+        self.plotter.add_mesh(
+            mesh,
+            name=name,
+            color=color,
+            reset_camera=False,
+            pickable=False,
+            render=False,
+        )
+        self._reduction_measure_actor_names.append(name)
+
+    def _refresh_measure_overlays(self, *, render: bool = True) -> None:
+        if not hasattr(self, "plotter"):
+            return
+        self._clear_measure_overlays()
+        diam = float(self._reduction.display_default_mm.get("line_diameter", 1.0))
+        for spec in self._reduction.measures:
+            try:
+                ends = self._measure_segment_survey(spec)
+            except (KeyError, ValueError, TypeError):
+                continue
+            if ends is None:
+                continue
+            self._add_measure_segment(
+                f"rd_meas_{spec['id']}", ends[0], ends[1], color=_RD_MEASURE, diameter=diam
+            )
+        live = self._measure_live_spec()
+        if live is not None:
+            try:
+                ends = self._measure_segment_survey(live)
+            except (KeyError, ValueError, TypeError):
+                ends = None
+            if ends is not None:
+                self._add_measure_segment(
+                    "rd_meas_live", ends[0], ends[1], color="#2ecc71", diameter=diam * 1.2
+                )
+        if render:
+            self.plotter.render()
 
     def _reduction_try_bind_face(self, alias: str, spec: dict):
         """Resolve a recipe face from in-memory Groups, or None to use disk."""
@@ -3723,6 +4058,7 @@ class PickerWindow(QMainWindow):
                 continue
             self._add_reduction_entity_overlay(eid, selected=eid in selected)
         self._refresh_reduction_labels(render=False)
+        self._refresh_measure_overlays(render=False)
         if render:
             self.plotter.render()
 
@@ -5813,8 +6149,10 @@ class PickerWindow(QMainWindow):
             self._reduction.clear()
             self._clear_reduction_preview()
             self._clear_reduction_actors()
+            self._clear_measure_overlays()
             if hasattr(self, "rd_tree"):
                 self._refresh_reduction_tree()
+                self._refresh_measure_tree()
                 self._reduction_refresh_operand_combos()
         self._refresh_group_actors()
         self._refresh_tree()

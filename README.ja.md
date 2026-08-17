@@ -122,7 +122,9 @@ GUI は Load recipe / Load All でその選択を復元しますが、**Align Z 
 
 ### 対話的リダクション（GUI）
 
-アプリの **Reduction** ドック（Residuals とタブ並び）:
+右側ドックは **Residuals** / **Reduction** / **Measure** のタブです。
+
+**Reduction** で幾何を構築します:
 
 1. まず **操作を選択** — その操作の入力だけ出る（面 / 軸の選択、オフセットスライダーなど）
 2. **Offset**: 面を選び、スライダーで距離をプレビュー（緑）→ Apply で確定
@@ -136,6 +138,15 @@ GUI は Load recipe / Load All でその選択を復元しますが、**Align Z 
    `aligned` コピーと姿勢 `frame` を書けます。`cloudet reduce` もレシピに
    `frame` があれば同じです。Load recipe は `recipe.frame` から
    FRAME の選択を戻しますが、表示は Align Z を押すまで測量のままです。
+
+**Measure** で、構築したエンティティの距離・角度を読みます:
+
+- Distance (point - point / point - plane / point - line) と
+  Angle (plane - plane / line - line / line - plane)
+- Distance (point - plane) は Hesse 法線向きの符号付き距離
+- line–plane の角は、直線が面に平行なら 0°
+- **Add measurement** で `recipe.measures` と `geometry.json` に残る（値は再計算）
+- 距離は 3D にティールの線分
 
 ## 段階計画
 

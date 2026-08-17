@@ -5,6 +5,12 @@ import pytest
 
 from cloudet.geometry import (
     Line,
+    angle_line_plane_deg,
+    angle_lines_deg,
+    angle_planes_deg,
+    distance_point_line,
+    distance_point_plane,
+    distance_points,
     intersect_line_plane,
     intersect_normal_plane,
     intersect_planes,
@@ -13,6 +19,9 @@ from cloudet.geometry import (
     line_from_two_points,
     midpoint_line_planes,
     offset_plane,
+    plane_patch_corners,
+    project_point_to_line,
+    project_point_to_plane,
 )
 from cloudet.plane import Plane
 
@@ -183,3 +192,32 @@ def test_plane_patch_and_line_segment_helpers():
     line = Line(np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]))
     seg = line_segment_points(line, half_length_mm=50.0)
     assert np.allclose(seg, [[0, 0, -50], [0, 0, 50]])
+
+
+def test_distance_points_and_point_plane():
+    a = np.array([0.0, 0.0, 0.0])
+    b = np.array([3.0, 4.0, 0.0])
+    assert distance_points(a, b) == pytest.approx(5.0)
+    plane = Plane(np.array([0.0, 0.0, 1.0]), -10.0)  # z = 10
+    assert distance_point_plane(np.array([1.0, 2.0, 10.0]), plane) == pytest.approx(0.0)
+    assert distance_point_plane(np.array([0.0, 0.0, 12.0]), plane) == pytest.approx(2.0)
+    foot = project_point_to_plane(np.array([5.0, 6.0, 12.0]), plane)
+    assert np.allclose(foot, [5.0, 6.0, 10.0])
+
+
+def test_distance_point_line_and_angles():
+    line = Line(np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]))
+    assert distance_point_line(np.array([3.0, 4.0, 10.0]), line) == pytest.approx(5.0)
+    assert np.allclose(project_point_to_line(np.array([3.0, 4.0, 10.0]), line), [0, 0, 10])
+    xy = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
+    xz = Plane(np.array([0.0, 1.0, 0.0]), 0.0)
+    assert angle_planes_deg(xy, xz) == pytest.approx(90.0)
+    assert angle_planes_deg(xy, xy) == pytest.approx(0.0)
+    z = Line(np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]))
+    x = Line(np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]))
+    assert angle_lines_deg(z, x) == pytest.approx(90.0)
+    assert angle_lines_deg(z, z) == pytest.approx(0.0)
+    assert angle_line_plane_deg(z, xy) == pytest.approx(90.0)
+    assert angle_line_plane_deg(x, xy) == pytest.approx(0.0)
+    diag = Line(np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 1.0]))
+    assert angle_line_plane_deg(diag, xy) == pytest.approx(45.0)
