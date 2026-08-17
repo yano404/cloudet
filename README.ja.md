@@ -29,6 +29,7 @@ cloudet/
   project.py    プロジェクトディレクトリ I/O（manifest / settings / group 保存）
   array_backend.py  任意 CuPy GPU バックエンド（無ければ NumPy）
   geometry.py   構築演算（オフセット平面・交差）
+  frame.py      表示専用 Align Z 姿勢（軸 + 原点 → +Z）
   reduce.py     レシピ駆動リダクション → 解析用 geometry.json
   pipeline.py   残差 u–v マップ（GUI QC 用）
   picker_qt.py  対話的アプリ（PySide6 + PyVista）
@@ -113,14 +114,39 @@ cloudet reduce <project> --recipe recipe.json -o geometry.json
 `midpoint_line_planes`（直線を2平面で切った線分の中点）。出力 `geometry.json` は
 planes / lines / points と provenance（`scanned` | `offset` | `intersection`）を含みます。
 
+任意のトップレベル `frame` は Align Z のメタデータだけです（`axis` 直線 id、
+`origin` 点 id、`flip_z`）。construct のステップではなく、測量座標は変わりません。
+`cloudet reduce` もトップレベルは測量のまま書き、`frame` があるときは
+`aligned` コピーと姿勢を足します。
+GUI は Load recipe / Load All でその選択を復元しますが、**Align Z は自動ではかけません**。
+
 ### 対話的リダクション（GUI）
 
-アプリの **Reduction** ドック（Residuals とタブ並び）:
+右側ドックは **Residuals** / **Reduction** / **Measure** のタブです。
 
-1. まず **操作を選択** — PARAMETERS にその操作の入力だけ出る（面 / 軸の選択、オフセットスライダーなど）
-2. **Offset**: PARAMETERS で面を選び、スライダーで距離をプレビュー（緑）→ Apply で確定
-3. 交差系: PARAMETERS で必要な面・軸を選んで Apply
+**Reduction** で幾何を構築します:
+
+1. まず **操作を選択** — その操作の入力だけ出る（面 / 軸の選択、オフセットスライダーなど）
+2. **Offset**: 面を選び、スライダーで距離をプレビュー（緑）→ Apply で確定
+3. 交差系: 必要な面・軸を選んで Apply
 4. Entities で表示切替後、**Save recipe…** / **Export geometry…**
+5. **FRAME**（表示専用）: Axis（直線）と Origin（点）を選び **Align Z**。
+   軸を `(0, 0, 1)` に、原点を `(0, 0, 0)` に移す最小回転を使います。
+   測量の Y は固定しません（追加の yaw なし）。**Survey** で測量座標の表示に戻します。
+   Groups・レシピの構築結果・Fit は測量のままです。pick も元の点群から行います。
+6. Align Z 中の **Export geometry…** は、測量の planes / lines / points に加えて
+   `aligned` コピーと姿勢 `frame` を書けます。`cloudet reduce` もレシピに
+   `frame` があれば同じです。Load recipe は `recipe.frame` から
+   FRAME の選択を戻しますが、表示は Align Z を押すまで測量のままです。
+
+**Measure** で、構築したエンティティの距離・角度を読みます:
+
+- Distance (point - point / point - plane / point - line) と
+  Angle (plane - plane / line - line / line - plane)
+- 距離は符号なし（mm）
+- line–plane の角は、直線が面に平行なら 0°
+- **Add measurement** で `recipe.measures` と `geometry.json` に残る（値は再計算）
+- 距離は 3D にティールの線分
 
 ## 段階計画
 

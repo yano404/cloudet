@@ -186,6 +186,7 @@ def result_in_frame(result, frame: RigidFrame):
         source_project=result.source_project,
         exported=list(result.exported),
         frame=frame.to_dict(),
+        measures=copy.deepcopy(result.measures) if result.measures else None,
     )
     for eid, rec in result.planes.items():
         out.planes[eid] = transform_record("plane", rec, frame)
@@ -214,4 +215,5 @@ def with_aligned_copy(result, frame: RigidFrame):
             "lines": aligned.lines,
             "points": aligned.points,
         },
+        measures=list(result.measures) if result.measures else None,
     )

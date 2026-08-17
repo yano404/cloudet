@@ -59,7 +59,9 @@ def build_reduce_parser() -> argparse.ArgumentParser:
         description=(
             "Constructive geometry reduction: bind scanned faces from a saved "
             "project, apply offset / intersection steps from a recipe, and "
-            "write analysis parameters to geometry.json."
+            "write analysis parameters to geometry.json. If the recipe has "
+            "frame metadata, survey coordinates stay at the top level and an "
+            "aligned copy is added."
         ),
     )
     p.add_argument("project_dir", help="project directory containing groups/")
@@ -67,7 +69,7 @@ def build_reduce_parser() -> argparse.ArgumentParser:
         "--recipe",
         required=True,
         metavar="FILE",
-        help="reduction recipe JSON (faces + construct + export)",
+        help="reduction recipe JSON (faces + construct + export; optional frame)",
     )
     p.add_argument(
         "-o",
@@ -113,9 +115,10 @@ def _run_reduce(argv: list[str]) -> int:
     n_p = len(result.planes)
     n_l = len(result.lines)
     n_x = len(result.points)
+    frame_note = ", survey + aligned" if result.aligned else ", frame: survey"
     print(
         f"wrote {out}  ({n_p} plane(s), {n_l} line(s), {n_x} point(s); "
-        f"export={result.exported})"
+        f"export={result.exported}{frame_note})"
     )
     return 0
 

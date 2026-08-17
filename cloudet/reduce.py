@@ -16,6 +16,12 @@ import numpy as np
 
 from cloudet.geometry import (
     Line,
+    angle_lines_deg,
+    angle_line_plane_deg,
+    angle_planes_deg,
+    distance_point_line,
+    distance_point_plane,
+    distance_points,
     intersect_line_plane,
     intersect_normal_plane,
     intersect_planes,
@@ -58,6 +64,8 @@ class ReductionResult:
     frame: dict | None = None
     # Optional copy of planes/lines/points in the aligned frame.
     aligned: dict | None = None
+    # Evaluated measurements (distances / angles). Invariant under Align Z.
+    measures: list[dict] | None = None
 
     def to_dict(self) -> dict:
         out: dict[str, Any] = {
@@ -75,6 +83,8 @@ class ReductionResult:
             out["frame"] = self.frame
         if self.aligned:
             out["aligned"] = self.aligned
+        if self.measures:
+            out["measures"] = list(self.measures)
         return out
 
 
@@ -382,20 +392,127 @@ def _check_recipe(recipe: dict) -> None:
     export_ids = recipe.get("export")
     if export_ids is not None and not isinstance(export_ids, list):
         raise ValueError("recipe.export must be a list of ids")
+    if "frame" in recipe and recipe["frame"] is not None:
+        _parse_recipe_frame(recipe["frame"])
+    if "measures" in recipe and recipe["measures"] is not None:
+        if not isinstance(recipe["measures"], list):
+            raise ValueError("recipe.measures must be a list")
+        seen: set[str] = set()
+        for spec in recipe["measures"]:
+            parsed = _parse_measure_spec(spec)
+            mid = parsed["id"]
+            if mid in seen:
+                raise ValueError(f"recipe.measures duplicate id {mid!r}")
+            seen.add(mid)
+
+
+def _parse_recipe_frame(spec) -> dict | None:
+    """Optional Align Z metadata: ``{axis, origin, flip_z}``. Not a construct step."""
+    if spec is None:
+        return None
+    if not isinstance(spec, dict):
+        raise ValueError("recipe.frame must be an object")
+    axis = spec.get("axis")
+    origin = spec.get("origin")
+    if not axis or not origin:
+        raise ValueError("recipe.frame needs axis and origin ids")
+    return {
+        "axis": str(axis),
+        "origin": str(origin),
+        "flip_z": bool(spec.get("flip_z", False)),
+    }
+
+
+def _validate_frame_spec(session: "ReductionSession", spec: dict) -> None:
+    axis = spec["axis"]
+    origin = spec["origin"]
+    if axis not in session._store:
+        raise KeyError(f"recipe.frame.axis: unknown id {axis!r}")
+    if origin not in session._store:
+        raise KeyError(f"recipe.frame.origin: unknown id {origin!r}")
+    if session.kind_of(axis) != "line":
+        raise ValueError(f"recipe.frame.axis {axis!r} must be a line")
+    if session.kind_of(origin) != "point":
+        raise ValueError(f"recipe.frame.origin {origin!r} must be a point")
+
+
+_MEASURE_OPS: dict[str, tuple[tuple[str, str], ...]] = {
+    "distance_points": (("a", "point"), ("b", "point")),
+    "distance_point_plane": (("point", "point"), ("plane", "plane")),
+    "distance_point_line": (("point", "point"), ("line", "line")),
+    "angle_planes": (("a", "plane"), ("b", "plane")),
+    "angle_lines": (("a", "line"), ("b", "line")),
+    "angle_line_plane": (("line", "line"), ("plane", "plane")),
+}
+
+
+def _parse_measure_spec(spec) -> dict:
+    """Optional measurement: distances / angles. Not a construct step."""
+    if not isinstance(spec, dict):
+        raise ValueError("recipe.measures[] must be an object")
+    op = spec.get("op")
+    if op not in _MEASURE_OPS:
+        raise ValueError(f"recipe.measures unknown op {op!r}")
+    mid = str(spec.get("id") or "").strip()
+    if not mid:
+        raise ValueError("recipe.measures[] needs id")
+    if any(ch.isspace() for ch in mid):
+        raise ValueError("measure id must not contain whitespace")
+    out = {"id": mid, "op": str(op)}
+    fields = []
+    for key, _kind in _MEASURE_OPS[op]:
+        val = spec.get(key)
+        if not val:
+            raise ValueError(f"recipe.measures.{mid} needs {key}")
+        out[key] = str(val)
+        fields.append(str(val))
+    if len(set(fields)) < len(fields):
+        raise ValueError(f"recipe.measures.{mid}: operands must differ")
+    return out
+
+
+def _validate_measure_spec(session: "ReductionSession", spec: dict) -> None:
+    mid = spec["id"]
+    op = spec["op"]
+    for key, kind in _MEASURE_OPS[op]:
+        eid = spec[key]
+        if eid not in session._store:
+            raise KeyError(f"recipe.measures.{mid}.{key}: unknown id {eid!r}")
+        if session.kind_of(eid) != kind:
+            raise ValueError(
+                f"recipe.measures.{mid}.{key} {eid!r} must be a {kind}"
+            )
+
+
+def _measure_operand_ids(spec: dict) -> set[str]:
+    op = spec.get("op")
+    if op not in _MEASURE_OPS:
+        return set()
+    return {spec[key] for key, _kind in _MEASURE_OPS[op] if spec.get(key)}
 
 
 def run_reduction(project_dir: str | Path, recipe: dict) -> ReductionResult:
-    """Execute a reduction recipe against a saved project."""
+    """Execute a reduction recipe against a saved project.
+
+    Survey coordinates stay at the top level. If the recipe has ``frame``,
+    an ``aligned`` copy is attached (same layout as GUI export with Align Z).
+    """
     project_dir = Path(project_dir)
     if not project_dir.is_dir():
         raise NotADirectoryError(f"not a directory: {project_dir}")
     sess = ReductionSession()
     sess.apply_recipe(recipe, project_dir=project_dir)
     export_ids = recipe.get("export")
-    return sess.to_result(
+    result = sess.to_result(
         source_project=str(project_dir.resolve()),
         export=None if export_ids is None else [str(x) for x in export_ids],
     )
+    frame = sess.rigid_frame()
+    if frame is not None:
+        from cloudet.frame import with_aligned_copy
+
+        result = with_aligned_copy(result, frame)
+    return result
 
 
 def write_geometry_json(path: str | Path, result: ReductionResult) -> Path:
@@ -468,6 +585,10 @@ class ReductionSession:
             "line_diameter": 1.0,
         }
     )
+    # Optional Align Z pick: {axis, origin, flip_z}. Display pose is not stored.
+    frame_spec: dict | None = None
+    # Pinned measurements: [{id, op, ...operands}]. Not construct entities.
+    measures: list[dict] = field(default_factory=list)
 
     def clear(self) -> None:
         self._store.clear()
@@ -483,6 +604,8 @@ class ReductionSession:
             "point": 8.0,
             "line_diameter": 1.0,
         }
+        self.frame_spec = None
+        self.measures = []
 
     def ids(self, *, kind: str | None = None) -> list[str]:
         if kind is None:
@@ -637,12 +760,22 @@ class ReductionSession:
             target._face_specs[alias] = dict(spec)
         for step in recipe.get("construct") or []:
             target.apply_step(dict(step))
+        frame_spec = _parse_recipe_frame(recipe.get("frame"))
+        if frame_spec is not None:
+            _validate_frame_spec(target, frame_spec)
+        measures = []
+        for spec in recipe.get("measures") or []:
+            parsed = _parse_measure_spec(spec)
+            _validate_measure_spec(target, parsed)
+            measures.append(parsed)
         self.clear()
         self._store.update(target._store)
         self._face_specs.update(target._face_specs)
         self._construct.extend(target._construct)
         self.visible.update(target.visible)
         self.anchors.update({k: np.asarray(v, dtype=np.float64).copy() for k, v in target.anchors.items()})
+        self.frame_spec = frame_spec
+        self.measures = measures
 
     @classmethod
     def from_recipe(
@@ -685,6 +818,13 @@ class ReductionSession:
             _rewrite_id_refs(step, old_id, new_id)
         for ent in self._store.values():
             _rewrite_id_refs(ent.record, old_id, new_id)
+        if self.frame_spec:
+            if self.frame_spec.get("axis") == old_id:
+                self.frame_spec["axis"] = new_id
+            if self.frame_spec.get("origin") == old_id:
+                self.frame_spec["origin"] = new_id
+        for spec in self.measures:
+            _rewrite_id_refs(spec, old_id, new_id)
         return new_id
 
     def dependents(self, entity_id: str) -> list[str]:
@@ -720,6 +860,13 @@ class ReductionSession:
             self.anchors.pop(eid, None)
             self.display_mm.pop(eid, None)
             self.display_width_mm.pop(eid, None)
+        if self.frame_spec:
+            refs = {self.frame_spec.get("axis"), self.frame_spec.get("origin")}
+            if doomed & refs:
+                self.frame_spec = None
+        self.measures = [
+            m for m in self.measures if not (_measure_operand_ids(m) & doomed)
+        ]
         return removed
 
     def overlay_mm(self, entity_id: str) -> float:
@@ -834,13 +981,105 @@ class ReductionSession:
         if not self._face_specs:
             raise ValueError("no scanned faces bound")
         ids = list(self._store.keys()) if export is None else list(export)
-        return {
+        out = {
             "version": 1,
             "units": "mm",
             "faces": dict(self._face_specs),
             "construct": [dict(s) for s in self._construct],
             "export": ids,
         }
+        if self.frame_spec:
+            out["frame"] = dict(self.frame_spec)
+        if self.measures:
+            out["measures"] = [dict(m) for m in self.measures]
+        return out
+
+    def unique_measure_id(self, prefix: str) -> str:
+        taken = {m["id"] for m in self.measures}
+        n = 1
+        while f"{prefix}_{n}" in taken:
+            n += 1
+        return f"{prefix}_{n}"
+
+    def add_measure(self, spec: dict) -> str:
+        spec = dict(spec)
+        if not str(spec.get("id") or "").strip():
+            prefix = {
+                "distance_points": "dist",
+                "distance_point_plane": "dplane",
+                "distance_point_line": "dline",
+                "angle_planes": "angp",
+                "angle_lines": "angl",
+                "angle_line_plane": "anglp",
+            }.get(spec.get("op"), "meas")
+            spec["id"] = self.unique_measure_id(prefix)
+        parsed = _parse_measure_spec(spec)
+        if any(m["id"] == parsed["id"] for m in self.measures):
+            raise ValueError(f"measure id {parsed['id']!r} already exists")
+        _validate_measure_spec(self, parsed)
+        self.evaluate_measure(parsed)
+        self.measures.append(parsed)
+        return parsed["id"]
+
+    def remove_measure(self, measure_id: str) -> None:
+        mid = str(measure_id)
+        before = len(self.measures)
+        self.measures = [m for m in self.measures if m["id"] != mid]
+        if len(self.measures) == before:
+            raise KeyError(f"unknown measure {mid!r}")
+
+    def evaluate_measure(self, spec: dict) -> dict:
+        """Return ``spec`` plus ``value`` and ``unit`` from current geometry."""
+        parsed = _parse_measure_spec(spec)
+        _validate_measure_spec(self, parsed)
+        op = parsed["op"]
+        if op == "distance_points":
+            value = distance_points(self.point(parsed["a"]), self.point(parsed["b"]))
+            unit = "mm"
+        elif op == "distance_point_plane":
+            value = distance_point_plane(
+                self.point(parsed["point"]), self.plane(parsed["plane"])
+            )
+            unit = "mm"
+        elif op == "distance_point_line":
+            value = distance_point_line(
+                self.point(parsed["point"]), self.line(parsed["line"])
+            )
+            unit = "mm"
+        elif op == "angle_planes":
+            value = angle_planes_deg(self.plane(parsed["a"]), self.plane(parsed["b"]))
+            unit = "deg"
+        elif op == "angle_lines":
+            value = angle_lines_deg(self.line(parsed["a"]), self.line(parsed["b"]))
+            unit = "deg"
+        elif op == "angle_line_plane":
+            value = angle_line_plane_deg(
+                self.line(parsed["line"]), self.plane(parsed["plane"])
+            )
+            unit = "deg"
+        else:
+            raise ValueError(f"unknown measure op {op!r}")
+        out = dict(parsed)
+        out["value"] = float(value)
+        out["unit"] = unit
+        return out
+
+    def rigid_frame(self):
+        """Align Z pose from ``frame_spec``, or ``None`` if unset."""
+        spec = self.frame_spec
+        if not spec:
+            return None
+        from cloudet.frame import RigidFrame
+
+        line = self.line(spec["axis"])
+        origin = self.point(spec["origin"])
+        return RigidFrame.align_z(
+            line.direction,
+            origin,
+            flip_z=bool(spec.get("flip_z", False)),
+            axis_id=spec["axis"],
+            origin_id=spec["origin"],
+        )
 
     def to_result(
         self,
@@ -864,4 +1103,6 @@ class ReductionSession:
                 result.lines[eid] = ent.record
             elif ent.kind == "point":
                 result.points[eid] = ent.record
+        if self.measures:
+            result.measures = [self.evaluate_measure(m) for m in self.measures]
         return result

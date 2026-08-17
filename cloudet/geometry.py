@@ -29,6 +29,14 @@ __all__ = [
     "midpoint_line_planes",
     "plane_patch_corners",
     "line_segment_points",
+    "distance_points",
+    "distance_point_plane",
+    "distance_point_line",
+    "angle_planes_deg",
+    "angle_lines_deg",
+    "angle_line_plane_deg",
+    "project_point_to_plane",
+    "project_point_to_line",
 ]
 
 _PARALLEL_EPS = 1e-12
@@ -202,3 +210,56 @@ def line_segment_points(
         c = line.point + t * line.direction
     h = float(half_length_mm)
     return np.stack([c - h * line.direction, c + h * line.direction])
+
+
+def distance_points(a, b) -> float:
+    """Euclidean distance between two points (mm)."""
+    pa = np.asarray(a, dtype=np.float64).reshape(3)
+    pb = np.asarray(b, dtype=np.float64).reshape(3)
+    return float(np.linalg.norm(pb - pa))
+
+
+def distance_point_plane(point, plane: Plane) -> float:
+    """Perpendicular distance from a point to a plane (mm)."""
+    p = np.asarray(point, dtype=np.float64).reshape(3)
+    return float(abs(plane.signed_distances(p.reshape(1, 3))[0]))
+
+
+def distance_point_line(point, line: Line) -> float:
+    """Perpendicular distance from a point to a line (mm)."""
+    p = np.asarray(point, dtype=np.float64).reshape(3)
+    return float(np.linalg.norm(np.cross(p - line.point, line.direction)))
+
+
+def angle_planes_deg(p1: Plane, p2: Plane) -> float:
+    """Smallest angle between two planes, in degrees in ``[0, 90]``."""
+    return float(np.degrees(p1.angle_to(p2)))
+
+
+def angle_lines_deg(a: Line, b: Line) -> float:
+    """Smallest angle between two line directions, in degrees in ``[0, 90]``."""
+    c = float(np.clip(abs(float(a.direction @ b.direction)), 0.0, 1.0))
+    return float(np.degrees(np.arccos(c)))
+
+
+def angle_line_plane_deg(line: Line, plane: Plane) -> float:
+    """Angle between a line and a plane, in degrees in ``[0, 90]``.
+
+    Parallel to the plane is 0°; perpendicular to the plane is 90°.
+    """
+    s = float(np.clip(abs(float(line.direction @ plane.normal)), 0.0, 1.0))
+    return float(np.degrees(np.arcsin(s)))
+
+
+def project_point_to_plane(point, plane: Plane) -> np.ndarray:
+    """Closest point on ``plane`` to ``point``."""
+    p = np.asarray(point, dtype=np.float64).reshape(3)
+    r = float(plane.signed_distances(p.reshape(1, 3))[0])
+    return p - r * plane.normal
+
+
+def project_point_to_line(point, line: Line) -> np.ndarray:
+    """Closest point on ``line`` to ``point``."""
+    p = np.asarray(point, dtype=np.float64).reshape(3)
+    t = float((p - line.point) @ line.direction)
+    return line.point_at(t)
