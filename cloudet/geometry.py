@@ -220,9 +220,9 @@ def distance_points(a, b) -> float:
 
 
 def distance_point_plane(point, plane: Plane) -> float:
-    """Signed Hesse distance from a point to a plane (mm)."""
+    """Perpendicular distance from a point to a plane (mm)."""
     p = np.asarray(point, dtype=np.float64).reshape(3)
-    return float(plane.signed_distances(p.reshape(1, 3))[0])
+    return float(abs(plane.signed_distances(p.reshape(1, 3))[0]))
 
 
 def distance_point_line(point, line: Line) -> float:

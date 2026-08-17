@@ -143,7 +143,7 @@ GUI は Load recipe / Load All でその選択を復元しますが、**Align Z 
 
 - Distance (point - point / point - plane / point - line) と
   Angle (plane - plane / line - line / line - plane)
-- Distance (point - plane) は Hesse 法線向きの符号付き距離
+- 距離は符号なし（mm）
 - line–plane の角は、直線が面に平行なら 0°
 - **Add measurement** で `recipe.measures` と `geometry.json` に残る（値は再計算）
 - 距離は 3D にティールの線分

@@ -171,7 +171,7 @@ Open **Measure** to read distances and angles from those entities:
 
 - Kinds: Distance (point - point / point - plane / point - line) and
   Angle (plane - plane / line - line / line - plane).
-- Distance (point - plane) is signed along the Hesse normal.
+- Distances are unsigned (mm).
 - Line–plane angle is 0° if the line is parallel to the plane.
 - **Add measurement** pins the row into `recipe.measures` and `geometry.json`
   (values are recomputed). Distance measures draw a teal segment in the 3D view.

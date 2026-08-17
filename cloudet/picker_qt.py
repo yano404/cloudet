@@ -2075,9 +2075,8 @@ class PickerWindow(QMainWindow):
         lay.addWidget(self.rd_measure_del_btn)
 
         meas_hint = QLabel(
-            "Distances in mm. Angles in degrees (0–90): "
-            "line–plane is 0° if parallel to the plane, 90° if perpendicular. "
-            "Distance (point - plane) is signed along the Hesse normal."
+            "Distances in mm (always ≥ 0). Angles in degrees (0–90): "
+            "line–plane is 0° if parallel to the plane, 90° if perpendicular."
         )
         meas_hint.setObjectName("muted")
         meas_hint.setWordWrap(True)

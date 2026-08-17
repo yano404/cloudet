@@ -201,6 +201,7 @@ def test_distance_points_and_point_plane():
     plane = Plane(np.array([0.0, 0.0, 1.0]), -10.0)  # z = 10
     assert distance_point_plane(np.array([1.0, 2.0, 10.0]), plane) == pytest.approx(0.0)
     assert distance_point_plane(np.array([0.0, 0.0, 12.0]), plane) == pytest.approx(2.0)
+    assert distance_point_plane(np.array([0.0, 0.0, 8.0]), plane) == pytest.approx(2.0)
     foot = project_point_to_plane(np.array([5.0, 6.0, 12.0]), plane)
     assert np.allclose(foot, [5.0, 6.0, 10.0])
 
