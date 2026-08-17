@@ -3,10 +3,10 @@
 Usage: ``cloudet [project_dir] [--cloud <cloud>]``
 
 Layout: 3D view (pyvistaqt QtInteractor) + left dock with a group/plane
-tree and a settings form + right dock with interactive residual u–v map
-and histogram (pyqtgraph) after Fit. Data model: 1 group = N planes;
-fitting a group (multi-plane extraction) populates plane children in the
-tree.
+tree and a settings form + right docks for residual u–v map and interactive
+geometry reduction (offset / intersect → recipe + geometry.json). Data
+model: 1 group = N planes; fitting a group (multi-plane extraction)
+populates plane children in the tree.
 
 The project / output folder can be chosen from the CLI or from the GUI
 (PROJECT card → Browse...). Groups, settings, and the VTK log are written
@@ -36,7 +36,7 @@ import numpy as np
 import pyvista as pv
 
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QColor, QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -51,12 +51,15 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QSpinBox,
+    QStackedWidget,
     QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
@@ -96,6 +99,8 @@ from cloudet.project import (
     save_settings,
     write_manifest,
 )
+from cloudet.reduce import ReductionSession, write_geometry_json, write_recipe_json
+from cloudet.geometry import line_segment_points, plane_patch_corners
 from cloudet.settings_apply import classify_settings_apply
 
 GROUP_COLORS = [
@@ -103,6 +108,15 @@ GROUP_COLORS = [
     (0.95, 0.75, 0.20), (0.75, 0.35, 0.85), (0.20, 0.80, 0.80),
     (0.95, 0.45, 0.15), (0.60, 0.60, 0.60),
 ]
+
+# Reduction overlay colours (3D + tree hints).
+_RD_PLANE_SCANNED = "#4a90d9"
+_RD_PLANE_OFFSET = "#e07b39"
+_RD_AXIS = "#c0392b"
+_RD_POINT = "#f1c40f"
+_RD_SELECTED_RING = "#ffffff"
+_RD_NORMAL = "#2ecc71"
+_RD_KIND_LABEL = {"plane": "plane", "line": "axis", "point": "point"}
 
 
 DEPTH_TIP = (
@@ -388,6 +402,9 @@ class PickerWindow(QMainWindow):
         self._uv_view: dict | None = None
         self._uv_roi_block = False
         self._uv_map_mode = "base"  # "base" | "refit"
+        self._reduction = ReductionSession()
+        self._reduction_actor_names: list[str] = []
+        self._rd_offset_sync = False
 
         self.setWindowTitle(f"cloudet - {self.project_dir.name}")
         self.resize(1760, 980)
@@ -412,6 +429,7 @@ class PickerWindow(QMainWindow):
         # --- left dock -----------------------------------------------------
         self._build_dock()
         self._build_uv_dock()
+        self._build_reduction_dock()
         self._build_shortcuts()
         ready = "Ready"
         ready += f"  |  {self._compute_status_suffix()}"
@@ -1354,8 +1372,8 @@ class PickerWindow(QMainWindow):
             self._uv_plot = self._uv_glw.addPlot(
                 row=0, col=0, viewBox=vb, title="u–v map"
             )
-            self._uv_plot.setLabel("bottom", "u", units="mm")
-            self._uv_plot.setLabel("left", "v", units="mm")
+            self._uv_plot.setLabel("bottom", "u (mm)")
+            self._uv_plot.setLabel("left", "v (mm)")
             self._uv_plot.showGrid(x=True, y=True, alpha=0.15)
             self._uv_img = pg.ImageItem(axisOrder="row-major")
             self._uv_plot.addItem(self._uv_img)
@@ -1396,6 +1414,252 @@ class PickerWindow(QMainWindow):
         dock.setMinimumWidth(360)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
         self.uv_dock = dock
+
+    def _build_reduction_dock(self):
+        dock = QDockWidget("Reduction", self)
+        dock.setFeatures(
+            QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable
+        )
+        dock.setStyleSheet(UI_STYLE)
+
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(8)
+
+        title = QLabel("REDUCTION")
+        title.setObjectName("sectionTitle")
+        lay.addWidget(title)
+
+        hint = QLabel(
+            "Choose an operation first. Only the controls for that step are shown."
+        )
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        def _mini_card(heading: str) -> tuple[QFrame, QVBoxLayout]:
+            card = QFrame()
+            card.setObjectName("card")
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(10, 8, 10, 8)
+            cl.setSpacing(6)
+            h = QLabel(heading)
+            h.setObjectName("sectionTitle")
+            cl.addWidget(h)
+            return card, cl
+
+        # ---- Operation picker -------------------------------------------
+        op_card, op_lay = _mini_card("OPERATION")
+        self.rd_op_combo = QComboBox()
+        for label, key in (
+            ("Import plane from Groups", "bind"),
+            ("Offset plane", "offset"),
+            ("Intersect 2 planes → axis", "intersect_planes"),
+            ("Line ∩ plane → point", "intersect_line_plane"),
+            ("3 planes → corner", "intersect_three"),
+            ("Normal ∩ plane → point", "intersect_normal"),
+        ):
+            self.rd_op_combo.addItem(label, key)
+        self.rd_op_combo.currentIndexChanged.connect(self._reduction_on_op_changed)
+        op_lay.addWidget(self.rd_op_combo)
+        lay.addWidget(op_card)
+
+        # ---- Context panel (one page per operation) ---------------------
+        ctx_card, ctx_lay = _mini_card("PARAMETERS")
+        self.rd_stack = QStackedWidget()
+
+        # Shared id field lives above the stack so every op can name the result.
+        id_form = QFormLayout()
+        id_form.setContentsMargins(0, 0, 0, 0)
+        id_form.setSpacing(4)
+        self.rd_id_edit = QLineEdit()
+        self.rd_id_edit.setPlaceholderText("result id (optional, auto if empty)")
+        id_form.addRow("New id", self.rd_id_edit)
+        ctx_lay.addLayout(id_form)
+
+        def _entity_combo() -> QComboBox:
+            c = QComboBox()
+            c.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            c.setMinimumContentsLength(12)
+            c.currentIndexChanged.connect(self._reduction_on_operand_combo)
+            return c
+
+        def _form_page() -> tuple[QWidget, QFormLayout]:
+            page = QWidget()
+            outer = QVBoxLayout(page)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(6)
+            form = QFormLayout()
+            form.setContentsMargins(0, 0, 0, 0)
+            form.setSpacing(4)
+            outer.addLayout(form)
+            outer.addStretch(1)
+            return page, form
+
+        # page: bind
+        bind_page, bind_form = _form_page()
+        self.rd_bind_combo = _entity_combo()
+        bind_form.addRow("Groups plane", self.rd_bind_combo)
+        self.rd_bind_hint = QLabel(
+            "Choose a fitted Groups plane to import into Reduction."
+        )
+        self.rd_bind_hint.setObjectName("muted")
+        self.rd_bind_hint.setWordWrap(True)
+        bind_page.layout().insertWidget(1, self.rd_bind_hint)
+        self.rd_stack.addWidget(bind_page)  # index 0
+
+        # page: offset
+        off_page, off_form = _form_page()
+        self.rd_offset_plane = _entity_combo()
+        off_form.addRow("Plane", self.rd_offset_plane)
+        self.rd_offset_spin = QDoubleSpinBox()
+        self.rd_offset_spin.setRange(-1.0e6, 1.0e6)
+        self.rd_offset_spin.setDecimals(3)
+        self.rd_offset_spin.setSingleStep(0.1)
+        self.rd_offset_spin.setSuffix(" mm")
+        self.rd_offset_spin.setValue(12.0)
+        self.rd_offset_spin.valueChanged.connect(self._reduction_on_offset_spin)
+        off_form.addRow("Distance", self.rd_offset_spin)
+        self.rd_offset_slider = QSlider(Qt.Horizontal)
+        self.rd_offset_slider.setRange(-5000, 5000)
+        self.rd_offset_slider.setValue(120)
+        self.rd_offset_slider.setTickPosition(QSlider.TicksBelow)
+        self.rd_offset_slider.setTickInterval(1000)
+        self.rd_offset_slider.valueChanged.connect(self._reduction_on_offset_slider)
+        off_form.addRow("", self.rd_offset_slider)
+        self.rd_offset_range_label = QLabel(
+            "slider ±500 mm (0.1 mm steps). Preview updates live."
+        )
+        self.rd_offset_range_label.setObjectName("muted")
+        off_form.addRow("", self.rd_offset_range_label)
+        self.rd_stack.addWidget(off_page)  # index 1
+
+        # page: intersect 2 planes
+        p2, p2_form = _form_page()
+        self.rd_p2_a = _entity_combo()
+        self.rd_p2_b = _entity_combo()
+        p2_form.addRow("Plane A", self.rd_p2_a)
+        p2_form.addRow("Plane B", self.rd_p2_b)
+        self.rd_stack.addWidget(p2)  # 2
+
+        # page: line ∩ plane
+        lp, lp_form = _form_page()
+        self.rd_lp_line = _entity_combo()
+        self.rd_lp_plane = _entity_combo()
+        lp_form.addRow("Axis", self.rd_lp_line)
+        lp_form.addRow("Plane", self.rd_lp_plane)
+        self.rd_stack.addWidget(lp)  # 3
+
+        # page: 3 planes
+        p3, p3_form = _form_page()
+        self.rd_p3_a = _entity_combo()
+        self.rd_p3_b = _entity_combo()
+        self.rd_p3_c = _entity_combo()
+        p3_form.addRow("Plane A", self.rd_p3_a)
+        p3_form.addRow("Plane B", self.rd_p3_b)
+        p3_form.addRow("Plane C", self.rd_p3_c)
+        self.rd_stack.addWidget(p3)  # 4
+
+        # page: normal ∩ plane
+        npage, n_form = _form_page()
+        self.rd_n_src = _entity_combo()
+        self.rd_n_dst = _entity_combo()
+        n_form.addRow("Normal from", self.rd_n_src)
+        n_form.addRow("Hit plane", self.rd_n_dst)
+        self.rd_stack.addWidget(npage)  # 5
+
+        ctx_lay.addWidget(self.rd_stack)
+
+        self.rd_apply_btn = QPushButton("Apply")
+        self.rd_apply_btn.setObjectName("primaryBtn")
+        self.rd_apply_btn.clicked.connect(
+            lambda: self._guard(self._reduction_apply, busy=False)
+        )
+        ctx_lay.addWidget(self.rd_apply_btn)
+        lay.addWidget(ctx_card)
+
+        # ---- Display (always available, secondary) ----------------------
+        disp_card, disp_lay = _mini_card("DISPLAY")
+        disp_form = QFormLayout()
+        disp_form.setContentsMargins(0, 0, 0, 0)
+        disp_form.setSpacing(4)
+        self.rd_patch_spin = QDoubleSpinBox()
+        self.rd_patch_spin.setRange(10.0, 1.0e5)
+        self.rd_patch_spin.setDecimals(1)
+        self.rd_patch_spin.setSuffix(" mm")
+        self.rd_patch_spin.setValue(200.0)
+        self.rd_patch_spin.valueChanged.connect(
+            lambda *_: self._refresh_reduction_actors()
+        )
+        disp_form.addRow("Patch size", self.rd_patch_spin)
+        self.rd_axis_spin = QDoubleSpinBox()
+        self.rd_axis_spin.setRange(10.0, 1.0e5)
+        self.rd_axis_spin.setDecimals(1)
+        self.rd_axis_spin.setSuffix(" mm")
+        self.rd_axis_spin.setValue(300.0)
+        self.rd_axis_spin.valueChanged.connect(
+            lambda *_: self._refresh_reduction_actors()
+        )
+        disp_form.addRow("Axis half-len", self.rd_axis_spin)
+        disp_lay.addLayout(disp_form)
+        rd_legend = QLabel(
+            "3D: blue = scanned plane, orange = offset plane, "
+            "red = axis, yellow = point. Selected items glow white."
+        )
+        rd_legend.setObjectName("muted")
+        rd_legend.setWordWrap(True)
+        disp_lay.addWidget(rd_legend)
+        lay.addWidget(disp_card)
+
+        # ---- Entities ---------------------------------------------------
+        tree_card, tree_lay = _mini_card("ENTITIES")
+        self.rd_selection_label = QLabel("Operands: (none)")
+        self.rd_selection_label.setObjectName("muted")
+        self.rd_selection_label.setWordWrap(True)
+        tree_lay.addWidget(self.rd_selection_label)
+        self.rd_tree = QTreeWidget()
+        self.rd_tree.setHeaderLabels(["id", "type", "detail"])
+        self.rd_tree.setSelectionMode(QAbstractItemView.NoSelection)
+        self.rd_tree.setRootIsDecorated(False)
+        self.rd_tree.setAlternatingRowColors(True)
+        self.rd_tree.itemChanged.connect(self._on_reduction_item_changed)
+        tree_lay.addWidget(self.rd_tree)
+        clear_btn = QPushButton("Clear session")
+        clear_btn.setObjectName("dangerBtn")
+        clear_btn.clicked.connect(
+            lambda: self._guard(self._reduction_clear, busy=False)
+        )
+        tree_lay.addWidget(clear_btn)
+        lay.addWidget(tree_card, stretch=1)
+
+        exp_card, exp_lay = _mini_card("EXPORT")
+        exp_row = QHBoxLayout()
+        save_recipe_btn = QPushButton("Save recipe…")
+        save_recipe_btn.setObjectName("secondaryBtn")
+        save_recipe_btn.clicked.connect(
+            lambda: self._guard(self._reduction_save_recipe, busy=False)
+        )
+        exp_row.addWidget(save_recipe_btn)
+        save_geom_btn = QPushButton("Export geometry…")
+        save_geom_btn.setObjectName("primaryBtn")
+        save_geom_btn.clicked.connect(
+            lambda: self._guard(self._reduction_export_geometry, busy=False)
+        )
+        exp_row.addWidget(save_geom_btn)
+        exp_lay.addLayout(exp_row)
+        lay.addWidget(exp_card)
+
+        dock.setWidget(w)
+        dock.setMinimumWidth(340)
+        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.reduction_dock = dock
+        if hasattr(self, "uv_dock"):
+            self.tabifyDockWidget(self.uv_dock, dock)
+            self.uv_dock.raise_()
+
+        self._rd_offset_sync = False
+        self._reduction_on_op_changed()
 
     def _build_shortcuts(self):
         QShortcut(QKeySequence("Ctrl+S"), self, lambda: self._guard(self._save_all))
@@ -1591,6 +1855,689 @@ class PickerWindow(QMainWindow):
 
     def _active_group(self):
         return self._get_group(self.active_group_id) if self.active_group_id is not None else None
+
+    # ------------------------------------------------------------------
+    # Interactive geometry reduction
+    # ------------------------------------------------------------------
+
+    def _reduction_new_id(self, prefix: str) -> str:
+        typed = self.rd_id_edit.text().strip() if hasattr(self, "rd_id_edit") else ""
+        if typed:
+            if typed in self._reduction.ids():
+                raise ValueError(f"id {typed!r} already exists")
+            return typed
+        return self._reduction.unique_id(prefix)
+
+    def _reduction_combo_id(self, combo: QComboBox | None) -> str | None:
+        if combo is None or combo.currentIndex() < 0:
+            return None
+        data = combo.currentData()
+        if data is None:
+            return None
+        return str(data)
+
+    def _reduction_fill_combo(
+        self,
+        combo: QComboBox,
+        *,
+        kind: str | None = None,
+        keep: str | None = None,
+        placeholder: str = "(choose)",
+    ) -> None:
+        ids = self._reduction.ids(kind=kind) if kind else self._reduction.ids()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(placeholder, None)
+        for eid in ids:
+            tag = _RD_KIND_LABEL.get(self._reduction.kind_of(eid), "")
+            combo.addItem(f"{eid}  ({tag})" if tag else eid, eid)
+        if keep:
+            idx = combo.findData(keep)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
+    def _reduction_fill_bind_combo(self) -> None:
+        if not hasattr(self, "rd_bind_combo"):
+            return
+        keep = self._reduction_combo_id(self.rd_bind_combo)
+        combo = self.rd_bind_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("(choose a fitted Groups plane)", None)
+        for g in self.groups:
+            planes = (g.get("fit") or {}).get("planes") or []
+            for p in planes:
+                pi = int(p.get("plane_index", 0))
+                key = f"{g['id']}:{pi}"
+                label = f"{g['name']} / p{pi}"
+                combo.addItem(label, key)
+        if keep:
+            idx = combo.findData(keep)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
+    def _reduction_refresh_operand_combos(self) -> None:
+        self._reduction_fill_bind_combo()
+        keep = {
+            "offset": self._reduction_combo_id(getattr(self, "rd_offset_plane", None)),
+            "p2a": self._reduction_combo_id(getattr(self, "rd_p2_a", None)),
+            "p2b": self._reduction_combo_id(getattr(self, "rd_p2_b", None)),
+            "lp_line": self._reduction_combo_id(getattr(self, "rd_lp_line", None)),
+            "lp_plane": self._reduction_combo_id(getattr(self, "rd_lp_plane", None)),
+            "p3a": self._reduction_combo_id(getattr(self, "rd_p3_a", None)),
+            "p3b": self._reduction_combo_id(getattr(self, "rd_p3_b", None)),
+            "p3c": self._reduction_combo_id(getattr(self, "rd_p3_c", None)),
+            "nsrc": self._reduction_combo_id(getattr(self, "rd_n_src", None)),
+            "ndst": self._reduction_combo_id(getattr(self, "rd_n_dst", None)),
+        }
+        if hasattr(self, "rd_offset_plane"):
+            self._reduction_fill_combo(
+                self.rd_offset_plane, kind="plane", keep=keep["offset"]
+            )
+            self._reduction_fill_combo(self.rd_p2_a, kind="plane", keep=keep["p2a"])
+            self._reduction_fill_combo(self.rd_p2_b, kind="plane", keep=keep["p2b"])
+            self._reduction_fill_combo(self.rd_lp_line, kind="line", keep=keep["lp_line"])
+            self._reduction_fill_combo(
+                self.rd_lp_plane, kind="plane", keep=keep["lp_plane"]
+            )
+            self._reduction_fill_combo(self.rd_p3_a, kind="plane", keep=keep["p3a"])
+            self._reduction_fill_combo(self.rd_p3_b, kind="plane", keep=keep["p3b"])
+            self._reduction_fill_combo(self.rd_p3_c, kind="plane", keep=keep["p3c"])
+            self._reduction_fill_combo(self.rd_n_src, kind="plane", keep=keep["nsrc"])
+            self._reduction_fill_combo(self.rd_n_dst, kind="plane", keep=keep["ndst"])
+
+    def _reduction_selected_ids(self) -> list[str]:
+        """Operand ids for the current operation (from PARAMETERS combos)."""
+        op = self._reduction_current_op()
+        ids: list[str] = []
+        if op == "offset":
+            eid = self._reduction_combo_id(getattr(self, "rd_offset_plane", None))
+            if eid:
+                ids.append(eid)
+        elif op == "intersect_planes":
+            for c in (getattr(self, "rd_p2_a", None), getattr(self, "rd_p2_b", None)):
+                eid = self._reduction_combo_id(c)
+                if eid:
+                    ids.append(eid)
+        elif op == "intersect_line_plane":
+            for c in (getattr(self, "rd_lp_line", None), getattr(self, "rd_lp_plane", None)):
+                eid = self._reduction_combo_id(c)
+                if eid:
+                    ids.append(eid)
+        elif op == "intersect_three":
+            for c in (
+                getattr(self, "rd_p3_a", None),
+                getattr(self, "rd_p3_b", None),
+                getattr(self, "rd_p3_c", None),
+            ):
+                eid = self._reduction_combo_id(c)
+                if eid:
+                    ids.append(eid)
+        elif op == "intersect_normal":
+            for c in (getattr(self, "rd_n_src", None), getattr(self, "rd_n_dst", None)):
+                eid = self._reduction_combo_id(c)
+                if eid:
+                    ids.append(eid)
+        return ids
+
+    def _reduction_current_op(self) -> str:
+        if not hasattr(self, "rd_op_combo"):
+            return "bind"
+        return str(self.rd_op_combo.currentData())
+
+    def _reduction_on_op_changed(self, *_args):
+        op = self._reduction_current_op()
+        page = {
+            "bind": 0,
+            "offset": 1,
+            "intersect_planes": 2,
+            "intersect_line_plane": 3,
+            "intersect_three": 4,
+            "intersect_normal": 5,
+        }.get(op, 0)
+        if hasattr(self, "rd_stack"):
+            self.rd_stack.setCurrentIndex(page)
+        labels = {
+            "bind": "Import plane",
+            "offset": "Apply offset",
+            "intersect_planes": "Create axis",
+            "intersect_line_plane": "Create point",
+            "intersect_three": "Create corner",
+            "intersect_normal": "Create hit point",
+        }
+        if hasattr(self, "rd_apply_btn"):
+            self.rd_apply_btn.setText(labels.get(op, "Apply"))
+        self._reduction_refresh_operand_combos()
+        self._reduction_update_selection_label()
+        self._clear_reduction_preview()
+        self._refresh_reduction_actors()
+        if op == "offset":
+            self._reduction_update_offset_preview()
+
+    def _reduction_on_operand_combo(self, *_args):
+        self._reduction_update_selection_label()
+        self._refresh_reduction_actors()
+        if self._reduction_current_op() == "offset":
+            self._reduction_update_offset_preview()
+
+    def _reduction_on_selection_changed(self):
+        self._reduction_on_operand_combo()
+
+    def _reduction_update_selection_label(self):
+        if not hasattr(self, "rd_selection_label"):
+            return
+        ids = self._reduction_selected_ids()
+        if not ids:
+            self.rd_selection_label.setText("Operands: (none)")
+            return
+        parts = []
+        for eid in ids:
+            kind = self._reduction.kind_of(eid)
+            tag = _RD_KIND_LABEL.get(kind, kind)
+            parts.append(f"{eid} [{tag}]")
+        self.rd_selection_label.setText("Operands: " + ", ".join(parts))
+
+    def _reduction_entity_color(self, eid: str, *, selected: bool) -> str:
+        kind = self._reduction.kind_of(eid)
+        if kind == "plane":
+            rec = self._reduction.record_of(eid)
+            base = _RD_PLANE_SCANNED if rec.get("provenance") == "scanned" else _RD_PLANE_OFFSET
+        elif kind == "line":
+            base = _RD_AXIS
+        else:
+            base = _RD_POINT
+        if selected:
+            return "#ffffff" if kind == "line" else base
+        return base
+
+    def _reduction_on_offset_spin(self, value: float):
+        if self._rd_offset_sync:
+            return
+        self._rd_offset_sync = True
+        try:
+            # Keep slider in ±500 mm window when possible.
+            ticks = int(round(float(value) * 10.0))
+            if hasattr(self, "rd_offset_slider"):
+                lo = self.rd_offset_slider.minimum()
+                hi = self.rd_offset_slider.maximum()
+                self.rd_offset_slider.setValue(max(lo, min(hi, ticks)))
+        finally:
+            self._rd_offset_sync = False
+        self._reduction_update_offset_preview()
+
+    def _reduction_on_offset_slider(self, ticks: int):
+        if self._rd_offset_sync:
+            return
+        self._rd_offset_sync = True
+        try:
+            mm = float(ticks) / 10.0
+            if hasattr(self, "rd_offset_spin"):
+                self.rd_offset_spin.setValue(mm)
+        finally:
+            self._rd_offset_sync = False
+        self._reduction_update_offset_preview()
+
+    def _clear_reduction_preview(self):
+        for name in ("rd_preview_offset", "rd_preview_offset_e"):
+            self.plotter.remove_actor(name, render=False)
+
+    def _reduction_update_offset_preview(self):
+        """Live-preview an offset plane without committing to the session."""
+        self._clear_reduction_preview()
+        if self._reduction_current_op() != "offset":
+            self.plotter.render()
+            return
+        ids = self._reduction_selected_ids()
+        if len(ids) != 1 or self._reduction.kind_of(ids[0]) != "plane":
+            self.plotter.render()
+            return
+        try:
+            from cloudet.geometry import offset_plane
+
+            src = self._reduction.plane(ids[0])
+            dist = float(self.rd_offset_spin.value())
+            plane = offset_plane(src, dist)
+            anchor = self._reduction.anchors.get(ids[0])
+            patch = float(self.rd_patch_spin.value()) if hasattr(self, "rd_patch_spin") else 200.0
+            corners = plane_patch_corners(plane, center=anchor, size_mm=patch)
+            faces = np.array([3, 0, 1, 2, 3, 0, 2, 3], dtype=np.int64)
+            mesh = pv.PolyData(corners, faces=faces)
+            self.plotter.add_mesh(
+                mesh,
+                name="rd_preview_offset",
+                color="#2ecc71",
+                opacity=0.45,
+                reset_camera=False,
+                pickable=False,
+            )
+            self.plotter.add_mesh(
+                mesh,
+                name="rd_preview_offset_e",
+                style="wireframe",
+                color="#27ae60",
+                line_width=2,
+                reset_camera=False,
+                pickable=False,
+            )
+        except Exception:
+            traceback.print_exc()
+        self.plotter.render()
+
+    def _reduction_apply(self):
+        op = self._reduction_current_op()
+        if op == "bind":
+            self._reduction_bind_active()
+        elif op == "offset":
+            self._reduction_offset()
+        elif op == "intersect_planes":
+            self._reduction_intersect_planes()
+        elif op == "intersect_line_plane":
+            self._reduction_intersect_line_plane()
+        elif op == "intersect_three":
+            self._reduction_intersect_three()
+        elif op == "intersect_normal":
+            self._reduction_intersect_normal()
+        else:
+            raise ValueError(f"unknown operation {op!r}")
+
+    def _reduction_anchor_for_group(self, g: dict) -> np.ndarray:
+        if g.get("clicked") is not None:
+            return np.asarray(g["clicked"], dtype=np.float64).reshape(3)
+        idx = g.get("indices")
+        if idx is not None and len(idx) and self.full_points.size:
+            return np.mean(self.full_points[idx], axis=0)
+        return np.zeros(3, dtype=np.float64)
+
+    def _reduction_bind_active(self):
+        key = self._reduction_combo_id(getattr(self, "rd_bind_combo", None))
+        if not key:
+            raise ValueError("choose a Groups plane in PARAMETERS")
+        gid_s, _, pi_s = key.partition(":")
+        g = self._get_group(int(gid_s))
+        if g is None or g.get("fit") is None:
+            raise ValueError("that Groups plane is no longer available; Fit again")
+        planes = g["fit"].get("planes") or []
+        pi = int(pi_s or 0)
+        p = next((x for x in planes if int(x.get("plane_index", 0)) == pi), None)
+        if p is None:
+            raise ValueError(f"no plane_index={pi} on {g['name']}")
+        alias = self.rd_id_edit.text().strip() or str(g["name"])
+        plane = Plane.from_array(p["abcd"])
+        quality = {
+            "status": p.get("status"),
+            "mad_sigma_mm": p.get("mad_sigma_mm"),
+            "threshold_mm": p.get("threshold_mm"),
+            "n_points": p.get("n_points"),
+            "bimodal": p.get("bimodal"),
+            "reasons": p.get("reasons"),
+        }
+        self._reduction.bind_scanned(
+            alias,
+            plane,
+            group_name=str(g["name"]),
+            group_id=int(g["id"]),
+            plane_index=pi,
+            quality=quality,
+            anchor=self._reduction_anchor_for_group(g),
+        )
+        self.rd_id_edit.clear()
+        self._refresh_reduction_tree()
+        self._reduction_refresh_operand_combos()
+        self._refresh_reduction_actors()
+        self._status(f"imported {alias!r} ← {g['name']} / p{pi}")
+
+    def _reduction_offset(self):
+        ids = self._reduction_selected_ids()
+        if len(ids) != 1:
+            raise ValueError("Offset needs exactly 1 selected plane")
+        of = ids[0]
+        if self._reduction.kind_of(of) != "plane":
+            raise ValueError(f"{of!r} is not a plane")
+        eid = self._reduction_new_id("offset")
+        dist = float(self.rd_offset_spin.value())
+        self._reduction.offset(eid, of, dist)
+        self.rd_id_edit.clear()
+        self._clear_reduction_preview()
+        self._refresh_reduction_tree()
+        self._reduction_refresh_operand_combos()
+        self._refresh_reduction_actors()
+        self._status(f"offset {eid}: {of} by {dist:g} mm")
+
+    def _reduction_intersect_planes(self):
+        ids = self._reduction_selected_ids()
+        if len(ids) != 2:
+            raise ValueError("Intersect planes needs exactly 2 selected planes")
+        for i in ids:
+            if self._reduction.kind_of(i) != "plane":
+                raise ValueError(f"{i!r} is not a plane")
+        eid = self._reduction_new_id("axis")
+        self._reduction.intersect_planes(eid, ids[0], ids[1])
+        self.rd_id_edit.clear()
+        self._refresh_reduction_tree()
+        self._reduction_refresh_operand_combos()
+        self._refresh_reduction_actors()
+        self._status(f"axis {eid}: {ids[0]} ∩ {ids[1]}")
+
+    def _reduction_intersect_line_plane(self):
+        ids = self._reduction_selected_ids()
+        if len(ids) != 2:
+            raise ValueError("Line ∩ plane needs 1 line + 1 plane selected")
+        kinds = {i: self._reduction.kind_of(i) for i in ids}
+        lines = [i for i, k in kinds.items() if k == "line"]
+        planes = [i for i, k in kinds.items() if k == "plane"]
+        if len(lines) != 1 or len(planes) != 1:
+            raise ValueError("select exactly one line and one plane")
+        eid = self._reduction_new_id("point")
+        self._reduction.intersect_line_plane(eid, lines[0], planes[0])
+        self.rd_id_edit.clear()
+        self._refresh_reduction_tree()
+        self._reduction_refresh_operand_combos()
+        self._refresh_reduction_actors()
+        self._status(f"point {eid}: {lines[0]} ∩ {planes[0]}")
+
+    def _reduction_intersect_three(self):
+        ids = self._reduction_selected_ids()
+        if len(ids) != 3:
+            raise ValueError("3 planes → point needs exactly 3 selected planes")
+        for i in ids:
+            if self._reduction.kind_of(i) != "plane":
+                raise ValueError(f"{i!r} is not a plane")
+        eid = self._reduction_new_id("corner")
+        self._reduction.intersect_three_planes(eid, ids[0], ids[1], ids[2])
+        self.rd_id_edit.clear()
+        self._refresh_reduction_tree()
+        self._reduction_refresh_operand_combos()
+        self._refresh_reduction_actors()
+        self._status(f"corner {eid}: {ids[0]} ∩ {ids[1]} ∩ {ids[2]}")
+
+    def _reduction_intersect_normal(self):
+        ids = self._reduction_selected_ids()
+        if len(ids) != 2:
+            raise ValueError("Normal ∩ plane needs src plane + dst plane selected")
+        for i in ids:
+            if self._reduction.kind_of(i) != "plane":
+                raise ValueError(f"{i!r} is not a plane")
+        eid = self._reduction_new_id("hit")
+        # Selection order: first = src (normal), second = dst.
+        self._reduction.intersect_normal_plane(eid, ids[0], ids[1])
+        self.rd_id_edit.clear()
+        self._refresh_reduction_tree()
+        self._reduction_refresh_operand_combos()
+        self._refresh_reduction_actors()
+        self._status(f"hit {eid}: normal({ids[0]}) ∩ {ids[1]}")
+
+    def _reduction_clear(self):
+        self._clear_reduction_preview()
+        self._clear_reduction_actors()
+        self._reduction.clear()
+        self._refresh_reduction_tree()
+        self._reduction_refresh_operand_combos()
+        self.plotter.render()
+        self._status("reduction session cleared")
+
+    def _reduction_save_recipe(self):
+        recipe = self._reduction.to_recipe()
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save reduction recipe",
+            str(self.project_dir / "recipe.json"),
+            "JSON (*.json)",
+        )
+        if not path:
+            return
+        write_recipe_json(path, recipe)
+        self._status(f"saved recipe → {path}")
+
+    def _reduction_export_geometry(self):
+        result = self._reduction.to_result(
+            source_project=str(self.project_dir.resolve())
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export geometry.json",
+            str(self.project_dir / "geometry.json"),
+            "JSON (*.json)",
+        )
+        if not path:
+            return
+        write_geometry_json(path, result)
+        # Also write recipe beside it for reproducibility.
+        recipe_path = Path(path).with_name(
+            Path(path).stem + "_recipe.json"
+            if Path(path).name == "geometry.json"
+            else Path(path).stem + ".recipe.json"
+        )
+        write_recipe_json(recipe_path, self._reduction.to_recipe())
+        self._status(
+            f"exported {path}  ({len(result.planes)} planes, "
+            f"{len(result.lines)} lines, {len(result.points)} points)"
+        )
+
+    def _refresh_reduction_tree(self):
+        if not hasattr(self, "rd_tree"):
+            return
+        prev_sel = set(self._reduction_selected_ids())
+        self.rd_tree.blockSignals(True)
+        self.rd_tree.clear()
+        bold = QFont()
+        bold.setBold(True)
+        for eid in self._reduction.ids():
+            kind = self._reduction.kind_of(eid)
+            rec = self._reduction.record_of(eid)
+            type_label = _RD_KIND_LABEL.get(kind, kind)
+            if kind == "plane" and "distance_mm" in rec:
+                detail = f"offset {rec['distance_mm']:g} mm"
+            elif kind == "line":
+                d = rec.get("direction") or [0, 0, 0]
+                detail = f"dir ({d[0]:.3f}, {d[1]:.3f}, {d[2]:.3f})"
+            elif kind == "point":
+                xyz = rec.get("xyz") or [0, 0, 0]
+                detail = f"({xyz[0]:.2f}, {xyz[1]:.2f}, {xyz[2]:.2f}) mm"
+            else:
+                detail = rec.get("provenance", "")
+            item = QTreeWidgetItem([eid, type_label, detail])
+            item.setData(0, Qt.UserRole, eid)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            item.setCheckState(
+                0,
+                Qt.Checked if self._reduction.visible.get(eid, True) else Qt.Unchecked,
+            )
+            # Type column colour hint.
+            if kind == "plane":
+                tint = QColor(_RD_PLANE_SCANNED if rec.get("provenance") == "scanned" else _RD_PLANE_OFFSET)
+            elif kind == "line":
+                tint = QColor(_RD_AXIS)
+            else:
+                tint = QColor(_RD_POINT)
+            item.setForeground(1, tint)
+            if eid in prev_sel:
+                item.setSelected(True)
+                item.setFont(0, bold)
+                item.setFont(1, bold)
+                item.setFont(2, bold)
+                for col in range(3):
+                    item.setBackground(col, QColor("#e8f0fe"))
+            self.rd_tree.addTopLevelItem(item)
+        self.rd_tree.blockSignals(False)
+        self.rd_tree.resizeColumnToContents(0)
+        self.rd_tree.resizeColumnToContents(1)
+        self._reduction_update_selection_label()
+
+    def _on_reduction_item_changed(self, item: QTreeWidgetItem, column: int):
+        if column != 0:
+            return
+        eid = item.data(0, Qt.UserRole)
+        if not eid:
+            return
+        self._reduction.visible[str(eid)] = item.checkState(0) == Qt.Checked
+        self._refresh_reduction_actors()
+
+    def _reduction_actor_name(self, entity_id: str) -> str:
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in entity_id)
+        return f"rd_{safe}"
+
+    def _clear_reduction_actors(self):
+        for name in self._reduction_actor_names:
+            self.plotter.remove_actor(name, render=False)
+        self._reduction_actor_names = []
+
+    def _reduction_label_position(self, eid: str, *, patch: float, half: float) -> np.ndarray:
+        kind = self._reduction.kind_of(eid)
+        anchor = self._reduction.anchors.get(eid)
+        if kind == "plane":
+            plane = self._reduction.plane(eid)
+            center = anchor if anchor is not None else -plane.d * plane.normal
+            center = center - plane.signed_distances(center.reshape(1, 3))[0] * plane.normal
+            return center + plane.normal * (patch * 0.08)
+        if kind == "line":
+            line = self._reduction.line(eid)
+            seg = line_segment_points(line, half_length_mm=half, center=anchor)
+            return 0.5 * (seg[0] + seg[1])
+        return self._reduction.point(eid)
+
+    def _refresh_reduction_actors(self, *, render: bool = True):
+        self._clear_reduction_actors()
+        patch = float(self.rd_patch_spin.value()) if hasattr(self, "rd_patch_spin") else 200.0
+        half = float(self.rd_axis_spin.value()) if hasattr(self, "rd_axis_spin") else 300.0
+        selected = set(self._reduction_selected_ids())
+        label_pts: list[np.ndarray] = []
+        label_text: list[str] = []
+        for eid in self._reduction.ids():
+            if not self._reduction.visible.get(eid, True):
+                continue
+            kind = self._reduction.kind_of(eid)
+            name = self._reduction_actor_name(eid)
+            anchor = self._reduction.anchors.get(eid)
+            sel = eid in selected
+            try:
+                if kind == "plane":
+                    plane = self._reduction.plane(eid)
+                    corners = plane_patch_corners(
+                        plane, center=anchor, size_mm=patch
+                    )
+                    faces = np.array([3, 0, 1, 2, 3, 0, 2, 3], dtype=np.int64)
+                    mesh = pv.PolyData(corners, faces=faces)
+                    rec = self._reduction.record_of(eid)
+                    color = (
+                        _RD_PLANE_SCANNED
+                        if rec.get("provenance") == "scanned"
+                        else _RD_PLANE_OFFSET
+                    )
+                    opacity = 0.55 if sel else 0.35
+                    lw = 4 if sel else 2
+                    self.plotter.add_mesh(
+                        mesh,
+                        name=name,
+                        color=color,
+                        opacity=opacity,
+                        reset_camera=False,
+                        pickable=False,
+                    )
+                    edge_name = name + "_e"
+                    edge_color = _RD_SELECTED_RING if sel else color
+                    self.plotter.add_mesh(
+                        mesh,
+                        name=edge_name,
+                        style="wireframe",
+                        color=edge_color,
+                        line_width=lw,
+                        reset_camera=False,
+                        pickable=False,
+                    )
+                    self._reduction_actor_names.extend([name, edge_name])
+                    center = corners.mean(axis=0)
+                    tip = center + plane.normal * (patch * 0.2)
+                    nar = pv.Line(center, tip)
+                    nname = name + "_n"
+                    self.plotter.add_mesh(
+                        nar,
+                        name=nname,
+                        color=_RD_NORMAL if not sel else "#ffffff",
+                        line_width=3 if sel else 2,
+                        reset_camera=False,
+                        pickable=False,
+                    )
+                    self._reduction_actor_names.append(nname)
+                elif kind == "line":
+                    line = self._reduction.line(eid)
+                    seg = line_segment_points(
+                        line, half_length_mm=half, center=anchor
+                    )
+                    mesh = pv.Line(seg[0], seg[1])
+                    self.plotter.add_mesh(
+                        mesh,
+                        name=name,
+                        color=_RD_AXIS,
+                        line_width=8 if sel else 5,
+                        reset_camera=False,
+                        pickable=False,
+                    )
+                    self._reduction_actor_names.append(name)
+                    if sel:
+                        for i, pt in enumerate(seg):
+                            cap = pv.Sphere(
+                                radius=max(patch * 0.015, 1.5), center=pt.tolist()
+                            )
+                            cname = f"{name}_cap{i}"
+                            self.plotter.add_mesh(
+                                cap,
+                                name=cname,
+                                color=_RD_SELECTED_RING,
+                                reset_camera=False,
+                                pickable=False,
+                            )
+                            self._reduction_actor_names.append(cname)
+                elif kind == "point":
+                    pt = self._reduction.point(eid)
+                    r = max(patch * 0.04, 3.0) * (1.4 if sel else 1.0)
+                    mesh = pv.Sphere(radius=r, center=pt.tolist())
+                    self.plotter.add_mesh(
+                        mesh,
+                        name=name,
+                        color=_RD_POINT,
+                        reset_camera=False,
+                        pickable=False,
+                    )
+                    self._reduction_actor_names.append(name)
+                    if sel:
+                        ring = pv.Sphere(radius=r * 1.35, center=pt.tolist())
+                        rname = name + "_ring"
+                        self.plotter.add_mesh(
+                            ring,
+                            name=rname,
+                            style="wireframe",
+                            color=_RD_SELECTED_RING,
+                            line_width=2,
+                            reset_camera=False,
+                            pickable=False,
+                        )
+                        self._reduction_actor_names.append(rname)
+                label_pts.append(
+                    self._reduction_label_position(eid, patch=patch, half=half)
+                )
+                tag = _RD_KIND_LABEL.get(kind, kind)
+                label_text.append(f"{eid}\n({tag})")
+            except Exception:
+                traceback.print_exc()
+        if label_pts:
+            pts = np.stack(label_pts, axis=0)
+            lname = "rd_labels"
+            self.plotter.add_point_labels(
+                pts,
+                label_text,
+                name=lname,
+                font_size=14,
+                point_size=0,
+                shape_opacity=0.75,
+                fill_shape=True,
+                reset_camera=False,
+                pickable=False,
+            )
+            self._reduction_actor_names.append(lname)
+        if render:
+            self.plotter.render()
 
     def _uv_bins_value(self) -> int:
         if hasattr(self, "uv_bins_spin"):
@@ -3578,11 +4525,13 @@ class PickerWindow(QMainWindow):
             item.setExpanded(True)
         self.tree.blockSignals(False)
         self._sync_action_states()
+        self._reduction_fill_bind_combo()
 
     def _on_item_selected(self, current, _prev):
         if current is None:
             self._sync_action_states()
             self._show_uv_for_selection()
+            self._reduction_fill_bind_combo()
             return
         data = current.data(0, Qt.UserRole)
         if data and data[0] in ("group", "plane"):
@@ -3597,6 +4546,8 @@ class PickerWindow(QMainWindow):
                 self._refresh_tree()
             self._show_uv_for_selection()
         self._sync_action_states()
+        self._reduction_fill_bind_combo()
+        self._reduction_fill_bind_combo()
 
     def _on_item_changed(self, item, column):
         data = item.data(0, Qt.UserRole)

@@ -27,15 +27,19 @@ import numpy as np
 
 import cloudet
 from cloudet.picking import PickParams
+from cloudet.plane import Plane
 from cloudet.plyio import write_ply_xyz
 
 __all__ = [
     "SourceInfo",
     "PickerSettings",
+    "FittedPlane",
     "save_group",
     "write_manifest",
     "read_manifest",
     "load_group_indices",
+    "load_group_docs",
+    "load_fitted_plane",
     "load_settings",
     "save_settings",
 ]
@@ -208,3 +212,109 @@ def load_group_indices(project_dir: str | Path, group_id: int) -> np.ndarray | N
     if not path.exists():
         return None
     return np.load(path)  # plain int64 npy, no pickle
+
+
+@dataclass(frozen=True)
+class FittedPlane:
+    """One fitted plane loaded from a saved group JSON."""
+
+    group_id: int
+    group_name: str
+    plane_index: int
+    plane: Plane
+    quality: dict
+
+
+def load_group_docs(project_dir: str | Path) -> list[dict]:
+    """Load all ``groups/group_*.json`` documents (sorted by group_id)."""
+    groups_dir = Path(project_dir) / "groups"
+    if not groups_dir.is_dir():
+        raise FileNotFoundError(f"no groups/ directory in {project_dir}")
+    docs = []
+    for path in sorted(groups_dir.glob("group_*.json")):
+        with open(path, encoding="utf-8") as f:
+            docs.append(json.load(f))
+    docs.sort(key=lambda d: int(d["group_id"]))
+    return docs
+
+
+def _planes_from_fit(fit: dict | None, *, group_label: str) -> list[dict]:
+    if fit is None:
+        raise ValueError(f"{group_label}: no fit summary saved; run Fit then save")
+    planes = fit.get("planes")
+    if isinstance(planes, list) and planes:
+        return planes
+    # Legacy flat fit without abcd cannot drive geometry reduction.
+    if "abcd" in fit:
+        return [{
+            "plane_index": 0,
+            "abcd": fit["abcd"],
+            "status": fit.get("status"),
+            "mad_sigma_mm": fit.get("mad_sigma_mm"),
+            "threshold_mm": fit.get("threshold_mm"),
+            "reasons": fit.get("reasons", []),
+            "bimodal": fit.get("bimodal", False),
+            "n_points": fit.get("n_points"),
+        }]
+    raise ValueError(
+        f"{group_label}: fit has no planes[].abcd "
+        "(re-Fit and save, or use a project with fit.planes entries)"
+    )
+
+
+def load_fitted_plane(
+    project_dir: str | Path,
+    *,
+    name: str | None = None,
+    group_id: int | None = None,
+    plane_index: int = 0,
+) -> FittedPlane:
+    """Resolve one fitted plane by group name or id.
+
+    Default ``plane_index=0`` selects the dominant / only plane in a group.
+    """
+    if (name is None) == (group_id is None):
+        raise ValueError("provide exactly one of name= or group_id=")
+
+    docs = load_group_docs(project_dir)
+    if name is not None:
+        matches = [d for d in docs if str(d.get("name", "")) == name]
+        if not matches:
+            known = [str(d.get("name", f"G{d['group_id']}")) for d in docs]
+            raise KeyError(f"no group named {name!r} (known: {known})")
+        if len(matches) > 1:
+            raise ValueError(f"multiple groups named {name!r}; use group_id=")
+        doc = matches[0]
+    else:
+        matches = [d for d in docs if int(d["group_id"]) == int(group_id)]
+        if not matches:
+            raise KeyError(f"no group_id={group_id}")
+        doc = matches[0]
+
+    label = f"group {doc.get('name', doc['group_id'])!r}"
+    planes = _planes_from_fit(doc.get("fit"), group_label=label)
+    try:
+        entry = next(p for p in planes if int(p.get("plane_index", 0)) == int(plane_index))
+    except StopIteration as e:
+        indices = [int(p.get("plane_index", 0)) for p in planes]
+        raise KeyError(
+            f"{label}: no plane_index={plane_index} (have {indices})"
+        ) from e
+    if "abcd" not in entry:
+        raise ValueError(f"{label} plane {plane_index}: missing abcd")
+
+    quality = {
+        "status": entry.get("status"),
+        "mad_sigma_mm": entry.get("mad_sigma_mm"),
+        "threshold_mm": entry.get("threshold_mm"),
+        "reasons": entry.get("reasons", []),
+        "bimodal": entry.get("bimodal", False),
+        "n_points": entry.get("n_points"),
+    }
+    return FittedPlane(
+        group_id=int(doc["group_id"]),
+        group_name=str(doc.get("name", f"G{doc['group_id']}")),
+        plane_index=int(plane_index),
+        plane=Plane.from_array(entry["abcd"]),
+        quality=quality,
+    )

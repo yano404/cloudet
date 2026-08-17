@@ -1,0 +1,528 @@
+"""Declarative geometry reduction from a saved project + recipe.
+
+Scanned faces (fit abcd) are bound by group name, then construct steps
+build offset planes, intersection lines, and points for analysis export.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from cloudet.geometry import (
+    Line,
+    intersect_line_plane,
+    intersect_normal_plane,
+    intersect_planes,
+    intersect_three_planes,
+    offset_plane,
+)
+from cloudet.plane import Plane
+from cloudet.project import FittedPlane, load_fitted_plane
+
+__all__ = [
+    "ReductionResult",
+    "ReductionSession",
+    "load_recipe",
+    "run_reduction",
+    "write_geometry_json",
+    "write_recipe_json",
+]
+
+
+
+@dataclass
+class _Entity:
+    kind: str  # plane | line | point
+    value: Any
+    record: dict
+
+
+@dataclass
+class ReductionResult:
+    planes: dict[str, dict] = field(default_factory=dict)
+    lines: dict[str, dict] = field(default_factory=dict)
+    points: dict[str, dict] = field(default_factory=dict)
+    recipe: dict = field(default_factory=dict)
+    source_project: str = ""
+    exported: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        out: dict[str, Any] = {
+            "version": 1,
+            "units": "mm",
+            "source_project": self.source_project,
+            "recipe": self.recipe,
+            "planes": self.planes,
+            "lines": self.lines,
+            "points": self.points,
+        }
+        if self.exported:
+            out["export"] = list(self.exported)
+        return out
+
+
+def load_recipe(path: str | Path) -> dict:
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    if int(doc.get("version", 1)) != 1:
+        raise ValueError(f"unsupported recipe version {doc.get('version')}")
+    if doc.get("units", "mm") != "mm":
+        raise ValueError(f"recipe units must be mm, got {doc.get('units')!r}")
+    return doc
+
+
+def _recipe_fingerprint(recipe: dict) -> dict:
+    raw = json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {"sha256": hashlib.sha256(raw).hexdigest(), "echo": recipe}
+
+
+def _bind_face(project_dir: Path, alias: str, spec: dict) -> tuple[Plane, dict]:
+    if not isinstance(spec, dict):
+        raise ValueError(f"faces.{alias}: expected object, got {type(spec).__name__}")
+    src = spec.get("from", "group")
+    if src != "group":
+        raise ValueError(f"faces.{alias}: unsupported from={src!r}")
+
+    name = spec.get("name")
+    group_id = spec.get("group_id")
+    plane_index = int(spec.get("plane_index", 0))
+    if name is not None and group_id is not None:
+        raise ValueError(f"faces.{alias}: provide name or group_id, not both")
+    if name is None and group_id is None:
+        raise ValueError(f"faces.{alias}: need name or group_id")
+
+    fitted: FittedPlane = load_fitted_plane(
+        project_dir,
+        name=None if name is None else str(name),
+        group_id=None if group_id is None else int(group_id),
+        plane_index=plane_index,
+    )
+    record = {
+        "abcd": fitted.plane.as_array().tolist(),
+        "provenance": "scanned",
+        "group_id": fitted.group_id,
+        "group_name": fitted.group_name,
+        "plane_index": fitted.plane_index,
+        "quality": {
+            k: fitted.quality[k]
+            for k in ("status", "mad_sigma_mm", "threshold_mm", "n_points", "bimodal", "reasons")
+            if fitted.quality.get(k) is not None
+        },
+    }
+    return fitted.plane, record
+
+
+def _require_plane(store: dict[str, _Entity], key: str, *, where: str) -> Plane:
+    ent = store.get(key)
+    if ent is None:
+        raise KeyError(f"{where}: unknown id {key!r}")
+    if ent.kind != "plane":
+        raise TypeError(f"{where}: {key!r} is a {ent.kind}, expected plane")
+    return ent.value
+
+
+def _require_line(store: dict[str, _Entity], key: str, *, where: str) -> Line:
+    ent = store.get(key)
+    if ent is None:
+        raise KeyError(f"{where}: unknown id {key!r}")
+    if ent.kind != "line":
+        raise TypeError(f"{where}: {key!r} is a {ent.kind}, expected line")
+    return ent.value
+
+
+def _put(store: dict[str, _Entity], entity_id: str, kind: str, value: Any, record: dict) -> None:
+    if entity_id in store:
+        raise ValueError(f"duplicate id {entity_id!r}")
+    store[entity_id] = _Entity(kind=kind, value=value, record=record)
+
+
+def _run_construct_step(store: dict[str, _Entity], step: dict) -> None:
+    if not isinstance(step, dict):
+        raise ValueError("construct step must be an object")
+    entity_id = step.get("id")
+    op = step.get("op")
+    if not entity_id or not op:
+        raise ValueError("construct step needs id and op")
+    where = f"construct[{entity_id}]"
+
+    if op == "offset":
+        of = step["of"]
+        distance = float(step["distance_mm"])
+        src = _require_plane(store, of, where=where)
+        plane = offset_plane(src, distance)
+        _put(
+            store,
+            entity_id,
+            "plane",
+            plane,
+            {
+                "abcd": plane.as_array().tolist(),
+                "provenance": "offset",
+                "of": of,
+                "distance_mm": distance,
+            },
+        )
+        return
+
+    if op == "intersect_planes":
+        a = step["a"]
+        b = step["b"]
+        line = intersect_planes(
+            _require_plane(store, a, where=where),
+            _require_plane(store, b, where=where),
+        )
+        _put(
+            store,
+            entity_id,
+            "line",
+            line,
+            {
+                "point": line.point.tolist(),
+                "direction": line.direction.tolist(),
+                "provenance": "intersection",
+                "of": [a, b],
+            },
+        )
+        return
+
+    if op == "intersect_three_planes":
+        keys = [step["a"], step["b"], step["c"]]
+        pt = intersect_three_planes(
+            *(_require_plane(store, k, where=where) for k in keys)
+        )
+        _put(
+            store,
+            entity_id,
+            "point",
+            pt,
+            {
+                "xyz": np.asarray(pt, dtype=np.float64).tolist(),
+                "provenance": "intersection",
+                "of": keys,
+            },
+        )
+        return
+
+    if op == "intersect_line_plane":
+        line_id = step["line"]
+        plane_id = step["plane"]
+        pt = intersect_line_plane(
+            _require_line(store, line_id, where=where),
+            _require_plane(store, plane_id, where=where),
+        )
+        _put(
+            store,
+            entity_id,
+            "point",
+            pt,
+            {
+                "xyz": np.asarray(pt, dtype=np.float64).tolist(),
+                "provenance": "intersection",
+                "of": [line_id, plane_id],
+            },
+        )
+        return
+
+    if op == "intersect_normal_plane":
+        src_id = step["src"]
+        dst_id = step["dst"]
+        through = step.get("through")
+        through_arr = None if through is None else np.asarray(through, dtype=np.float64)
+        pt = intersect_normal_plane(
+            _require_plane(store, src_id, where=where),
+            _require_plane(store, dst_id, where=where),
+            through=through_arr,
+        )
+        record = {
+            "xyz": np.asarray(pt, dtype=np.float64).tolist(),
+            "provenance": "intersection",
+            "of": [src_id, dst_id],
+            "op": "intersect_normal_plane",
+        }
+        if through is not None:
+            record["through"] = np.asarray(through_arr, dtype=np.float64).tolist()
+        _put(store, entity_id, "point", pt, record)
+        return
+
+    raise ValueError(f"{where}: unknown op {op!r}")
+
+
+def run_reduction(project_dir: str | Path, recipe: dict) -> ReductionResult:
+    """Execute a reduction recipe against a saved project."""
+    project_dir = Path(project_dir)
+    if not project_dir.is_dir():
+        raise NotADirectoryError(f"not a directory: {project_dir}")
+
+    faces = recipe.get("faces") or {}
+    if not isinstance(faces, dict) or not faces:
+        raise ValueError("recipe.faces must be a non-empty object")
+
+    store: dict[str, _Entity] = {}
+    for alias, spec in faces.items():
+        plane, record = _bind_face(project_dir, str(alias), spec)
+        _put(store, str(alias), "plane", plane, record)
+
+    for step in recipe.get("construct") or []:
+        _run_construct_step(store, step)
+
+    export_ids = recipe.get("export")
+    if export_ids is None:
+        export_ids = list(store.keys())
+    if not isinstance(export_ids, list):
+        raise ValueError("recipe.export must be a list of ids")
+
+    result = ReductionResult(
+        recipe=_recipe_fingerprint(recipe),
+        source_project=str(project_dir.resolve()),
+        exported=[str(x) for x in export_ids],
+    )
+    unknown = set(result.exported) - set(store)
+    if unknown:
+        raise KeyError(f"recipe.export references unknown ids: {sorted(unknown)}")
+
+    for eid, ent in store.items():
+        if ent.kind == "plane":
+            result.planes[eid] = ent.record
+        elif ent.kind == "line":
+            result.lines[eid] = ent.record
+        elif ent.kind == "point":
+            result.points[eid] = ent.record
+
+    return result
+
+
+def write_geometry_json(path: str | Path, result: ReductionResult) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(result.to_dict(), f, indent=2)
+    return path
+
+
+def write_recipe_json(path: str | Path, recipe: dict) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(recipe, f, indent=2)
+    return path
+
+
+@dataclass
+class ReductionSession:
+    """Interactive reduction state: scanned faces + construct history.
+
+    GUI and tests drive this without touching the filesystem. Export via
+    ``to_recipe()`` / ``to_result()`` matches the CLI ``cloudet reduce``
+    contract.
+    """
+
+    _store: dict[str, _Entity] = field(default_factory=dict)
+    _face_specs: dict[str, dict] = field(default_factory=dict)
+    _construct: list[dict] = field(default_factory=list)
+    visible: dict[str, bool] = field(default_factory=dict)
+    # Optional draw hints: entity id → world point used to centre overlays.
+    anchors: dict[str, np.ndarray] = field(default_factory=dict)
+
+    def clear(self) -> None:
+        self._store.clear()
+        self._face_specs.clear()
+        self._construct.clear()
+        self.visible.clear()
+        self.anchors.clear()
+
+    def ids(self, *, kind: str | None = None) -> list[str]:
+        if kind is None:
+            return list(self._store.keys())
+        return [k for k, e in self._store.items() if e.kind == kind]
+
+    def kind_of(self, entity_id: str) -> str:
+        return self._store[entity_id].kind
+
+    def record_of(self, entity_id: str) -> dict:
+        return self._store[entity_id].record
+
+    def plane(self, entity_id: str) -> Plane:
+        ent = self._store[entity_id]
+        if ent.kind != "plane":
+            raise TypeError(f"{entity_id!r} is a {ent.kind}, expected plane")
+        return ent.value
+
+    def line(self, entity_id: str) -> Line:
+        ent = self._store[entity_id]
+        if ent.kind != "line":
+            raise TypeError(f"{entity_id!r} is a {ent.kind}, expected line")
+        return ent.value
+
+    def point(self, entity_id: str) -> np.ndarray:
+        ent = self._store[entity_id]
+        if ent.kind != "point":
+            raise TypeError(f"{entity_id!r} is a {ent.kind}, expected point")
+        return np.asarray(ent.value, dtype=np.float64)
+
+    def bind_scanned(
+        self,
+        alias: str,
+        plane: Plane,
+        *,
+        group_name: str,
+        group_id: int,
+        plane_index: int = 0,
+        quality: dict | None = None,
+        anchor: np.ndarray | None = None,
+    ) -> None:
+        """Register a fitted face under ``alias`` (overwrites if same alias)."""
+        alias = str(alias)
+        if alias in self._store and self._store[alias].kind != "plane":
+            raise ValueError(f"{alias!r} exists as non-plane")
+        # Drop previous face with this alias from face specs / construct refs
+        # is caller's responsibility; simple overwrite of scanned binding.
+        if alias in self._store:
+            del self._store[alias]
+        quality = dict(quality or {})
+        record = {
+            "abcd": plane.as_array().tolist(),
+            "provenance": "scanned",
+            "group_id": int(group_id),
+            "group_name": str(group_name),
+            "plane_index": int(plane_index),
+            "quality": {
+                k: quality[k]
+                for k in (
+                    "status",
+                    "mad_sigma_mm",
+                    "threshold_mm",
+                    "n_points",
+                    "bimodal",
+                    "reasons",
+                )
+                if k in quality and quality[k] is not None
+            },
+        }
+        self._store[alias] = _Entity(kind="plane", value=plane, record=record)
+        self._face_specs[alias] = {
+            "from": "group",
+            "name": str(group_name),
+            "plane_index": int(plane_index),
+        }
+        self.visible[alias] = True
+        if anchor is not None:
+            self.anchors[alias] = np.asarray(anchor, dtype=np.float64).reshape(3)
+
+    def apply_step(self, step: dict) -> str:
+        """Append and execute one construct step. Returns the new entity id."""
+        step = dict(step)
+        entity_id = step.get("id")
+        if not entity_id:
+            raise ValueError("construct step needs id")
+        entity_id = str(entity_id)
+        if entity_id in self._store:
+            raise ValueError(f"duplicate id {entity_id!r}")
+        _run_construct_step(self._store, step)
+        self._construct.append(step)
+        self.visible[entity_id] = True
+        # Inherit anchor from operands when possible.
+        of = step.get("of") or step.get("a") or step.get("src") or step.get("line")
+        if of in self.anchors and entity_id not in self.anchors:
+            self.anchors[entity_id] = self.anchors[of].copy()
+        elif step.get("op") == "intersect_line_plane":
+            self.anchors[entity_id] = self.point(entity_id)
+        elif step.get("op") in ("intersect_three_planes", "intersect_normal_plane"):
+            self.anchors[entity_id] = self.point(entity_id)
+        elif step.get("op") == "intersect_planes":
+            self.anchors[entity_id] = self.line(entity_id).point.copy()
+        return entity_id
+
+    def offset(self, entity_id: str, of: str, distance_mm: float) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "offset",
+            "of": of,
+            "distance_mm": float(distance_mm),
+        })
+
+    def intersect_planes(self, entity_id: str, a: str, b: str) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "intersect_planes",
+            "a": a,
+            "b": b,
+        })
+
+    def intersect_line_plane(self, entity_id: str, line: str, plane: str) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "intersect_line_plane",
+            "line": line,
+            "plane": plane,
+        })
+
+    def intersect_three_planes(self, entity_id: str, a: str, b: str, c: str) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "intersect_three_planes",
+            "a": a,
+            "b": b,
+            "c": c,
+        })
+
+    def intersect_normal_plane(
+        self,
+        entity_id: str,
+        src: str,
+        dst: str,
+        through: np.ndarray | None = None,
+    ) -> str:
+        step: dict[str, Any] = {
+            "id": str(entity_id),
+            "op": "intersect_normal_plane",
+            "src": src,
+            "dst": dst,
+        }
+        if through is not None:
+            step["through"] = np.asarray(through, dtype=np.float64).reshape(3).tolist()
+        return self.apply_step(step)
+
+    def unique_id(self, prefix: str) -> str:
+        n = 1
+        while f"{prefix}_{n}" in self._store:
+            n += 1
+        return f"{prefix}_{n}"
+
+    def to_recipe(self, export: list[str] | None = None) -> dict:
+        if not self._face_specs:
+            raise ValueError("no scanned faces bound")
+        ids = list(self._store.keys()) if export is None else list(export)
+        return {
+            "version": 1,
+            "units": "mm",
+            "faces": dict(self._face_specs),
+            "construct": [dict(s) for s in self._construct],
+            "export": ids,
+        }
+
+    def to_result(
+        self,
+        *,
+        source_project: str = "",
+        export: list[str] | None = None,
+    ) -> ReductionResult:
+        recipe = self.to_recipe(export=export)
+        result = ReductionResult(
+            recipe=_recipe_fingerprint(recipe),
+            source_project=source_project,
+            exported=list(recipe["export"]),
+        )
+        for eid, ent in self._store.items():
+            if ent.kind == "plane":
+                result.planes[eid] = ent.record
+            elif ent.kind == "line":
+                result.lines[eid] = ent.record
+            elif ent.kind == "point":
+                result.points[eid] = ent.record
+        return result

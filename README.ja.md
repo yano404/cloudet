@@ -28,9 +28,11 @@ cloudet/
   groups.py     group 読込
   project.py    プロジェクトディレクトリ I/O（manifest / settings / group 保存）
   array_backend.py  任意 CuPy GPU バックエンド（無ければ NumPy）
+  geometry.py   構築演算（オフセット平面・交差）
+  reduce.py     レシピ駆動リダクション → 解析用 geometry.json
   pipeline.py   残差 u–v マップ（GUI QC 用）
   picker_qt.py  対話的アプリ（PySide6 + PyVista）
-  cli.py        cloudet [project] [--cloud ...]（既定はアプリ起動）
+  cli.py        cloudet [project] [--cloud ...] | reduce | version
 tests/          合成データによる検証（σ=0.03mm の FARO 条件を模擬）
 ```
 
@@ -45,6 +47,9 @@ pytest
 # アプリ起動（pick / Fit / 残差 QC / 保存はすべて GUI）
 cloudet --cloud /path/to/scan.ply
 cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
+
+# 構築型リダクション（保存済み fit + レシピ → 解析パラメータ）
+cloudet reduce ~/surveys/proj1 --recipe recipe.json -o geometry.json
 ```
 
 Linux/WSL では `[gpu]` が `cupy-cuda12x[ctk]`（カーネルコンパイル用 CUDA ヘッダ）を入れます。ヘッダ無しで CuPy だけ入っている場合、`auto` では NumPy に自動フォールバックします。
@@ -89,8 +94,34 @@ The Groups tab mirrors depth controls with navigator buttons.
 VTK 自身のエラー・警告は端末ではなく `<project_dir>/vtk.log` に出る
 （`CLOUDET_VTK_LOG=0` で PyVista 既定の挙動に戻す。別の値はログ出力先として使う）。
 
+## 位置関係リダクション
+
+Fit + 保存後、面は `groups/group_*.json` の `fit.planes[].abcd` に残ります。
+解析用パラメータ（仮想軸、ビーム×標的交点、図面オフセット面）は、宣言的レシピで導出します（この段階では点群不要）。
+
+```bash
+cloudet reduce <project> --recipe recipe.json -o geometry.json
+```
+
+オフセットの符号: 正の `distance_mm` は平面の Hesse 単位法線方向へ移動（Fit と同じ符号規約）。
+反対側（例: 外向き法線に対する「内側」）は負の距離を使います。
+
+対応する construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
+`intersect_line_plane`, `intersect_normal_plane`。出力 `geometry.json` は
+planes / lines / points と provenance（`scanned` | `offset` | `intersection`）を含みます。
+
+### 対話的リダクション（GUI）
+
+アプリの **Reduction** ドック（Residuals とタブ並び）:
+
+1. まず **操作を選択** — PARAMETERS にその操作の入力だけ出る（面 / 軸の選択、オフセットスライダーなど）
+2. **Offset**: PARAMETERS で面を選び、スライダーで距離をプレビュー（緑）→ Apply で確定
+3. 交差系: PARAMETERS で必要な面・軸を選んで Apply
+4. Entities で表示切替後、**Save recipe…** / **Export geometry…**
+
 ## 段階計画
 
 1. [完了] コア
 2. [完了] GUI picker（Fit / 残差 QC / 保存）
-3. [未] 位置関係リダクション（面間距離・角度・交線・コーナー）
+3. [完了] 構築型リダクション（レシピ → geometry.json; CLI + GUI）
+4. [未] より高機能なレシピ編集、検出器剛体 pose ヘルパ
