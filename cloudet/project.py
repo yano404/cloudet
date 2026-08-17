@@ -6,6 +6,9 @@ Layout::
       manifest.json        units, source cloud info, detection params,
                            software version (written on every save)
       settings.json        sectioned picker settings (versioned schema)
+      cache/               optional VoxelHashGrid / display-downsample
+                           acceleration (not required to reload groups;
+                           rebuilt if missing or stale)
       groups/
         group_000.ply          points, double precision
         group_000.json         metadata + fit summary (no pickle anywhere)

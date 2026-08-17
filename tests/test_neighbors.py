@@ -252,3 +252,26 @@ def test_radius_large_query_falls_back_to_bruteforce():
     want = np.flatnonzero(np.linalg.norm(pts, axis=1) <= 150.0)
     assert np.array_equal(np.sort(got), np.sort(want))
     assert elapsed < 2.0
+
+
+def test_from_arrays_roundtrip_queries():
+    rng = np.random.default_rng(5)
+    pts = rng.uniform(-50, 50, size=(8_000, 3))
+    grid = VoxelHashGrid(pts, cell_size=5.0)
+    restored = VoxelHashGrid.from_arrays(pts, **grid.index_arrays())
+    assert restored.cell_size == grid.cell_size
+    assert np.array_equal(restored._order, grid._order)
+    center = np.array([1.0, -2.0, 3.0])
+    assert np.array_equal(
+        np.sort(restored.radius_indices(center, 8.0)),
+        np.sort(grid.radius_indices(center, 8.0)),
+    )
+
+
+def test_from_arrays_rejects_stale_origin():
+    pts = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    grid = VoxelHashGrid(pts, cell_size=1.0)
+    arrays = grid.index_arrays()
+    arrays["origin"] = arrays["origin"] + 10.0
+    with pytest.raises(ValueError, match="origin"):
+        VoxelHashGrid.from_arrays(pts, **arrays)

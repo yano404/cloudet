@@ -107,6 +107,7 @@ from cloudet.project import (
     save_settings,
     write_manifest,
 )
+from cloudet.spatial_cache import load_display_xyz, load_voxel_grid, save_display_xyz, save_voxel_grid
 from cloudet.reduce import ReductionSession, load_recipe, write_geometry_json, write_recipe_json
 from cloudet.frame import RigidFrame, transform_record, with_aligned_copy
 from cloudet.geometry import (
@@ -5088,10 +5089,6 @@ class PickerWindow(QMainWindow):
                 backend = resolve_display_backend(
                     self.settings.view.display_downsample_backend
                 )
-                self._status(
-                    f"decimating {len(self.full_points):,} points for display "
-                    f"({backend}) ..."
-                )
                 QApplication.processEvents()
                 self._refresh_base_actor()
                 self._refresh_group_actors()
@@ -5250,9 +5247,6 @@ class PickerWindow(QMainWindow):
         backend = resolve_display_backend(
             self.settings.view.display_downsample_backend
         )
-        self._status(
-            f"decimating {len(self.full_points):,} points for display ({backend}) ..."
-        )
         QApplication.processEvents()
         self._refresh_base_actor()
         self.plotter.reset_camera()
@@ -5262,7 +5256,14 @@ class PickerWindow(QMainWindow):
         )
         self._update_source_meta()
         self._sync_action_states()
+        # Build (or mmap-cache) the pick index here with the chunked path.
+        # Deferring to first pick only postponed the same RAM peak.
         self._ensure_grid()
+
+    def _source_cloud_path(self) -> str:
+        return str(
+            getattr(self, "pcd_path", "") or getattr(self, "pcd_edit_path", "") or ""
+        ).strip()
 
     def _ensure_grid(self) -> VoxelHashGrid:
         if len(self.full_points) == 0:
@@ -5272,12 +5273,23 @@ class PickerWindow(QMainWindow):
         )
         if self.grid is not None and self.grid.cell_size == cell:
             return self.grid
+        source = self._source_cloud_path()
+        if source:
+            cached = load_voxel_grid(
+                self.project_dir, self.full_points, source, cell
+            )
+            if cached is not None:
+                self.grid = cached
+                self._status("spatial index ready (cached)")
+                return self.grid
         self._status(
             f"building spatial index ({len(self.full_points):,} pts, "
             f"cell={cell:.1f} mm) ..."
         )
         QApplication.processEvents()
         self.grid = VoxelHashGrid(self.full_points, cell_size=cell)
+        if source:
+            save_voxel_grid(self.project_dir, self.grid, source)
         self._status("spatial index ready")
         return self.grid
 
@@ -5289,12 +5301,46 @@ class PickerWindow(QMainWindow):
         if self._base_display_xyz is not None:
             return self._base_display_xyz
         v = self.settings.view
-        self._base_display_xyz = display_xyz(
-            self.full_points,
-            v.display_voxel_size_mm,
-            int(v.display_max_points),
-            backend=v.display_downsample_backend,
+        voxel = float(v.display_voxel_size_mm)
+        max_points = int(v.display_max_points)
+        backend = v.display_downsample_backend
+        source = self._source_cloud_path()
+        if source:
+            cached = load_display_xyz(
+                self.project_dir,
+                len(self.full_points),
+                source,
+                voxel_size=voxel,
+                max_points=max_points,
+                backend=backend,
+            )
+            if cached is not None:
+                self._base_display_xyz = cached
+                self._status("display ready (cached)")
+                return self._base_display_xyz
+        resolved = resolve_display_backend(backend)
+        self._status(
+            f"decimating {len(self.full_points):,} points for display "
+            f"({resolved}) ..."
         )
+        QApplication.processEvents()
+        xyz = display_xyz(
+            self.full_points,
+            voxel,
+            max_points,
+            backend=backend,
+        )
+        self._base_display_xyz = xyz
+        if source:
+            save_display_xyz(
+                self.project_dir,
+                xyz,
+                source,
+                len(self.full_points),
+                voxel_size=voxel,
+                max_points=max_points,
+                backend=backend,
+            )
         return self._base_display_xyz
 
     def _refresh_base_actor(self):
