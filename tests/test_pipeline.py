@@ -81,3 +81,29 @@ def test_residual_uv_map_aligns_despite_density_bias():
     occ = np.zeros((20, 20), dtype=bool)
     occ[nu, nv] = True
     assert occ.mean() > 0.55
+
+
+def test_residual_uv_map_locked_axes_keep_source_orientation():
+    """A tall subset must not swap/flip u–v when the source frame is locked."""
+    rng = np.random.default_rng(2)
+    xs = rng.uniform(-40, 40, size=12_000)
+    ys = rng.uniform(-10, 10, size=12_000)
+    pts = np.column_stack([xs, ys, rng.normal(0.0, 0.01, size=12_000)])
+    plane = Plane.from_array([0.0, 0.0, 1.0, 0.0])
+    full = residual_uv_map(pts, plane, return_points=True)
+    # Left strip is taller than wide → unconstrained min-rect swaps u/v.
+    subset = pts[pts[:, 0] < -25.0]
+    swapped = residual_uv_map(subset, plane, return_points=True)
+    assert abs(float(swapped["u_axis"] @ full["u_axis"])) < 0.5
+    locked = residual_uv_map(
+        subset,
+        plane,
+        return_points=True,
+        u_axis=full["u_axis"],
+        v_axis=full["v_axis"],
+        center=full["center"],
+    )
+    assert float(locked["u_axis"] @ full["u_axis"]) > 0.99
+    assert float(locked["v_axis"] @ full["v_axis"]) > 0.99
+    # Same origin: subset u is the negative side of the source frame.
+    assert float(locked["u"].max()) < 0.0

@@ -10,6 +10,8 @@ Layout::
         group_000.ply          points, double precision
         group_000.json         metadata + fit summary (no pickle anywhere)
         group_000_indices.npy  indices into the source cloud (plain npy)
+        group_000_p0_indices.npy  optional: inliers used to fit plane p0
+        group_000_p1_indices.npy  optional: inliers used to fit plane p1
 
 Reproducibility rule: everything needed to interpret the groups is baked
 into manifest.json / group json at save time; nothing depends on the
@@ -27,15 +29,22 @@ import numpy as np
 
 import cloudet
 from cloudet.picking import PickParams
+from cloudet.plane import Plane
 from cloudet.plyio import write_ply_xyz
 
 __all__ = [
     "SourceInfo",
     "PickerSettings",
+    "FittedPlane",
     "save_group",
     "write_manifest",
     "read_manifest",
     "load_group_indices",
+    "load_plane_inlier_indices",
+    "plane_inlier_indices_path",
+    "load_group_doc",
+    "load_group_docs",
+    "load_fitted_plane",
     "load_settings",
     "save_settings",
 ]
@@ -157,6 +166,39 @@ def read_manifest(project_dir: str | Path) -> dict | None:
         return json.load(f)
 
 
+def _jsonable_fit_summary(fit_summary: dict | None) -> dict | None:
+    """Drop GUI-only numpy caches; keep plane equations for reduction."""
+    if not fit_summary:
+        return fit_summary
+    planes = fit_summary.get("planes")
+    if not isinstance(planes, list):
+        return fit_summary
+    keep = (
+        "plane_index",
+        "abcd",
+        "n_points",
+        "status",
+        "reasons",
+        "bimodal",
+        "mad_sigma_mm",
+        "threshold_mm",
+        "source_plane_index",
+        "n_selected",
+        "name",
+        "inlier_indices_file",
+        "inlier_n",
+    )
+    out_planes = []
+    for p in planes:
+        if not isinstance(p, dict):
+            continue
+        entry = {k: p[k] for k in keep if k in p}
+        if "abcd" in entry:
+            entry["abcd"] = np.asarray(entry["abcd"], dtype=np.float64).tolist()
+        out_planes.append(entry)
+    return {"planes": out_planes}
+
+
 def save_group(
     project_dir: str | Path,
     group_id: int,
@@ -169,7 +211,12 @@ def save_group(
     detection: PickParams | None = None,
     fit_summary: dict | None = None,
 ) -> Path:
-    """Write one group (ply + json + optional indices.npy). Returns json path."""
+    """Write one group (ply + json + optional indices.npy). Returns json path.
+
+    When ``fit_summary["planes"]`` carries ``inlier_local`` (indices into
+    ``indices``) or ``inlier_source`` (indices into the source cloud), each
+    plane is also written as ``group_{id:03d}_p{k}_indices.npy``.
+    """
     groups_dir = Path(project_dir) / "groups"
     groups_dir.mkdir(parents=True, exist_ok=True)
 
@@ -193,7 +240,7 @@ def save_group(
         "clicked": None if clicked is None else np.asarray(clicked).tolist(),
         "color": None if color is None else np.asarray(color).tolist(),
         "detection": None if detection is None else asdict(detection),
-        "fit": fit_summary,
+        "fit": _write_plane_inlier_files(project_dir, group_id, indices, fit_summary),
         "software": {"cloudet": cloudet.__version__},
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
@@ -208,3 +255,187 @@ def load_group_indices(project_dir: str | Path, group_id: int) -> np.ndarray | N
     if not path.exists():
         return None
     return np.load(path)  # plain int64 npy, no pickle
+
+
+def plane_inlier_indices_path(
+    project_dir: str | Path, group_id: int, plane_index: int
+) -> Path:
+    return (
+        Path(project_dir)
+        / "groups"
+        / f"group_{int(group_id):03d}_p{int(plane_index)}_indices.npy"
+    )
+
+
+def load_plane_inlier_indices(
+    project_dir: str | Path, group_id: int, plane_index: int
+) -> np.ndarray | None:
+    """Indices into the source cloud used to fit one plane (int64 npy)."""
+    path = plane_inlier_indices_path(project_dir, group_id, plane_index)
+    if not path.exists():
+        return None
+    return np.load(path)
+
+
+def _write_plane_inlier_files(
+    project_dir: str | Path,
+    group_id: int,
+    group_indices: np.ndarray | None,
+    fit_summary: dict | None,
+) -> dict | None:
+    """Persist per-plane inliers next to the group; return JSON-safe fit."""
+    summary = _jsonable_fit_summary(fit_summary)
+    if not summary or not isinstance(summary.get("planes"), list):
+        return summary
+    groups_dir = Path(project_dir) / "groups"
+    groups_dir.mkdir(parents=True, exist_ok=True)
+    gidx = None if group_indices is None else np.asarray(group_indices, dtype=np.int64)
+    src_planes = (fit_summary or {}).get("planes") or []
+    written: set[str] = set()
+    for i, entry in enumerate(summary["planes"]):
+        pi = int(entry.get("plane_index", i))
+        src = src_planes[i] if i < len(src_planes) and isinstance(src_planes[i], dict) else {}
+        local = src.get("inlier_local")
+        source = src.get("inlier_source")
+        path = plane_inlier_indices_path(project_dir, group_id, pi)
+        if source is not None:
+            idx = np.asarray(source, dtype=np.int64)
+        elif local is not None and gidx is not None:
+            loc = np.asarray(local, dtype=np.int64)
+            if loc.size and (loc.min() < 0 or loc.max() >= len(gidx)):
+                raise ValueError(
+                    f"group {group_id} p{pi}: inlier_local out of range for group indices"
+                )
+            idx = gidx[loc]
+        else:
+            if path.exists():
+                path.unlink()
+            entry.pop("inlier_indices_file", None)
+            entry.pop("inlier_n", None)
+            continue
+        np.save(path, idx)
+        written.add(path.name)
+        entry["inlier_indices_file"] = path.name
+        entry["inlier_n"] = int(len(idx))
+        if "n_points" not in entry:
+            entry["n_points"] = int(len(idx))
+    prefix = f"group_{int(group_id):03d}_p"
+    for leftover in groups_dir.glob(f"{prefix}*_indices.npy"):
+        if leftover.name not in written:
+            leftover.unlink()
+    return summary
+
+
+@dataclass(frozen=True)
+class FittedPlane:
+    """One fitted plane loaded from a saved group JSON."""
+
+    group_id: int
+    group_name: str
+    plane_index: int
+    plane: Plane
+    quality: dict
+
+
+def load_group_doc(project_dir: str | Path, group_id: int) -> dict | None:
+    """Load one ``groups/group_{id:03d}.json`` document, or None if missing."""
+    path = Path(project_dir) / "groups" / f"group_{int(group_id):03d}.json"
+    if not path.exists():
+        return None
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_group_docs(project_dir: str | Path) -> list[dict]:
+    """Load all ``groups/group_*.json`` documents (sorted by group_id)."""
+    groups_dir = Path(project_dir) / "groups"
+    if not groups_dir.is_dir():
+        raise FileNotFoundError(f"no groups/ directory in {project_dir}")
+    docs = []
+    for path in sorted(groups_dir.glob("group_*.json")):
+        with open(path, encoding="utf-8") as f:
+            docs.append(json.load(f))
+    docs.sort(key=lambda d: int(d["group_id"]))
+    return docs
+
+
+def _planes_from_fit(fit: dict | None, *, group_label: str) -> list[dict]:
+    if fit is None:
+        raise ValueError(f"{group_label}: no fit summary saved; run Fit then save")
+    planes = fit.get("planes")
+    if isinstance(planes, list) and planes:
+        return planes
+    # Legacy flat fit without abcd cannot drive geometry reduction.
+    if "abcd" in fit:
+        return [{
+            "plane_index": 0,
+            "abcd": fit["abcd"],
+            "status": fit.get("status"),
+            "mad_sigma_mm": fit.get("mad_sigma_mm"),
+            "threshold_mm": fit.get("threshold_mm"),
+            "reasons": fit.get("reasons", []),
+            "bimodal": fit.get("bimodal", False),
+            "n_points": fit.get("n_points"),
+        }]
+    raise ValueError(
+        f"{group_label}: fit has no planes[].abcd "
+        "(re-Fit and save, or use a project with fit.planes entries)"
+    )
+
+
+def load_fitted_plane(
+    project_dir: str | Path,
+    *,
+    name: str | None = None,
+    group_id: int | None = None,
+    plane_index: int = 0,
+) -> FittedPlane:
+    """Resolve one fitted plane by group name or id.
+
+    Default ``plane_index=0`` selects the dominant / only plane in a group.
+    """
+    if (name is None) == (group_id is None):
+        raise ValueError("provide exactly one of name= or group_id=")
+
+    docs = load_group_docs(project_dir)
+    if name is not None:
+        matches = [d for d in docs if str(d.get("name", "")) == name]
+        if not matches:
+            known = [str(d.get("name", f"G{d['group_id']}")) for d in docs]
+            raise KeyError(f"no group named {name!r} (known: {known})")
+        if len(matches) > 1:
+            raise ValueError(f"multiple groups named {name!r}; use group_id=")
+        doc = matches[0]
+    else:
+        matches = [d for d in docs if int(d["group_id"]) == int(group_id)]
+        if not matches:
+            raise KeyError(f"no group_id={group_id}")
+        doc = matches[0]
+
+    label = f"group {doc.get('name', doc['group_id'])!r}"
+    planes = _planes_from_fit(doc.get("fit"), group_label=label)
+    try:
+        entry = next(p for p in planes if int(p.get("plane_index", 0)) == int(plane_index))
+    except StopIteration as e:
+        indices = [int(p.get("plane_index", 0)) for p in planes]
+        raise KeyError(
+            f"{label}: no plane_index={plane_index} (have {indices})"
+        ) from e
+    if "abcd" not in entry:
+        raise ValueError(f"{label} plane {plane_index}: missing abcd")
+
+    quality = {
+        "status": entry.get("status"),
+        "mad_sigma_mm": entry.get("mad_sigma_mm"),
+        "threshold_mm": entry.get("threshold_mm"),
+        "reasons": entry.get("reasons", []),
+        "bimodal": entry.get("bimodal", False),
+        "n_points": entry.get("n_points"),
+    }
+    return FittedPlane(
+        group_id=int(doc["group_id"]),
+        group_name=str(doc.get("name", f"G{doc['group_id']}")),
+        plane_index=int(plane_index),
+        plane=Plane.from_array(entry["abcd"]),
+        quality=quality,
+    )
