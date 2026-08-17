@@ -53,6 +53,11 @@ class ReductionResult:
     recipe: dict = field(default_factory=dict)
     source_project: str = ""
     exported: list[str] = field(default_factory=list)
+    # Optional view pose used when writing aligned coordinates. Survey
+    # recipe echo is never transformed.
+    frame: dict | None = None
+    # Optional copy of planes/lines/points in the aligned frame.
+    aligned: dict | None = None
 
     def to_dict(self) -> dict:
         out: dict[str, Any] = {
@@ -66,6 +71,10 @@ class ReductionResult:
         }
         if self.exported:
             out["export"] = list(self.exported)
+        if self.frame:
+            out["frame"] = self.frame
+        if self.aligned:
+            out["aligned"] = self.aligned
         return out
 
 

@@ -4,7 +4,9 @@ Usage: ``cloudet [project_dir] [--cloud <cloud>]``
 
 Layout: 3D view (pyvistaqt QtInteractor) + left dock with a group/plane
 tree and a settings form + right docks for residual u–v map and interactive
-geometry reduction (offset / intersect → recipe + geometry.json). Data
+geometry reduction (offset / intersect → recipe + geometry.json). A FRAME
+card can align the 3D view so a chosen axis is global +Z; survey data is
+unchanged. Data
 model: 1 group = N planes; fitting a group (multi-plane extraction)
 populates plane children in the tree.
 
@@ -65,6 +67,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
+    QToolButton,
     QToolTip,
     QVBoxLayout,
     QWidget,
@@ -105,6 +108,7 @@ from cloudet.project import (
     write_manifest,
 )
 from cloudet.reduce import ReductionSession, load_recipe, write_geometry_json, write_recipe_json
+from cloudet.frame import RigidFrame, transform_record, with_aligned_copy
 from cloudet.geometry import line_segment_points, plane_patch_corners
 from cloudet.settings_apply import classify_settings_apply
 
@@ -256,11 +260,20 @@ QFrame#card {
     border: 1px solid palette(mid);
     border-radius: 8px;
 }
-QLabel#sectionTitle {
+QLabel#sectionTitle,
+QToolButton#sectionTitle {
     color: palette(mid);
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 1px;
+}
+QToolButton#sectionTitle {
+    border: none;
+    background: transparent;
+    padding: 0px;
+}
+QToolButton#sectionTitle:hover {
+    color: palette(text);
 }
 QLabel#muted {
     color: palette(mid);
@@ -346,6 +359,54 @@ QToolTip {
     color: palette(text);
 }
 """
+
+
+def _make_collapsible_card(
+    heading: str,
+    *,
+    expanded: bool = True,
+    header_extra: QWidget | None = None,
+) -> tuple[QFrame, QVBoxLayout]:
+    """Card with a clickable title that shows or hides the body."""
+    card = QFrame()
+    card.setObjectName("card")
+    outer = QVBoxLayout(card)
+    outer.setContentsMargins(10, 8, 10, 8)
+    outer.setSpacing(6)
+
+    toggle = QToolButton()
+    toggle.setObjectName("sectionTitle")
+    toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+    toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+    toggle.setText(heading)
+    toggle.setCheckable(True)
+    toggle.setChecked(expanded)
+    toggle.setAutoRaise(True)
+    toggle.setCursor(Qt.PointingHandCursor)
+    toggle.setToolTip("Click to expand or collapse this section.")
+
+    body = QWidget()
+    body_lay = QVBoxLayout(body)
+    body_lay.setContentsMargins(0, 0, 0, 0)
+    body_lay.setSpacing(6)
+    body.setVisible(expanded)
+
+    def _on_toggled(checked: bool, *, t=toggle, b=body) -> None:
+        b.setVisible(checked)
+        t.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+
+    toggle.toggled.connect(_on_toggled)
+    if header_extra is None:
+        outer.addWidget(toggle)
+    else:
+        hdr = QHBoxLayout()
+        hdr.setContentsMargins(0, 0, 0, 0)
+        hdr.setSpacing(6)
+        hdr.addWidget(toggle, stretch=1)
+        hdr.addWidget(header_extra)
+        outer.addLayout(hdr)
+    outer.addWidget(body)
+    return card, body_lay
 
 
 def group_color(gid: int) -> np.ndarray:
@@ -473,6 +534,7 @@ class PickerWindow(QMainWindow):
         self._reduction = ReductionSession()
         self._reduction_actor_names: list[str] = []
         self._rd_offset_sync = False
+        self._view_frame: RigidFrame | None = None
 
         self.setWindowTitle(f"cloudet - {self.project_dir.name}")
         self.resize(1760, 980)
@@ -485,7 +547,8 @@ class PickerWindow(QMainWindow):
         vlay.addWidget(self.plotter)
         self.setCentralWidget(central)
         self.plotter.set_background("white")
-        self.plotter.add_axes()
+        self._axes_widget = self.plotter.add_axes()
+        self._place_orientation_axes()
         self.plotter.enable_point_picking(
             callback=self._on_pick,
             show_message="P : Pick",
@@ -499,13 +562,9 @@ class PickerWindow(QMainWindow):
         self._build_uv_dock()
         self._build_reduction_dock()
         self._build_shortcuts()
-        ready = "Ready"
-        ready += f"  |  {self._compute_status_suffix()}"
-        if self._vtk_log_path is not None:
-            ready += f"  |  VTK messages -> {self._vtk_log_path}"
-        ready += f"  |  fit timing -> {self._fit_log_path}"
-        self._status_default = ready
-        self.statusBar().showMessage(ready)
+        self._rebuild_status_default()
+        self._refresh_frame_overlay()
+        self.statusBar().showMessage(self._status_default)
 
         if pcd_path:
             self.pcd_edit_path = pcd_path
@@ -537,13 +596,7 @@ class PickerWindow(QMainWindow):
         gl = QVBoxLayout(gw)
         gl.setSpacing(8)
 
-        project_card = QFrame()
-        project_card.setObjectName("card")
-        pr_lay = QVBoxLayout(project_card)
-        pr_lay.setContentsMargins(10, 8, 10, 8)
-        project_title = QLabel("PROJECT")
-        project_title.setObjectName("sectionTitle")
-        pr_lay.addWidget(project_title)
+        project_card, pr_lay = _make_collapsible_card("PROJECT")
         self.project_label = QLabel(self.project_dir.name)
         self.project_label.setWordWrap(True)
         self.project_label.setToolTip(str(self.project_dir.resolve()))
@@ -565,13 +618,7 @@ class PickerWindow(QMainWindow):
         pr_lay.addLayout(project_row)
         gl.addWidget(project_card)
 
-        source_card = QFrame()
-        source_card.setObjectName("card")
-        s_lay = QVBoxLayout(source_card)
-        s_lay.setContentsMargins(10, 8, 10, 8)
-        source_title = QLabel("SOURCE")
-        source_title.setObjectName("sectionTitle")
-        s_lay.addWidget(source_title)
+        source_card, s_lay = _make_collapsible_card("SOURCE")
         self.cloud_label = QLabel("(no cloud loaded)")
         self.cloud_label.setWordWrap(True)
         s_lay.addWidget(self.cloud_label)
@@ -590,13 +637,7 @@ class PickerWindow(QMainWindow):
         s_lay.addLayout(source_row)
         gl.addWidget(source_card)
 
-        pick_card = QFrame()
-        pick_card.setObjectName("card")
-        p_lay = QVBoxLayout(pick_card)
-        p_lay.setContentsMargins(10, 8, 10, 8)
-        pick_title = QLabel("PICK")
-        pick_title.setObjectName("sectionTitle")
-        p_lay.addWidget(pick_title)
+        pick_card, p_lay = _make_collapsible_card("PICK")
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("Mode"))
         self.mode_new_rb = QCheckBox("New")
@@ -655,25 +696,17 @@ class PickerWindow(QMainWindow):
         p_lay.addWidget(self.snap_front_cb)
         gl.addWidget(pick_card)
 
-        depth_card = QFrame()
-        depth_card.setObjectName("card")
-        depth_box = QVBoxLayout(depth_card)
-        depth_box.setContentsMargins(10, 7, 10, 8)
-        depth_box.setSpacing(2)
-        depth_hdr = QHBoxLayout()
-        depth_title = QLabel("DEPTH")
-        depth_title.setObjectName("depthTitle")
-        depth_title.setToolTip(DEPTH_TIP)
-        depth_hdr.addWidget(depth_title)
-        depth_hdr.addStretch()
         pick_badge = QLabel(" P  PICK ")
         pick_badge.setStyleSheet(
             "border: 1px solid palette(mid); border-radius: 4px; "
             "font-size: 10px; font-weight: 600;"
         )
         pick_badge.setToolTip("Hover the 3D view and press P")
-        depth_hdr.addWidget(pick_badge)
-        depth_box.addLayout(depth_hdr)
+        depth_card, depth_box = _make_collapsible_card(
+            "DEPTH", header_extra=pick_badge
+        )
+        depth_card.setToolTip(DEPTH_TIP)
+        depth_box.setSpacing(2)
 
         depth_row = QHBoxLayout()
         self.depth_prev_btn = QPushButton("<")
@@ -829,14 +862,7 @@ class PickerWindow(QMainWindow):
             return w
 
         def card(title: str, blurb: str = "") -> tuple[QFrame, QVBoxLayout, QFormLayout]:
-            frame = QFrame()
-            frame.setObjectName("card")
-            vbox = QVBoxLayout(frame)
-            vbox.setContentsMargins(10, 8, 10, 8)
-            vbox.setSpacing(6)
-            ttl = QLabel(title)
-            ttl.setObjectName("sectionTitle")
-            vbox.addWidget(ttl)
+            frame, vbox = _make_collapsible_card(title)
             if blurb:
                 note = QLabel(blurb)
                 note.setObjectName("muted")
@@ -1313,16 +1339,8 @@ class PickerWindow(QMainWindow):
         self.uv_meta_label.setWordWrap(True)
         lay.addWidget(self.uv_meta_label)
 
-        def _mini_card(heading: str) -> tuple[QFrame, QVBoxLayout]:
-            card = QFrame()
-            card.setObjectName("card")
-            cl = QVBoxLayout(card)
-            cl.setContentsMargins(10, 8, 10, 8)
-            cl.setSpacing(6)
-            h = QLabel(heading)
-            h.setObjectName("sectionTitle")
-            cl.addWidget(h)
-            return card, cl
+        def _mini_card(heading: str, *, expanded: bool = True) -> tuple[QFrame, QVBoxLayout]:
+            return _make_collapsible_card(heading, expanded=expanded)
 
         # ---- Display + Map view (side by side) --------------------------
         disp_card, disp_lay = _mini_card("DISPLAY")
@@ -1518,16 +1536,8 @@ class PickerWindow(QMainWindow):
         hint.setWordWrap(True)
         lay.addWidget(hint)
 
-        def _mini_card(heading: str) -> tuple[QFrame, QVBoxLayout]:
-            card = QFrame()
-            card.setObjectName("card")
-            cl = QVBoxLayout(card)
-            cl.setContentsMargins(10, 8, 10, 8)
-            cl.setSpacing(6)
-            h = QLabel(heading)
-            h.setObjectName("sectionTitle")
-            cl.addWidget(h)
-            return card, cl
+        def _mini_card(heading: str, *, expanded: bool = True) -> tuple[QFrame, QVBoxLayout]:
+            return _make_collapsible_card(heading, expanded=expanded)
 
         # ---- Operation picker -------------------------------------------
         op_card, op_lay = _mini_card("OPERATION")
@@ -1702,7 +1712,7 @@ class PickerWindow(QMainWindow):
         lay.addWidget(ctx_card)
 
         # ---- Display (always available, secondary) ----------------------
-        disp_card, disp_lay = _mini_card("DISPLAY")
+        disp_card, disp_lay = _mini_card("DISPLAY", expanded=False)
         disp_form = QFormLayout()
         disp_form.setContentsMargins(0, 0, 0, 0)
         disp_form.setSpacing(4)
@@ -1874,7 +1884,67 @@ class PickerWindow(QMainWindow):
         tree_lay.addLayout(ent_btn_row)
         lay.addWidget(tree_card, stretch=1)
 
+        frame_card, frame_lay = _mini_card("FRAME")
+        frame_form = QFormLayout()
+        frame_form.setContentsMargins(0, 0, 0, 0)
+        frame_form.setSpacing(4)
+        self.rd_frame_axis = QComboBox()
+        self.rd_frame_origin = QComboBox()
+        for c in (self.rd_frame_axis, self.rd_frame_origin):
+            c.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            c.setMinimumContentsLength(12)
+            c.currentIndexChanged.connect(self._sync_frame_align_enabled)
+        self.rd_frame_flip = QComboBox()
+        self.rd_frame_flip.addItem("along axis", False)
+        self.rd_frame_flip.addItem("flipped", True)
+        frame_form.addRow("Axis", self.rd_frame_axis)
+        frame_form.addRow("Origin", self.rd_frame_origin)
+        frame_form.addRow("+Z", self.rd_frame_flip)
+        frame_lay.addLayout(frame_form)
+        frame_btn_row = QHBoxLayout()
+        self.rd_frame_align_btn = QPushButton("Align Z")
+        self.rd_frame_align_btn.setObjectName("primaryBtn")
+        self.rd_frame_align_btn.setEnabled(False)
+        self.rd_frame_align_btn.setToolTip(
+            "Show the cloud and overlays with this axis as global +Z "
+            "and this origin at (0, 0, 0). Survey data is not rewritten."
+        )
+        self.rd_frame_align_btn.clicked.connect(
+            lambda: self._guard(self._frame_align, busy=False)
+        )
+        frame_btn_row.addWidget(self.rd_frame_align_btn)
+        self.rd_frame_survey_btn = QPushButton("Survey")
+        self.rd_frame_survey_btn.setObjectName("secondaryBtn")
+        self.rd_frame_survey_btn.setEnabled(False)
+        self.rd_frame_survey_btn.setToolTip("Return the 3D view to survey coordinates.")
+        self.rd_frame_survey_btn.clicked.connect(
+            lambda: self._guard(self._frame_survey, busy=False)
+        )
+        frame_btn_row.addWidget(self.rd_frame_survey_btn)
+        frame_lay.addLayout(frame_btn_row)
+        self.rd_frame_status = QLabel("frame: survey")
+        self.rd_frame_status.setObjectName("muted")
+        self.rd_frame_status.setWordWrap(True)
+        frame_lay.addWidget(self.rd_frame_status)
+        frame_hint = QLabel(
+            "Display only. Groups, recipe, and Fit stay in survey coordinates. "
+            "Reduction overlays and the Entities table follow this view. "
+            "Picking still extracts from the original cloud."
+        )
+        frame_hint.setObjectName("muted")
+        frame_hint.setWordWrap(True)
+        frame_lay.addWidget(frame_hint)
+        lay.addWidget(frame_card)
+
         exp_card, exp_lay = _mini_card("EXPORT")
+        self.rd_export_frame_cb = QCheckBox("Also write aligned-frame coordinates")
+        self.rd_export_frame_cb.setChecked(True)
+        self.rd_export_frame_cb.setToolTip(
+            "When Align Z is active, geometry.json keeps survey numbers and "
+            "adds an aligned copy under \"aligned\" plus the frame pose. "
+            "Off: survey coordinates only. The recipe is never transformed."
+        )
+        exp_lay.addWidget(self.rd_export_frame_cb)
         exp_row = QHBoxLayout()
         load_recipe_btn = QPushButton("Load recipe…")
         load_recipe_btn.setObjectName("secondaryBtn")
@@ -1911,6 +1981,7 @@ class PickerWindow(QMainWindow):
 
         self._rd_offset_sync = False
         self._reduction_on_op_changed()
+        self._update_frame_controls()
 
     def _build_shortcuts(self):
         QShortcut(QKeySequence("Ctrl+S"), self, lambda: self._guard(self._save_all))
@@ -1982,6 +2053,135 @@ class PickerWindow(QMainWindow):
                 short = short[:77] + "..."
             return f"compute: numpy ({short})"
         return "compute: numpy"
+
+    def _frame_status_text(self) -> str:
+        fr = self._view_frame
+        if fr is None:
+            return "frame: survey"
+        axis = fr.axis_id or "?"
+        origin = fr.origin_id or "?"
+        extra = ", flip" if fr.flip_z else ""
+        return f"frame: aligned ({axis}, {origin}{extra})"
+
+    def _rebuild_status_default(self) -> None:
+        ready = "Ready"
+        ready += f"  |  {self._compute_status_suffix()}"
+        ready += f"  |  {self._frame_status_text()}"
+        if getattr(self, "_vtk_log_path", None) is not None:
+            ready += f"  |  VTK messages -> {self._vtk_log_path}"
+        ready += f"  |  fit timing -> {self._fit_log_path}"
+        self._status_default = ready
+
+    def _to_view_points(self, xyz: np.ndarray) -> np.ndarray:
+        if self._view_frame is None or xyz is None:
+            return xyz
+        arr = np.asarray(xyz, dtype=np.float64)
+        if arr.size == 0:
+            return arr
+        return self._view_frame.apply_points(arr)
+
+    def _to_view_point(self, xyz) -> np.ndarray:
+        p = np.asarray(xyz, dtype=np.float64).reshape(3)
+        if self._view_frame is None:
+            return p
+        return self._view_frame.apply_points(p)
+
+    def _to_survey_point(self, xyz) -> np.ndarray:
+        p = np.asarray(xyz, dtype=np.float64).reshape(3)
+        if self._view_frame is None:
+            return p
+        return self._view_frame.inverse_points(p)
+
+    def _sync_frame_align_enabled(self) -> None:
+        if not hasattr(self, "rd_frame_align_btn"):
+            return
+        axis = self._reduction_combo_id(getattr(self, "rd_frame_axis", None))
+        origin = self._reduction_combo_id(getattr(self, "rd_frame_origin", None))
+        self.rd_frame_align_btn.setEnabled(bool(axis and origin))
+
+    def _place_orientation_axes(self) -> None:
+        """Lift the corner triad so the frame label fits underneath."""
+        widget = getattr(self, "_axes_widget", None)
+        if widget is None:
+            return
+        try:
+            widget.SetViewport(0.0, 0.08, 0.2, 0.28)
+        except Exception:
+            pass
+
+    def _refresh_frame_overlay(self) -> None:
+        """Draw the current frame name under the orientation axes."""
+        if not hasattr(self, "plotter"):
+            return
+        text = self._frame_status_text()
+        try:
+            self.plotter.add_text(
+                text,
+                name="frame_overlay",
+                position=(0.02, 0.012),
+                font_size=10,
+                color="#333333",
+                viewport=True,
+                render=False,
+            )
+        except TypeError:
+            self.plotter.add_text(
+                text,
+                name="frame_overlay",
+                position="lower_left",
+                font_size=10,
+                color="#333333",
+            )
+
+    def _update_frame_controls(self) -> None:
+        if hasattr(self, "rd_frame_status"):
+            self.rd_frame_status.setText(self._frame_status_text())
+        if hasattr(self, "rd_frame_survey_btn"):
+            self.rd_frame_survey_btn.setEnabled(self._view_frame is not None)
+        self._sync_frame_align_enabled()
+        self._refresh_frame_overlay()
+
+    def _refresh_aligned_view(self, *, reset_camera: bool = False) -> None:
+        self._refresh_base_actor()
+        self._refresh_group_actors()
+        self._refresh_active_plane_bbox(render=False)
+        if hasattr(self, "rd_tree"):
+            self._refresh_reduction_tree()
+            self._refresh_reduction_actors(render=False)
+            self._reduction_update_live_preview()
+        if reset_camera:
+            self.plotter.reset_camera()
+        self.plotter.render()
+
+    def _set_view_frame(self, frame: RigidFrame | None, *, reset_camera: bool = True) -> None:
+        self._view_frame = frame
+        self._update_frame_controls()
+        self._rebuild_status_default()
+        self._refresh_aligned_view(reset_camera=reset_camera)
+
+    def _frame_align(self) -> None:
+        axis_id = self._reduction_combo_id(getattr(self, "rd_frame_axis", None))
+        origin_id = self._reduction_combo_id(getattr(self, "rd_frame_origin", None))
+        if not axis_id or not origin_id:
+            raise ValueError("choose an axis and an origin")
+        flip = bool(self.rd_frame_flip.currentData()) if hasattr(self, "rd_frame_flip") else False
+        line = self._reduction.line(axis_id)
+        origin = self._reduction.point(origin_id)
+        frame = RigidFrame.align_z(
+            line.direction,
+            origin,
+            flip_z=flip,
+            axis_id=axis_id,
+            origin_id=origin_id,
+        )
+        self._set_view_frame(frame, reset_camera=True)
+        self._status(self._frame_status_text())
+
+    def _frame_survey(self) -> None:
+        if self._view_frame is None:
+            return
+        self._set_view_frame(None, reset_camera=True)
+        self._status("frame: survey")
 
     def _status(self, msg):
         self.statusBar().showMessage(str(msg)) if hasattr(self, "statusBar") else print(msg)
@@ -2209,6 +2409,10 @@ class PickerWindow(QMainWindow):
             "mp_line": self._reduction_combo_id(getattr(self, "rd_mp_line", None)),
             "mp_a": self._reduction_combo_id(getattr(self, "rd_mp_a", None)),
             "mp_b": self._reduction_combo_id(getattr(self, "rd_mp_b", None)),
+            "frame_axis": self._reduction_combo_id(getattr(self, "rd_frame_axis", None)),
+            "frame_origin": self._reduction_combo_id(
+                getattr(self, "rd_frame_origin", None)
+            ),
         }
         if rename:
             old, new = rename
@@ -2239,6 +2443,19 @@ class PickerWindow(QMainWindow):
                 self._reduction_fill_combo(self.rd_mp_line, kind="line", keep=keep["mp_line"])
                 self._reduction_fill_combo(self.rd_mp_a, kind="plane", keep=keep["mp_a"])
                 self._reduction_fill_combo(self.rd_mp_b, kind="plane", keep=keep["mp_b"])
+            if hasattr(self, "rd_frame_axis"):
+                self._reduction_fill_combo(
+                    self.rd_frame_axis, kind="line", keep=keep.get("frame_axis")
+                )
+                self._reduction_fill_combo(
+                    self.rd_frame_origin, kind="point", keep=keep.get("frame_origin")
+                )
+                if rename and self._view_frame is not None:
+                    old, new = rename
+                    self._view_frame = self._view_frame.relabel(old, new)
+                    self._update_frame_controls()
+                    self._rebuild_status_default()
+                self._sync_frame_align_enabled()
 
     def _reduction_selected_ids(self) -> list[str]:
         """Operand ids for the current operation (from PARAMETERS combos)."""
@@ -2429,6 +2646,7 @@ class PickerWindow(QMainWindow):
             anchor = self._reduction.anchors.get(ids[0])
             patch = self._reduction.overlay_mm(ids[0])
             corners = plane_patch_corners(plane, center=anchor, size_mm=patch)
+            corners = self._to_view_points(corners)
             faces = np.array([3, 0, 1, 2, 3, 0, 2, 3], dtype=np.int64)
             mesh = pv.PolyData(corners, faces=faces)
             self.plotter.add_mesh(
@@ -2438,6 +2656,7 @@ class PickerWindow(QMainWindow):
                 opacity=0.45,
                 reset_camera=False,
                 pickable=False,
+                render=False,
             )
             self.plotter.add_mesh(
                 mesh,
@@ -2447,6 +2666,7 @@ class PickerWindow(QMainWindow):
                 line_width=2,
                 reset_camera=False,
                 pickable=False,
+                render=False,
             )
         except Exception:
             traceback.print_exc()
@@ -2495,12 +2715,14 @@ class PickerWindow(QMainWindow):
             )
             diam = float(self._reduction.display_default_mm.get("line_diameter", 1.0))
             seg = line_segment_points(line, half_length_mm=half, center=center)
+            seg = self._to_view_points(seg)
             self.plotter.add_mesh(
                 _line_tube_mesh(seg[0], seg[1], diam),
                 name="rd_preview_axis",
                 color="#2ecc71",
                 reset_camera=False,
                 pickable=False,
+                render=False,
             )
         except Exception:
             traceback.print_exc()
@@ -2529,27 +2751,30 @@ class PickerWindow(QMainWindow):
             mid = midpoint_line_planes(line, pa, pb)
             diam = float(self._reduction.display_default_mm.get("line_diameter", 1.0))
             self.plotter.add_mesh(
-                _line_tube_mesh(end_a, end_b, diam),
+                _line_tube_mesh(self._to_view_point(end_a), self._to_view_point(end_b), diam),
                 name="rd_preview_axis",
                 color="#2ecc71",
                 reset_camera=False,
                 pickable=False,
+                render=False,
             )
             r = max(float(self._reduction.display_default_mm.get("point", 8.0)), 0.5)
             self.plotter.add_mesh(
-                pv.Sphere(radius=r * 1.4, center=mid.tolist()),
+                pv.Sphere(radius=r * 1.4, center=self._to_view_point(mid).tolist()),
                 name="rd_preview_point",
                 color="#2ecc71",
                 reset_camera=False,
                 pickable=False,
+                render=False,
             )
             for i, pt in enumerate((end_a, end_b)):
                 self.plotter.add_mesh(
-                    pv.Sphere(radius=r * 0.7, center=pt.tolist()),
+                    pv.Sphere(radius=r * 0.7, center=self._to_view_point(pt).tolist()),
                     name=f"rd_preview_end{i}",
                     color="#27ae60",
                     reset_camera=False,
                     pickable=False,
+                    render=False,
                 )
         except Exception:
             traceback.print_exc()
@@ -2868,6 +3093,12 @@ class PickerWindow(QMainWindow):
         result = self._reduction.to_result(
             source_project=str(self.project_dir.resolve())
         )
+        include_aligned = (
+            bool(getattr(self, "rd_export_frame_cb", None) and self.rd_export_frame_cb.isChecked())
+            and self._view_frame is not None
+        )
+        if include_aligned:
+            result = with_aligned_copy(result, self._view_frame)
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Export geometry.json",
@@ -2884,9 +3115,13 @@ class PickerWindow(QMainWindow):
             else Path(path).stem + ".recipe.json"
         )
         write_recipe_json(recipe_path, self._reduction.to_recipe())
+        if include_aligned:
+            frame_note = f", survey + {self._frame_status_text()}"
+        else:
+            frame_note = ", frame: survey"
         self._status(
             f"exported {path}  ({len(result.planes)} planes, "
-            f"{len(result.lines)} lines, {len(result.points)} points)"
+            f"{len(result.lines)} lines, {len(result.points)} points{frame_note})"
         )
 
     def _refresh_reduction_tree(self):
@@ -2978,8 +3213,10 @@ class PickerWindow(QMainWindow):
             return
         if column != 0:
             return
+        vis = item.checkState(0) == Qt.Checked
+        was_vis = self._reduction.visible.get(eid, True)
         if eid in self._reduction.ids():
-            self._reduction.visible[eid] = item.checkState(0) == Qt.Checked
+            self._reduction.visible[eid] = vis
         new_id = item.text(0).strip()
         if new_id != eid:
             try:
@@ -2993,7 +3230,10 @@ class PickerWindow(QMainWindow):
             item.setData(0, Qt.UserRole, new_id)
             self._reduction_refresh_operand_combos(rename=(eid, new_id))
             self._status(f"renamed {eid!r} → {new_id!r}")
-        self._refresh_reduction_actors()
+            self._refresh_reduction_actors()
+            return
+        if vis != was_vis:
+            self._apply_reduction_entity_visibility(eid, vis)
 
     def _sync_reduction_entity_actions(self):
         if not hasattr(self, "rd_delete_btn"):
@@ -3172,6 +3412,8 @@ class PickerWindow(QMainWindow):
     def _reduction_detail_text(self, eid: str) -> str:
         rec = self._reduction.record_of(eid)
         kind = self._reduction.kind_of(eid)
+        if self._view_frame is not None:
+            rec = transform_record(kind, rec, self._view_frame)
         if kind == "plane" and "distance_mm" in rec:
             return f"offset {rec['distance_mm']:g} mm"
         if kind == "line":
@@ -3211,11 +3453,62 @@ class PickerWindow(QMainWindow):
             return max(self._reduction.overlay_mm(eid), 0.5)
         return max(float(self._reduction.display_default_mm.get("point", 8.0)), 0.5)
 
+    def _reduction_entity_actor_names(self, eid: str) -> list[str]:
+        name = self._reduction_actor_name(eid)
+        return [
+            n for n in self._reduction_actor_names
+            if n == name or n.startswith(name + "_")
+        ]
+
+    def _refresh_reduction_labels(self, *, render: bool = True) -> None:
+        self.plotter.remove_actor("rd_labels", render=False)
+        self._reduction_actor_names = [
+            n for n in self._reduction_actor_names if n != "rd_labels"
+        ]
+        label_pts: list[np.ndarray] = []
+        label_text: list[str] = []
+        for eid in self._reduction.ids():
+            if not self._reduction.visible.get(eid, True):
+                continue
+            try:
+                label_pts.append(self._reduction_label_position(eid))
+                label_text.append(eid)
+            except Exception:
+                traceback.print_exc()
+        if label_pts:
+            pts = self._to_view_points(np.stack(label_pts, axis=0))
+            self.plotter.add_point_labels(
+                pts,
+                label_text,
+                name="rd_labels",
+                font_size=14,
+                point_size=0,
+                shape_opacity=0.75,
+                fill_shape=True,
+                reset_camera=False,
+                pickable=False,
+                render=False,
+            )
+            self._reduction_actor_names.append("rd_labels")
+        if render:
+            self.plotter.render()
+
+    def _apply_reduction_entity_visibility(self, eid: str, visible: bool) -> None:
+        """Show or hide one overlay without rebuilding the rest."""
+        names = self._reduction_entity_actor_names(eid)
+        actors = getattr(self.plotter, "actors", None) or {}
+        if visible and not names:
+            self._refresh_reduction_actors()
+            return
+        for n in names:
+            actor = actors.get(n)
+            if actor is not None:
+                actor.SetVisibility(1 if visible else 0)
+        self._refresh_reduction_labels(render=True)
+
     def _refresh_reduction_actors(self, *, render: bool = True):
         self._clear_reduction_actors()
         selected = set(self._reduction_selected_ids())
-        label_pts: list[np.ndarray] = []
-        label_text: list[str] = []
         for eid in self._reduction.ids():
             if not self._reduction.visible.get(eid, True):
                 continue
@@ -3227,9 +3520,10 @@ class PickerWindow(QMainWindow):
             try:
                 if kind == "plane":
                     plane = self._reduction.plane(eid)
-                    corners = plane_patch_corners(
+                    corners_s = plane_patch_corners(
                         plane, center=anchor, size_mm=size
                     )
+                    corners = self._to_view_points(corners_s)
                     faces = np.array([3, 0, 1, 2, 3, 0, 2, 3], dtype=np.int64)
                     mesh = pv.PolyData(corners, faces=faces)
                     rec = self._reduction.record_of(eid)
@@ -3247,6 +3541,7 @@ class PickerWindow(QMainWindow):
                         opacity=opacity,
                         reset_camera=False,
                         pickable=False,
+                        render=False,
                     )
                     edge_name = name + "_e"
                     edge_color = _RD_SELECTED_RING if sel else color
@@ -3258,10 +3553,13 @@ class PickerWindow(QMainWindow):
                         line_width=lw,
                         reset_camera=False,
                         pickable=False,
+                        render=False,
                     )
                     self._reduction_actor_names.extend([name, edge_name])
                     center = corners.mean(axis=0)
-                    tip = center + plane.normal * (size * 0.2)
+                    tip = self._to_view_point(
+                        corners_s.mean(axis=0) + plane.normal * (size * 0.2)
+                    )
                     nar = pv.Line(center, tip)
                     nname = name + "_n"
                     self.plotter.add_mesh(
@@ -3271,6 +3569,7 @@ class PickerWindow(QMainWindow):
                         line_width=3 if sel else 2,
                         reset_camera=False,
                         pickable=False,
+                        render=False,
                     )
                     self._reduction_actor_names.append(nname)
                 elif kind == "line":
@@ -3278,6 +3577,7 @@ class PickerWindow(QMainWindow):
                     seg = line_segment_points(
                         line, half_length_mm=size, center=anchor
                     )
+                    seg = self._to_view_points(seg)
                     diam = self._reduction.overlay_width_mm(eid)
                     if sel:
                         diam *= 1.25
@@ -3288,6 +3588,7 @@ class PickerWindow(QMainWindow):
                         color=_RD_AXIS,
                         reset_camera=False,
                         pickable=False,
+                        render=False,
                     )
                     self._reduction_actor_names.append(name)
                     if sel:
@@ -3303,10 +3604,11 @@ class PickerWindow(QMainWindow):
                                 color=_RD_SELECTED_RING,
                                 reset_camera=False,
                                 pickable=False,
+                                render=False,
                             )
                             self._reduction_actor_names.append(cname)
                 elif kind == "point":
-                    pt = self._reduction.point(eid)
+                    pt = self._to_view_point(self._reduction.point(eid))
                     r = size * (1.4 if sel else 1.0)
                     mesh = pv.Sphere(radius=r, center=pt.tolist())
                     self.plotter.add_mesh(
@@ -3315,6 +3617,7 @@ class PickerWindow(QMainWindow):
                         color=_RD_POINT,
                         reset_camera=False,
                         pickable=False,
+                        render=False,
                     )
                     self._reduction_actor_names.append(name)
                     if sel:
@@ -3328,27 +3631,12 @@ class PickerWindow(QMainWindow):
                             line_width=2,
                             reset_camera=False,
                             pickable=False,
+                            render=False,
                         )
                         self._reduction_actor_names.append(rname)
-                label_pts.append(self._reduction_label_position(eid))
-                label_text.append(eid)
             except Exception:
                 traceback.print_exc()
-        if label_pts:
-            pts = np.stack(label_pts, axis=0)
-            lname = "rd_labels"
-            self.plotter.add_point_labels(
-                pts,
-                label_text,
-                name=lname,
-                font_size=14,
-                point_size=0,
-                shape_opacity=0.75,
-                fill_shape=True,
-                reset_camera=False,
-                pickable=False,
-            )
-            self._reduction_actor_names.append(lname)
+        self._refresh_reduction_labels(render=False)
         if render:
             self.plotter.render()
 
@@ -4510,12 +4798,7 @@ class PickerWindow(QMainWindow):
             self.cloud_label.setToolTip(src)
 
         self._update_project_labels()
-        ready = "Ready"
-        ready += f"  |  {self._compute_status_suffix()}"
-        if self._vtk_log_path is not None:
-            ready += f"  |  VTK messages -> {self._vtk_log_path}"
-        ready += f"  |  fit timing -> {self._fit_log_path}"
-        self._status_default = ready
+        self._rebuild_status_default()
         self._status(f"project set to {self.project_dir.resolve()}")
 
     def _browse_cloud(self):
@@ -4600,7 +4883,7 @@ class PickerWindow(QMainWindow):
             self._base_display_xyz = None
             return
         v = self.settings.view
-        xyz = self._ensure_base_display_xyz()
+        xyz = self._to_view_points(self._ensure_base_display_xyz())
         self._n_displayed = len(xyz)
         self.plotter.add_points(
             xyz,
@@ -4665,6 +4948,8 @@ class PickerWindow(QMainWindow):
         tf[:3, 2] = n_ax
         tf[:3, 3] = center
         box.transform(tf, inplace=True)
+        if self._view_frame is not None:
+            box.points = self._to_view_points(np.asarray(box.points, dtype=np.float64))
         self.plotter.add_mesh(
             box,
             name="active_plane_bbox",
@@ -4698,6 +4983,7 @@ class PickerWindow(QMainWindow):
             int(v.display_max_points),
             backend=v.display_downsample_backend,
         )
+        xyz = self._to_view_points(xyz)
         active = g["id"] == self.active_group_id
         color = tuple(float(c) for c in g["color"])
         self.plotter.add_points(
@@ -4760,7 +5046,7 @@ class PickerWindow(QMainWindow):
         # may hold too few points to seed from. Widen only until the front
         # layer is solid: a wider cylinder also sweeps in neighbouring
         # geometry and invents surfaces that are not under the cursor.
-        xyz = self._ensure_base_display_xyz()
+        xyz = self._to_view_points(self._ensure_base_display_xyz())
         base_r = max(self.settings.detection.local_radius_mm * 0.3, 2.0)
         best: list[dict] = []
         for scale in (1.0, 2.0, 4.0, 8.0):
@@ -4882,16 +5168,17 @@ class PickerWindow(QMainWindow):
         flow_t0 = wall_t0 if wall_t0 is not None else time.perf_counter()
         self._update_depth_controls()
         layer = self._pick_layers[self._pick_layer_i]
-        world = np.asarray(layer["seed"], dtype=np.float64)
+        world_view = np.asarray(layer["seed"], dtype=np.float64)
         n_layers = len(self._pick_layers)
         depth_tag = f"surface {self._pick_layer_i + 1}/{n_layers}"
         raw = getattr(self, "_pick_raw_hit", None)
         if raw is not None:
-            moved = float(np.linalg.norm(world - raw))
+            moved = float(np.linalg.norm(world_view - raw))
             if moved > 1.0:
                 depth_tag += f", snapped {moved:.0f} mm nearer"
         if n_layers > 1:
             depth_tag += " (> farther / < nearer)"
+        world = self._to_survey_point(world_view)
 
         if replace and self._pick_replace_gid is not None:
             # Reuse the same group id so cycling does not burn ids.
@@ -5427,6 +5714,10 @@ class PickerWindow(QMainWindow):
         self._status("deleted " + ", ".join(names))
 
     def _clear_all(self):
+        was_aligned = self._view_frame is not None
+        self._view_frame = None
+        self._update_frame_controls()
+        self._rebuild_status_default()
         for g in self.groups:
             self.plotter.remove_actor(f"group_{g['id']:03d}", render=False)
         self.groups = []
@@ -5443,6 +5734,8 @@ class PickerWindow(QMainWindow):
         self._refresh_tree()
         self._show_uv_for_selection()
         self._sync_action_states()
+        if was_aligned:
+            self._refresh_base_actor()
 
     # ------------------------------------------------------------------
     # tree
