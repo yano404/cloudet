@@ -24,6 +24,9 @@ __all__ = [
     "intersect_three_planes",
     "intersect_line_plane",
     "intersect_normal_plane",
+    "line_from_point_normal",
+    "line_from_two_points",
+    "midpoint_line_planes",
     "plane_patch_corners",
     "line_segment_points",
 ]
@@ -118,6 +121,36 @@ def intersect_normal_plane(
         through = np.asarray(through, dtype=np.float64).reshape(3)
     line = Line(through, plane_src.normal)
     return intersect_line_plane(line, plane_dst)
+
+
+def line_from_point_normal(point: np.ndarray, normal) -> Line:
+    """Line through ``point`` in the direction of ``normal``.
+
+    ``normal`` may be a length-3 vector or a ``Plane`` (its Hesse unit
+    normal). The point need not lie on that plane.
+    """
+    if isinstance(normal, Plane):
+        n = np.asarray(normal.normal, dtype=np.float64)
+    else:
+        n = np.asarray(normal, dtype=np.float64).reshape(3)
+    return Line(np.asarray(point, dtype=np.float64).reshape(3), n)
+
+
+def line_from_two_points(p1: np.ndarray, p2: np.ndarray) -> Line:
+    """Line through two distinct points. Origin is ``p1``."""
+    a = np.asarray(p1, dtype=np.float64).reshape(3)
+    b = np.asarray(p2, dtype=np.float64).reshape(3)
+    d = b - a
+    if float(d @ d) < _PARALLEL_EPS:
+        raise ValueError("points coincide; no unique line")
+    return Line(a, d)
+
+
+def midpoint_line_planes(line: Line, plane_a: Plane, plane_b: Plane) -> np.ndarray:
+    """Midpoint of the segment where ``line`` meets two planes."""
+    a = intersect_line_plane(line, plane_a)
+    b = intersect_line_plane(line, plane_b)
+    return 0.5 * (a + b)
 
 
 def _plane_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

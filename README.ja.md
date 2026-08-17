@@ -78,6 +78,7 @@ CuPy なし（Mac 等）でも従来どおり NumPy のみで動作します。�
   settings.json
   groups/
     group_000.ply / .json / _indices.npy
+    group_000_p0_indices.npy   # p0 の fit に使った inlier（任意）
     ...
   vtk.log          # GUI 利用時
 ```
@@ -88,7 +89,7 @@ Qt UI: PROJECT で出力フォルダを指定 / SOURCE で点群を Load /
 rename in tree, visibility toggle, and per-plane quality in the tree.
 Fit 後は右ドックに pyqtgraph の残差 u–v マップと符号付き残差ヒストグラム（µm）を表示。
 Cmd/Ctrl+ドラッグで矩形選択（ハンドルで調整可）。ズーム／パン対応。
-Refit selection でその点だけの平面を追加フィットできる（元の fit と矩形は残る）。
+Refit selection でその点だけの平面を追加し、同じ group の p1, p2, … として保存する（元の平面は残る）。Reduction には G6_p1 として取り込める。
 Clear refit で追加フィットだけ消せる。平面を選ぶと表示が切り替わる。
 The Groups tab mirrors depth controls with navigator buttons.
 VTK 自身のエラー・警告は端末ではなく `<project_dir>/vtk.log` に出る
@@ -107,7 +108,9 @@ cloudet reduce <project> --recipe recipe.json -o geometry.json
 反対側（例: 外向き法線に対する「内側」）は負の距離を使います。
 
 対応する construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
-`intersect_line_plane`, `intersect_normal_plane`。出力 `geometry.json` は
+`intersect_line_plane`, `intersect_normal_plane`, `line_from_point_normal`
+（点を通り、面の法線方向の軸）、`line_from_two_points`（2点を通る軸）、
+`midpoint_line_planes`（直線を2平面で切った線分の中点）。出力 `geometry.json` は
 planes / lines / points と provenance（`scanned` | `offset` | `intersection`）を含みます。
 
 ### 対話的リダクション（GUI）

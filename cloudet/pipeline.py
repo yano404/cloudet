@@ -158,6 +158,33 @@ def _aligned_inplane_basis(
     return u, v, center
 
 
+def _align_inplane_frame(
+    u_src: np.ndarray,
+    v_src: np.ndarray,
+    normal: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Project a source (u, v) frame onto ``normal``, keeping the same sense.
+
+    Chooses 0° vs 180° about the normal so ``u``/``v`` stay closest to the
+    source axes. Does not swap axes (a subset min-rect can do that).
+    """
+    n = np.asarray(normal, dtype=np.float64)
+    n = n / np.linalg.norm(n)
+    u_src = np.asarray(u_src, dtype=np.float64)
+    v_src = np.asarray(v_src, dtype=np.float64)
+    u = u_src - (u_src @ n) * n
+    un = float(np.linalg.norm(u))
+    if un < 1e-12:
+        return _seed_inplane_basis(n)
+    u = u / un
+    v = np.cross(n, u)
+    v = v / np.linalg.norm(v)
+    if (u @ u_src) + (v @ v_src) < 0.0:
+        u = -u
+        v = -v
+    return u, v
+
+
 def residual_uv_map(
     points: np.ndarray,
     plane: Plane,
@@ -166,6 +193,9 @@ def residual_uv_map(
     *,
     return_points: bool = False,
     compute_backend: str = "auto",
+    u_axis: np.ndarray | None = None,
+    v_axis: np.ndarray | None = None,
+    center: np.ndarray | None = None,
 ) -> dict:
     """Bin signed residuals on an in-plane (u, v) grid.
 
@@ -173,6 +203,10 @@ def residual_uv_map(
     a rectangular patch appears axis-aligned in the map (an arbitrary seed
     basis otherwise leaves the face diagonally skewed; PCA alone can still
     tilt when sampling density is uneven).
+
+    Pass ``u_axis`` / ``v_axis`` (and optionally ``center``) to lock the
+    frame to a previous fit instead of recomputing the min-rect. Used so a
+    selection refit keeps the same u–v orientation as the source plane.
 
     Returns arrays suitable for plotting: per-bin mean signed residual
     and counts. Reveals spatial systematics (registration steps between
@@ -193,9 +227,18 @@ def residual_uv_map(
         r_g = None
         r = plane.signed_distances(pts)
 
-    u, v, center, uu, vv = _aligned_inplane_basis(
-        pts, plane.normal, return_coords=True
-    )
+    if u_axis is not None and v_axis is not None:
+        u, v = _align_inplane_frame(u_axis, v_axis, plane.normal)
+        if center is None:
+            center = pts.mean(axis=0)
+        else:
+            center = np.asarray(center, dtype=np.float64)
+        uu = (pts - center) @ u
+        vv = (pts - center) @ v
+    else:
+        u, v, center, uu, vv = _aligned_inplane_basis(
+            pts, plane.normal, return_coords=True
+        )
     n_ax = np.asarray(plane.normal, dtype=np.float64)
     nn = (pts - center) @ n_ax
 

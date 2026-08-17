@@ -20,10 +20,12 @@ from cloudet.geometry import (
     intersect_normal_plane,
     intersect_planes,
     intersect_three_planes,
+    line_from_point_normal,
+    line_from_two_points,
     offset_plane,
 )
 from cloudet.plane import Plane
-from cloudet.project import FittedPlane, load_fitted_plane
+from cloudet.project import FittedPlane, load_fitted_plane, load_group_doc
 
 __all__ = [
     "ReductionResult",
@@ -134,6 +136,15 @@ def _require_line(store: dict[str, _Entity], key: str, *, where: str) -> Line:
     if ent.kind != "line":
         raise TypeError(f"{where}: {key!r} is a {ent.kind}, expected line")
     return ent.value
+
+
+def _require_point(store: dict[str, _Entity], key: str, *, where: str) -> np.ndarray:
+    ent = store.get(key)
+    if ent is None:
+        raise KeyError(f"{where}: unknown id {key!r}")
+    if ent.kind != "point":
+        raise TypeError(f"{where}: {key!r} is a {ent.kind}, expected point")
+    return np.asarray(ent.value, dtype=np.float64).reshape(3)
 
 
 def _put(store: dict[str, _Entity], entity_id: str, kind: str, value: Any, record: dict) -> None:
@@ -250,7 +261,118 @@ def _run_construct_step(store: dict[str, _Entity], step: dict) -> None:
         _put(store, entity_id, "point", pt, record)
         return
 
+    if op == "line_from_point_normal":
+        point_id = step["point"]
+        plane_id = step["plane"]
+        line = line_from_point_normal(
+            _require_point(store, point_id, where=where),
+            _require_plane(store, plane_id, where=where),
+        )
+        _put(
+            store,
+            entity_id,
+            "line",
+            line,
+            {
+                "point": line.point.tolist(),
+                "direction": line.direction.tolist(),
+                "provenance": "constructed",
+                "of": [point_id, plane_id],
+                "op": "line_from_point_normal",
+            },
+        )
+        return
+
+    if op == "line_from_two_points":
+        a = step["a"]
+        b = step["b"]
+        if a == b:
+            raise ValueError(f"{where}: points a and b must differ")
+        line = line_from_two_points(
+            _require_point(store, a, where=where),
+            _require_point(store, b, where=where),
+        )
+        _put(
+            store,
+            entity_id,
+            "line",
+            line,
+            {
+                "point": line.point.tolist(),
+                "direction": line.direction.tolist(),
+                "provenance": "constructed",
+                "of": [a, b],
+                "op": "line_from_two_points",
+            },
+        )
+        return
+
+    if op == "midpoint_line_planes":
+        line_id = step["line"]
+        a = step["a"]
+        b = step["b"]
+        if a == b:
+            raise ValueError(f"{where}: planes a and b must differ")
+        line = _require_line(store, line_id, where=where)
+        pa = _require_plane(store, a, where=where)
+        pb = _require_plane(store, b, where=where)
+        end_a = intersect_line_plane(line, pa)
+        end_b = intersect_line_plane(line, pb)
+        pt = 0.5 * (end_a + end_b)
+        _put(
+            store,
+            entity_id,
+            "point",
+            pt,
+            {
+                "xyz": np.asarray(pt, dtype=np.float64).tolist(),
+                "provenance": "constructed",
+                "of": [line_id, a, b],
+                "op": "midpoint_line_planes",
+                "ends": [
+                    np.asarray(end_a, dtype=np.float64).tolist(),
+                    np.asarray(end_b, dtype=np.float64).tolist(),
+                ],
+            },
+        )
+        return
+
     raise ValueError(f"{where}: unknown op {op!r}")
+
+
+def _anchor_from_project(project_dir: Path, group_id: int | None) -> np.ndarray | None:
+    if group_id is None:
+        return None
+    doc = load_group_doc(project_dir, int(group_id))
+    if not doc:
+        return None
+    clicked = doc.get("clicked")
+    if clicked is None:
+        return None
+    arr = np.asarray(clicked, dtype=np.float64).reshape(-1)
+    if arr.size != 3:
+        return None
+    return arr
+
+
+def _check_recipe(recipe: dict) -> None:
+    if not isinstance(recipe, dict):
+        raise ValueError("recipe must be an object")
+    if "faces" not in recipe and "planes" in recipe:
+        raise ValueError("this looks like geometry.json; load a recipe.json instead")
+    if int(recipe.get("version", 1)) != 1:
+        raise ValueError(f"unsupported recipe version {recipe.get('version')}")
+    if recipe.get("units", "mm") != "mm":
+        raise ValueError(f"recipe units must be mm, got {recipe.get('units')!r}")
+    faces = recipe.get("faces") or {}
+    if not isinstance(faces, dict) or not faces:
+        raise ValueError("recipe.faces must be a non-empty object")
+    construct = recipe.get("construct") or []
+    if not isinstance(construct, list):
+        raise ValueError("recipe.construct must be a list")
+    export_ids = recipe.get("export")
+    if export_ids is not None and not isinstance(export_ids, list):
+        raise ValueError("recipe.export must be a list of ids")
 
 
 def run_reduction(project_dir: str | Path, recipe: dict) -> ReductionResult:
@@ -258,43 +380,13 @@ def run_reduction(project_dir: str | Path, recipe: dict) -> ReductionResult:
     project_dir = Path(project_dir)
     if not project_dir.is_dir():
         raise NotADirectoryError(f"not a directory: {project_dir}")
-
-    faces = recipe.get("faces") or {}
-    if not isinstance(faces, dict) or not faces:
-        raise ValueError("recipe.faces must be a non-empty object")
-
-    store: dict[str, _Entity] = {}
-    for alias, spec in faces.items():
-        plane, record = _bind_face(project_dir, str(alias), spec)
-        _put(store, str(alias), "plane", plane, record)
-
-    for step in recipe.get("construct") or []:
-        _run_construct_step(store, step)
-
+    sess = ReductionSession()
+    sess.apply_recipe(recipe, project_dir=project_dir)
     export_ids = recipe.get("export")
-    if export_ids is None:
-        export_ids = list(store.keys())
-    if not isinstance(export_ids, list):
-        raise ValueError("recipe.export must be a list of ids")
-
-    result = ReductionResult(
-        recipe=_recipe_fingerprint(recipe),
+    return sess.to_result(
         source_project=str(project_dir.resolve()),
-        exported=[str(x) for x in export_ids],
+        export=None if export_ids is None else [str(x) for x in export_ids],
     )
-    unknown = set(result.exported) - set(store)
-    if unknown:
-        raise KeyError(f"recipe.export references unknown ids: {sorted(unknown)}")
-
-    for eid, ent in store.items():
-        if ent.kind == "plane":
-            result.planes[eid] = ent.record
-        elif ent.kind == "line":
-            result.lines[eid] = ent.record
-        elif ent.kind == "point":
-            result.points[eid] = ent.record
-
-    return result
 
 
 def write_geometry_json(path: str | Path, result: ReductionResult) -> Path:
@@ -313,6 +405,33 @@ def write_recipe_json(path: str | Path, recipe: dict) -> Path:
     return path
 
 
+_REF_KEYS = ("id", "of", "a", "b", "c", "line", "plane", "point", "src", "dst")
+
+
+def _rewrite_id_refs(obj: dict, old_id: str, new_id: str) -> None:
+    """Replace ``old_id`` with ``new_id`` in construct/record id fields."""
+    for key in _REF_KEYS:
+        val = obj.get(key)
+        if val == old_id:
+            obj[key] = new_id
+        elif isinstance(val, list):
+            obj[key] = [new_id if x == old_id else x for x in val]
+
+
+def _step_operand_ids(step: dict) -> set[str]:
+    """Ids this construct step reads (not its own result id)."""
+    out: set[str] = set()
+    for key in _REF_KEYS:
+        if key == "id":
+            continue
+        val = step.get(key)
+        if isinstance(val, str) and val:
+            out.add(val)
+        elif isinstance(val, list):
+            out.update(str(x) for x in val if x)
+    return out
+
+
 @dataclass
 class ReductionSession:
     """Interactive reduction state: scanned faces + construct history.
@@ -328,6 +447,18 @@ class ReductionSession:
     visible: dict[str, bool] = field(default_factory=dict)
     # Optional draw hints: entity id → world point used to centre overlays.
     anchors: dict[str, np.ndarray] = field(default_factory=dict)
+    # Overlay size (mm): plane patch side, line half-length, point radius.
+    display_mm: dict[str, float] = field(default_factory=dict)
+    # Line tube diameter overrides (mm). Length stays in display_mm.
+    display_width_mm: dict[str, float] = field(default_factory=dict)
+    display_default_mm: dict[str, float] = field(
+        default_factory=lambda: {
+            "plane": 200.0,
+            "line": 300.0,
+            "point": 8.0,
+            "line_diameter": 1.0,
+        }
+    )
 
     def clear(self) -> None:
         self._store.clear()
@@ -335,6 +466,14 @@ class ReductionSession:
         self._construct.clear()
         self.visible.clear()
         self.anchors.clear()
+        self.display_mm.clear()
+        self.display_width_mm.clear()
+        self.display_default_mm = {
+            "plane": 200.0,
+            "line": 300.0,
+            "point": 8.0,
+            "line_diameter": 1.0,
+        }
 
     def ids(self, *, kind: str | None = None) -> list[str]:
         if kind is None:
@@ -426,17 +565,180 @@ class ReductionSession:
         _run_construct_step(self._store, step)
         self._construct.append(step)
         self.visible[entity_id] = True
-        # Inherit anchor from operands when possible.
+        if step.get("op") == "line_from_two_points":
+            pa = self.point(step["a"])
+            pb = self.point(step["b"])
+            self.anchors[entity_id] = 0.5 * (pa + pb)
+            half = 0.5 * float(np.linalg.norm(pb - pa))
+            default = float(self.display_default_mm.get("line", 300.0))
+            if half > default:
+                self.set_overlay_mm(entity_id, half)
+            return entity_id
+        kind = self.kind_of(entity_id)
+        if kind == "point":
+            self.anchors[entity_id] = self.point(entity_id)
+            return entity_id
+        # Inherit overlay centre from an operand when possible.
         of = step.get("of") or step.get("a") or step.get("src") or step.get("line")
-        if of in self.anchors and entity_id not in self.anchors:
+        if of in self.anchors:
             self.anchors[entity_id] = self.anchors[of].copy()
-        elif step.get("op") == "intersect_line_plane":
-            self.anchors[entity_id] = self.point(entity_id)
-        elif step.get("op") in ("intersect_three_planes", "intersect_normal_plane"):
-            self.anchors[entity_id] = self.point(entity_id)
-        elif step.get("op") == "intersect_planes":
+        elif kind == "line":
             self.anchors[entity_id] = self.line(entity_id).point.copy()
         return entity_id
+
+    def apply_recipe(
+        self,
+        recipe: dict,
+        *,
+        project_dir: str | Path | None = None,
+        bind_face=None,
+    ) -> None:
+        """Replace this session by executing ``recipe``.
+
+        ``bind_face(alias, spec)`` may return ``(plane, record, anchor)`` or
+        ``None`` to fall back to ``project_dir`` (saved ``groups/``).
+        """
+        _check_recipe(recipe)
+        if bind_face is None and project_dir is None:
+            raise ValueError("apply_recipe needs project_dir or bind_face")
+        project_path = None if project_dir is None else Path(project_dir)
+        if project_path is not None and not project_path.is_dir():
+            raise NotADirectoryError(f"not a directory: {project_path}")
+
+        target = ReductionSession()
+        for alias, spec in (recipe.get("faces") or {}).items():
+            alias = str(alias)
+            resolved = None if bind_face is None else bind_face(alias, spec)
+            if resolved is None:
+                if project_path is None:
+                    raise ValueError(f"faces.{alias}: cannot resolve (no project_dir)")
+                plane, record = _bind_face(project_path, alias, spec)
+                anchor = _anchor_from_project(project_path, record.get("group_id"))
+            else:
+                plane, record, anchor = resolved
+            target.bind_scanned(
+                alias,
+                plane,
+                group_name=str(record.get("group_name", alias)),
+                group_id=int(record.get("group_id", 0)),
+                plane_index=int(record.get("plane_index", 0)),
+                quality=record.get("quality") or {},
+                anchor=anchor,
+            )
+            target._face_specs[alias] = dict(spec)
+        for step in recipe.get("construct") or []:
+            target.apply_step(dict(step))
+        self.clear()
+        self._store.update(target._store)
+        self._face_specs.update(target._face_specs)
+        self._construct.extend(target._construct)
+        self.visible.update(target.visible)
+        self.anchors.update({k: np.asarray(v, dtype=np.float64).copy() for k, v in target.anchors.items()})
+
+    @classmethod
+    def from_recipe(
+        cls,
+        recipe: dict,
+        *,
+        project_dir: str | Path | None = None,
+        bind_face=None,
+    ) -> "ReductionSession":
+        sess = cls()
+        sess.apply_recipe(recipe, project_dir=project_dir, bind_face=bind_face)
+        return sess
+
+    def rename(self, old_id: str, new_id: str) -> str:
+        """Rename an entity and rewrite every construct/record reference."""
+        old_id = str(old_id)
+        new_id = str(new_id).strip()
+        if old_id not in self._store:
+            raise KeyError(f"unknown id {old_id!r}")
+        if not new_id:
+            raise ValueError("id must not be empty")
+        if any(ch.isspace() for ch in new_id):
+            raise ValueError("id must not contain whitespace")
+        if new_id == old_id:
+            return old_id
+        if new_id in self._store:
+            raise ValueError(f"id {new_id!r} already exists")
+        self._store[new_id] = self._store.pop(old_id)
+        if old_id in self._face_specs:
+            self._face_specs[new_id] = self._face_specs.pop(old_id)
+        if old_id in self.visible:
+            self.visible[new_id] = self.visible.pop(old_id)
+        if old_id in self.anchors:
+            self.anchors[new_id] = self.anchors.pop(old_id)
+        if old_id in self.display_mm:
+            self.display_mm[new_id] = self.display_mm.pop(old_id)
+        if old_id in self.display_width_mm:
+            self.display_width_mm[new_id] = self.display_width_mm.pop(old_id)
+        for step in self._construct:
+            _rewrite_id_refs(step, old_id, new_id)
+        for ent in self._store.values():
+            _rewrite_id_refs(ent.record, old_id, new_id)
+        return new_id
+
+    def dependents(self, entity_id: str) -> list[str]:
+        """Construct result ids that transitively use ``entity_id``."""
+        entity_id = str(entity_id)
+        doomed: set[str] = {entity_id}
+        changed = True
+        while changed:
+            changed = False
+            for step in self._construct:
+                sid = str(step.get("id", ""))
+                if not sid or sid in doomed:
+                    continue
+                if _step_operand_ids(step) & doomed:
+                    doomed.add(sid)
+                    changed = True
+        return [sid for sid in self.ids() if sid in doomed and sid != entity_id]
+
+    def remove(self, entity_id: str) -> list[str]:
+        """Delete ``entity_id`` and anything built from it. Returns removed ids."""
+        entity_id = str(entity_id)
+        if entity_id not in self._store:
+            raise KeyError(f"unknown id {entity_id!r}")
+        doomed = {entity_id, *self.dependents(entity_id)}
+        removed = [eid for eid in self.ids() if eid in doomed]
+        self._construct = [
+            s for s in self._construct if str(s.get("id", "")) not in doomed
+        ]
+        for eid in removed:
+            self._store.pop(eid, None)
+            self._face_specs.pop(eid, None)
+            self.visible.pop(eid, None)
+            self.anchors.pop(eid, None)
+            self.display_mm.pop(eid, None)
+            self.display_width_mm.pop(eid, None)
+        return removed
+
+    def overlay_mm(self, entity_id: str) -> float:
+        """Display size for one entity (override or kind default)."""
+        eid = str(entity_id)
+        if eid in self.display_mm:
+            return float(self.display_mm[eid])
+        kind = self.kind_of(eid)
+        return float(self.display_default_mm.get(kind, 200.0))
+
+    def set_overlay_mm(self, entity_id: str, size_mm: float) -> None:
+        self.display_mm[str(entity_id)] = float(size_mm)
+
+    def clear_overlay_mm(self, entity_id: str) -> None:
+        self.display_mm.pop(str(entity_id), None)
+
+    def overlay_width_mm(self, entity_id: str) -> float:
+        """Line tube diameter (mm): per-entity override or default."""
+        eid = str(entity_id)
+        if eid in self.display_width_mm:
+            return float(self.display_width_mm[eid])
+        return float(self.display_default_mm.get("line_diameter", 1.0))
+
+    def set_overlay_width_mm(self, entity_id: str, diameter_mm: float) -> None:
+        self.display_width_mm[str(entity_id)] = float(diameter_mm)
+
+    def clear_overlay_width_mm(self, entity_id: str) -> None:
+        self.display_width_mm.pop(str(entity_id), None)
 
     def offset(self, entity_id: str, of: str, distance_mm: float) -> str:
         return self.apply_step({
@@ -488,6 +790,31 @@ class ReductionSession:
             step["through"] = np.asarray(through, dtype=np.float64).reshape(3).tolist()
         return self.apply_step(step)
 
+    def line_from_point_normal(self, entity_id: str, point: str, plane: str) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "line_from_point_normal",
+            "point": point,
+            "plane": plane,
+        })
+
+    def line_from_two_points(self, entity_id: str, a: str, b: str) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "line_from_two_points",
+            "a": a,
+            "b": b,
+        })
+
+    def midpoint_line_planes(self, entity_id: str, line: str, a: str, b: str) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "midpoint_line_planes",
+            "line": line,
+            "a": a,
+            "b": b,
+        })
+
     def unique_id(self, prefix: str) -> str:
         n = 1
         while f"{prefix}_{n}" in self._store:
@@ -516,8 +843,11 @@ class ReductionSession:
         result = ReductionResult(
             recipe=_recipe_fingerprint(recipe),
             source_project=source_project,
-            exported=list(recipe["export"]),
+            exported=[str(x) for x in recipe["export"]],
         )
+        unknown = set(result.exported) - set(self._store)
+        if unknown:
+            raise KeyError(f"recipe.export references unknown ids: {sorted(unknown)}")
         for eid, ent in self._store.items():
             if ent.kind == "plane":
                 result.planes[eid] = ent.record

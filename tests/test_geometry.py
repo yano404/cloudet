@@ -9,6 +9,9 @@ from cloudet.geometry import (
     intersect_normal_plane,
     intersect_planes,
     intersect_three_planes,
+    line_from_point_normal,
+    line_from_two_points,
+    midpoint_line_planes,
     offset_plane,
 )
 from cloudet.plane import Plane
@@ -128,6 +131,46 @@ def test_intersect_normal_plane_explicit_through():
     dst = Plane(np.array([1.0, 0.0, 1.0]), -10.0)  # x + z = 10
     pt = intersect_normal_plane(src, dst, through=np.array([3.0, 4.0, 0.0]))
     assert np.allclose(pt, [3.0, 4.0, 7.0])  # 3 + z = 10 → z = 7
+
+
+def test_line_from_point_normal():
+    plane = Plane(np.array([0.0, 0.0, 1.0]), -100.0)  # z = 100
+    through = np.array([12.0, -3.0, 50.0])
+    line = line_from_point_normal(through, plane)
+    assert np.allclose(line.point, through)
+    assert np.allclose(np.abs(line.direction), [0.0, 0.0, 1.0])
+    # Same direction from a raw vector.
+    line2 = line_from_point_normal(through, np.array([0.0, 0.0, 2.0]))
+    assert np.allclose(np.abs(line2.direction), [0.0, 0.0, 1.0])
+
+
+def test_line_from_two_points():
+    a = np.array([10.0, 20.0, 0.0])
+    b = np.array([10.0, 20.0, 50.0])
+    line = line_from_two_points(a, b)
+    assert np.allclose(line.point, a)
+    assert np.allclose(np.abs(line.direction), [0.0, 0.0, 1.0])
+    # Both points lie on the line.
+    t = (b - line.point) @ line.direction
+    assert np.allclose(line.point_at(t), b)
+    with pytest.raises(ValueError, match="coincide"):
+        line_from_two_points(a, a)
+
+
+def test_midpoint_line_planes():
+    line = Line(np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]))
+    z0 = Plane(np.array([0.0, 0.0, 1.0]), 0.0)     # z = 0
+    z10 = Plane(np.array([0.0, 0.0, 1.0]), -10.0)  # z = 10
+    mid = midpoint_line_planes(line, z0, z10)
+    assert np.allclose(mid, [0.0, 0.0, 5.0])
+    # Order of planes does not matter.
+    assert np.allclose(midpoint_line_planes(line, z10, z0), mid)
+    with pytest.raises(ValueError, match="parallel"):
+        midpoint_line_planes(
+            line,
+            Plane(np.array([1.0, 0.0, 0.0]), 0.0),
+            z10,
+        )
 
 
 def test_plane_patch_and_line_segment_helpers():

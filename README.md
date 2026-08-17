@@ -78,6 +78,7 @@ Project layout:
   settings.json
   groups/
     group_000.ply / .json / _indices.npy
+    group_000_p0_indices.npy   # inliers used to fit p0 (optional)
     ...
   vtk.log          # when using the GUI
 ```
@@ -88,7 +89,7 @@ Qt UI: set the output folder under PROJECT / Load the cloud under SOURCE /
 rename in the tree, toggle visibility, and see per-plane quality in the tree.
 After Fit, the right dock shows a pyqtgraph residual u–v map and a signed-residual histogram (µm).
 Cmd/Ctrl+drag for rectangle selection (handles for adjustment). Zoom / pan supported.
-Refit selection fits an extra plane on those points only (original fit and rectangle remain).
+Refit selection fits an extra plane on those points and adds it as p1, p2, … on the same group (original plane kept). Import that plane into Reduction as G6_p1.
 Clear refit removes only the extra fit. Selecting a plane switches the display.
 The Groups tab mirrors depth controls with navigator buttons.
 VTK’s own errors and warnings go to `<project_dir>/vtk.log` instead of the terminal
@@ -130,7 +131,10 @@ Example recipe (tracker walls → beam axis ∩ target):
 ```
 
 Supported construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
-`intersect_line_plane`, `intersect_normal_plane`. Output `geometry.json` lists
+`intersect_line_plane`, `intersect_normal_plane`, `line_from_point_normal`
+(axis through a point along a plane normal), `line_from_two_points`,
+`midpoint_line_planes` (midpoint of the segment cut by two planes).
+Output `geometry.json` lists
 planes / lines / points with provenance (`scanned` | `offset` | `intersection`).
 
 ### Interactive reduction (GUI)

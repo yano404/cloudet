@@ -213,3 +213,257 @@ def test_reduction_session_records_recipe():
     result = sess.to_result(source_project="/tmp/proj")
     assert np.allclose(result.points["beam_on_target"]["xyz"], [0.0, 0.0, 100.0])
     assert sess.unique_id("offset").startswith("offset_")
+
+
+def test_reduction_session_line_from_point_normal():
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession()
+    wall = Plane(np.array([1.0, 0.0, 0.0]), 50.0)   # x = -50
+    front = Plane(np.array([0.0, 1.0, 0.0]), 20.0)  # y = -20
+    target = Plane(np.array([0.0, 0.0, 1.0]), -100.0)
+    sess.bind_scanned("wall", wall, group_name="G0", group_id=0)
+    sess.bind_scanned("front", front, group_name="G1", group_id=1)
+    sess.bind_scanned("target", target, group_name="G2", group_id=2)
+    sess.intersect_three_planes("corner", "wall", "front", "target")
+    sess.line_from_point_normal("n_axis", "corner", "target")
+
+    line = sess.line("n_axis")
+    assert np.allclose(line.point, sess.point("corner"))
+    assert np.allclose(np.abs(line.direction), [0.0, 0.0, 1.0])
+    recipe = sess.to_recipe()
+    assert recipe["construct"][-1]["op"] == "line_from_point_normal"
+    assert recipe["construct"][-1]["point"] == "corner"
+    assert recipe["construct"][-1]["plane"] == "target"
+
+
+def test_reduction_session_line_from_two_points():
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession()
+    wall = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
+    front = Plane(np.array([0.0, 1.0, 0.0]), 20.0)
+    target = Plane(np.array([0.0, 0.0, 1.0]), -100.0)
+    sess.bind_scanned("wall", wall, group_name="G0", group_id=0)
+    sess.bind_scanned("front", front, group_name="G1", group_id=1)
+    sess.bind_scanned("target", target, group_name="G2", group_id=2)
+    sess.intersect_three_planes("p0", "wall", "front", "target")
+    sess.offset("target_out", "target", 80.0)
+    sess.intersect_three_planes("p1", "wall", "front", "target_out")
+    sess.line_from_two_points("chord", "p0", "p1")
+
+    line = sess.line("chord")
+    assert np.allclose(np.abs(line.direction), [0.0, 0.0, 1.0])
+    assert np.allclose(sess.anchors["chord"], 0.5 * (sess.point("p0") + sess.point("p1")))
+    recipe = sess.to_recipe()
+    step = recipe["construct"][-1]
+    assert step["op"] == "line_from_two_points"
+    assert step["a"] == "p0"
+    assert step["b"] == "p1"
+    sess.rename("p0", "origin")
+    live = [s for s in sess.to_recipe()["construct"] if s["id"] == "chord"][0]
+    assert live["a"] == "origin"
+    with pytest.raises(ValueError, match="must differ"):
+        sess.line_from_two_points("bad", "p1", "p1")
+
+
+def test_reduction_session_midpoint_line_planes():
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession()
+    left = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
+    front = Plane(np.array([0.0, 1.0, 0.0]), 20.0)
+    z0 = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
+    z10 = Plane(np.array([0.0, 0.0, 1.0]), -10.0)
+    sess.bind_scanned("left", left, group_name="G0", group_id=0)
+    sess.bind_scanned("front", front, group_name="G1", group_id=1)
+    sess.bind_scanned("z0", z0, group_name="G2", group_id=2)
+    sess.bind_scanned("z10", z10, group_name="G3", group_id=3)
+    sess.intersect_planes("axis", "left", "front")
+    sess.midpoint_line_planes("mid", "axis", "z0", "z10")
+    assert np.allclose(sess.point("mid"), [-50.0, -20.0, 5.0])
+    assert np.allclose(sess.anchors["mid"], sess.point("mid"))
+    rec = sess.record_of("mid")
+    assert rec["op"] == "midpoint_line_planes"
+    assert np.allclose(rec["ends"][0][2], 0.0) or np.allclose(rec["ends"][1][2], 0.0)
+    recipe = sess.to_recipe()
+    step = recipe["construct"][-1]
+    assert step["op"] == "midpoint_line_planes"
+    assert step["line"] == "axis"
+    sess.rename("z0", "near")
+    live = [s for s in sess.to_recipe()["construct"] if s["id"] == "mid"][0]
+    assert live["a"] == "near"
+    with pytest.raises(ValueError, match="must differ"):
+        sess.midpoint_line_planes("bad", "axis", "z10", "z10")
+
+
+def test_reduction_session_rename_and_remove():
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession()
+    left = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
+    front = Plane(np.array([0.0, 1.0, 0.0]), 20.0)
+    target = Plane(np.array([0.0, 0.0, 1.0]), -100.0)
+    sess.bind_scanned("tracker_left", left, group_name="G0", group_id=0)
+    sess.bind_scanned("tracker_front", front, group_name="G1", group_id=1)
+    sess.bind_scanned("target", target, group_name="G2", group_id=2)
+    sess.offset("left_in", "tracker_left", 50.0)
+    sess.offset("front_in", "tracker_front", 20.0)
+    sess.intersect_planes("beam_axis", "left_in", "front_in")
+    sess.intersect_line_plane("hit", "beam_axis", "target")
+
+    sess.rename("tracker_left", "left_wall")
+    assert "left_wall" in sess.ids()
+    assert "tracker_left" not in sess.ids()
+    recipe = sess.to_recipe()
+    assert "left_wall" in recipe["faces"]
+    assert recipe["construct"][0]["of"] == "left_wall"
+
+    sess.rename("beam_axis", "axis")
+    live = [s for s in sess.to_recipe()["construct"] if s["id"] == "hit"][0]
+    assert live["line"] == "axis"
+
+    gone = sess.remove("left_in")
+    assert "left_in" in gone
+    assert "axis" in gone
+    assert "hit" in gone
+    assert "front_in" in sess.ids()
+    assert "left_wall" in sess.ids()
+    with pytest.raises(ValueError, match="already exists"):
+        sess.rename("target", "front_in")
+
+
+def test_overlay_mm_survives_rename_and_drops_on_remove():
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession()
+    left = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
+    sess.bind_scanned("tracker_left", left, group_name="G0", group_id=0)
+    assert sess.overlay_mm("tracker_left") == 200.0
+    sess.set_overlay_mm("tracker_left", 450.0)
+    assert sess.overlay_mm("tracker_left") == 450.0
+    sess.rename("tracker_left", "left_wall")
+    assert "tracker_left" not in sess.display_mm
+    assert sess.overlay_mm("left_wall") == 450.0
+    recipe = sess.to_recipe()
+    assert "display_mm" not in recipe
+    sess.remove("left_wall")
+    assert sess.display_mm == {}
+    sess.bind_scanned("again", left, group_name="G0", group_id=0)
+    sess.display_default_mm["plane"] = 80.0
+    assert sess.overlay_mm("again") == 80.0
+    sess.set_overlay_mm("again", 120.0)
+    sess.clear_overlay_mm("again")
+    assert sess.overlay_mm("again") == 80.0
+    front = Plane(np.array([0.0, 1.0, 0.0]), 20.0)
+    sess.bind_scanned("front", front, group_name="G1", group_id=1)
+    sess.intersect_planes("axis", "again", "front")
+    assert sess.overlay_width_mm("axis") == 1.0
+    sess.set_overlay_width_mm("axis", 2.5)
+    sess.rename("axis", "beam")
+    assert sess.overlay_width_mm("beam") == 2.5
+    sess.remove("beam")
+    assert "beam" not in sess.display_width_mm
+
+
+def _beam_recipe():
+    return {
+        "version": 1,
+        "units": "mm",
+        "faces": {
+            "tracker_left": {"from": "group", "name": "tracker_left"},
+            "tracker_front": {"from": "group", "name": "tracker_front"},
+            "target": {"from": "group", "name": "target"},
+        },
+        "construct": [
+            {"id": "left_in", "op": "offset", "of": "tracker_left", "distance_mm": 50.0},
+            {"id": "front_in", "op": "offset", "of": "tracker_front", "distance_mm": 20.0},
+            {"id": "beam_axis", "op": "intersect_planes", "a": "left_in", "b": "front_in"},
+            {
+                "id": "beam_on_target",
+                "op": "intersect_line_plane",
+                "line": "beam_axis",
+                "plane": "target",
+            },
+        ],
+        "export": ["beam_axis", "beam_on_target"],
+    }
+
+
+def test_session_apply_recipe_roundtrip(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    project = _make_project(tmp_path)
+    recipe = _beam_recipe()
+    sess = ReductionSession.from_recipe(recipe, project_dir=project)
+    assert np.allclose(sess.point("beam_on_target"), [0.0, 0.0, 100.0])
+    assert np.allclose(np.abs(sess.line("beam_axis").direction), [0.0, 0.0, 1.0])
+    assert "tracker_left" in sess.anchors
+    assert np.allclose(sess.anchors["tracker_left"], [0.0, 0.0, 0.0])
+
+    out = sess.to_recipe()
+    assert out["faces"]["tracker_left"]["name"] == "tracker_left"
+    assert out["construct"][0]["op"] == "offset"
+    assert "left_in" in out["export"]
+
+    sess2 = ReductionSession.from_recipe(out, project_dir=project)
+    assert np.allclose(sess2.point("beam_on_target"), sess.point("beam_on_target"))
+    assert sess2.ids() == sess.ids()
+
+
+def test_session_apply_recipe_keeps_existing_on_failure(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    project = _make_project(tmp_path)
+    sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
+    before = list(sess.ids())
+    bad = {
+        "version": 1,
+        "units": "mm",
+        "faces": {"target": {"from": "group", "name": "target"}},
+        "construct": [{"id": "x", "op": "nope"}],
+    }
+    with pytest.raises(ValueError, match="unknown op"):
+        sess.apply_recipe(bad, project_dir=project)
+    assert sess.ids() == before
+
+
+def test_session_apply_recipe_missing_face(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    project = _make_project(tmp_path)
+    recipe = {
+        "version": 1,
+        "units": "mm",
+        "faces": {"nope": {"from": "group", "name": "does_not_exist"}},
+    }
+    with pytest.raises(KeyError, match="does_not_exist"):
+        ReductionSession.from_recipe(recipe, project_dir=project)
+
+
+def test_apply_recipe_rejects_geometry_json():
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession()
+    with pytest.raises(ValueError, match="geometry.json"):
+        sess.apply_recipe(
+            {"version": 1, "units": "mm", "planes": {"a": {}}},
+            project_dir=".",
+        )
+
+
+def test_apply_recipe_bind_face_fallback(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    project = _make_project(tmp_path)
+    seen: list[str] = []
+
+    def bind(alias, spec):
+        seen.append(alias)
+        return None
+
+    sess = ReductionSession.from_recipe(
+        _beam_recipe(), project_dir=project, bind_face=bind
+    )
+    assert seen == ["tracker_left", "tracker_front", "target"]
+    assert "beam_on_target" in sess.ids()
