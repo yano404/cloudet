@@ -10,7 +10,7 @@ Tool for reducing detector positions and relative geometry from 3D point clouds 
   Growth starts at the click seed and expands in-plane; extent is set by connectivity (not by a radius cutoff).
   The seed normal is assumed noisy: accumulate → refit → re-accumulate until convergence
   (full-face recovery from a ~20° tilted seed has been verified).
-  Separating nearby parallel faces is an exception mode (GUI “Split into parallel planes”).
+  Separating nearby parallel faces is an exception mode (GUI “Extract multiple planes (p0, p1, …)”).
 - The compute core (`cloudet/`) depends only on NumPy, is fully decoupled from the GUI, and is covered by unit tests.
 - RANSAC is used only to select points; the final plane is always an orthogonal least-squares fit (`robust_fit_plane`: fit → strict reselection → iterate to convergence).
 - Statistics are reported for both inliers (truncated) and all points, together with a truncation-robust `mad_sigma`.

@@ -568,11 +568,12 @@ class PickerWindow(QMainWindow):
             "turn off for faster picking, then press Fit when ready."
         )
         p_lay.addWidget(self.autofit_cb)
-        self.multiplane_cb = QCheckBox("Split into parallel planes")
+        self.multiplane_cb = QCheckBox("Extract multiple planes (p0, p1, …)")
         self.multiplane_cb.setChecked(False)
         self.multiplane_cb.setToolTip(
-            "Advanced mode: split one picked group into multiple near-parallel "
-            "planes. Keep off for the default one-click one-face behavior."
+            "Split one picked group into several planes (near-parallel faces). "
+            "Each plane appears as p0, p1, … under the group and can be imported "
+            "into Reduction as G6_p1, etc. Keep off for one-click one-face."
         )
         p_lay.addWidget(self.multiplane_cb)
 
@@ -1502,7 +1503,8 @@ class PickerWindow(QMainWindow):
         self.rd_bind_combo = _entity_combo()
         bind_form.addRow("Groups plane", self.rd_bind_combo)
         self.rd_bind_hint = QLabel(
-            "Choose a fitted Groups plane to import into Reduction."
+            "Choose a fitted Groups plane (G6/p0, G6/p1, …). "
+            "Imported as G6_p0, G6_p1 unless you set New id."
         )
         self.rd_bind_hint.setObjectName("muted")
         self.rd_bind_hint.setWordWrap(True)
@@ -1910,7 +1912,7 @@ class PickerWindow(QMainWindow):
             for p in planes:
                 pi = int(p.get("plane_index", 0))
                 key = f"{g['id']}:{pi}"
-                label = f"{g['name']} / p{pi}"
+                label = f"{g['name']}/p{pi}"
                 combo.addItem(label, key)
         if keep:
             idx = combo.findData(keep)
@@ -2163,7 +2165,7 @@ class PickerWindow(QMainWindow):
         p = next((x for x in planes if int(x.get("plane_index", 0)) == pi), None)
         if p is None:
             raise ValueError(f"no plane_index={pi} on {g['name']}")
-        alias = self.rd_id_edit.text().strip() or str(g["name"])
+        alias = self.rd_id_edit.text().strip() or f"{g['name']}_p{pi}"
         plane = Plane.from_array(p["abcd"])
         quality = {
             "status": p.get("status"),
@@ -4501,10 +4503,15 @@ class PickerWindow(QMainWindow):
                 for p in g["fit"]["planes"]:
                     abcd = p["abcd"]
                     label = (
-                        f"p{p['plane_index']}  "
+                        f"p{p['plane_index']}"
+                        if len(g["fit"]["planes"]) == 1
+                        else f"p{p['plane_index']}"
+                    )
+                    nxyz = (
                         f"n=({abcd[0]:+.4f}, {abcd[1]:+.4f}, {abcd[2]:+.4f})  "
                         f"d={abcd[3]:+.3f}"
                     )
+                    child_label = f"{label}  {nxyz}"
                     qflag = "PASS" if p["status"] == "ok" else "WARN"
                     quality = (
                         f"{qflag}  {p['mad_sigma_mm']*1e3:.0f}um"
@@ -4513,7 +4520,7 @@ class PickerWindow(QMainWindow):
                     rf = p.get("selection_refit")
                     if rf is not None:
                         quality += f"  ·  refit {rf['mad_sigma_mm']*1e3:.0f}um"
-                    child = QTreeWidgetItem([label, f"{p['n_points']:,}", quality])
+                    child = QTreeWidgetItem([child_label, f"{p['n_points']:,}", quality])
                     child.setData(0, Qt.UserRole, ("plane", g["id"], p["plane_index"]))
                     child.setFlags(child.flags() & ~Qt.ItemIsUserCheckable)
                     if qflag == "PASS":
