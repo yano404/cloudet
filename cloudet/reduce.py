@@ -382,20 +382,62 @@ def _check_recipe(recipe: dict) -> None:
     export_ids = recipe.get("export")
     if export_ids is not None and not isinstance(export_ids, list):
         raise ValueError("recipe.export must be a list of ids")
+    if "frame" in recipe and recipe["frame"] is not None:
+        _parse_recipe_frame(recipe["frame"])
+
+
+def _parse_recipe_frame(spec) -> dict | None:
+    """Optional Align Z metadata: ``{axis, origin, flip_z}``. Not a construct step."""
+    if spec is None:
+        return None
+    if not isinstance(spec, dict):
+        raise ValueError("recipe.frame must be an object")
+    axis = spec.get("axis")
+    origin = spec.get("origin")
+    if not axis or not origin:
+        raise ValueError("recipe.frame needs axis and origin ids")
+    return {
+        "axis": str(axis),
+        "origin": str(origin),
+        "flip_z": bool(spec.get("flip_z", False)),
+    }
+
+
+def _validate_frame_spec(session: "ReductionSession", spec: dict) -> None:
+    axis = spec["axis"]
+    origin = spec["origin"]
+    if axis not in session._store:
+        raise KeyError(f"recipe.frame.axis: unknown id {axis!r}")
+    if origin not in session._store:
+        raise KeyError(f"recipe.frame.origin: unknown id {origin!r}")
+    if session.kind_of(axis) != "line":
+        raise ValueError(f"recipe.frame.axis {axis!r} must be a line")
+    if session.kind_of(origin) != "point":
+        raise ValueError(f"recipe.frame.origin {origin!r} must be a point")
 
 
 def run_reduction(project_dir: str | Path, recipe: dict) -> ReductionResult:
-    """Execute a reduction recipe against a saved project."""
+    """Execute a reduction recipe against a saved project.
+
+    Survey coordinates stay at the top level. If the recipe has ``frame``,
+    an ``aligned`` copy is attached (same layout as GUI export with Align Z).
+    """
     project_dir = Path(project_dir)
     if not project_dir.is_dir():
         raise NotADirectoryError(f"not a directory: {project_dir}")
     sess = ReductionSession()
     sess.apply_recipe(recipe, project_dir=project_dir)
     export_ids = recipe.get("export")
-    return sess.to_result(
+    result = sess.to_result(
         source_project=str(project_dir.resolve()),
         export=None if export_ids is None else [str(x) for x in export_ids],
     )
+    frame = sess.rigid_frame()
+    if frame is not None:
+        from cloudet.frame import with_aligned_copy
+
+        result = with_aligned_copy(result, frame)
+    return result
 
 
 def write_geometry_json(path: str | Path, result: ReductionResult) -> Path:
@@ -468,6 +510,8 @@ class ReductionSession:
             "line_diameter": 1.0,
         }
     )
+    # Optional Align Z pick: {axis, origin, flip_z}. Display pose is not stored.
+    frame_spec: dict | None = None
 
     def clear(self) -> None:
         self._store.clear()
@@ -483,6 +527,7 @@ class ReductionSession:
             "point": 8.0,
             "line_diameter": 1.0,
         }
+        self.frame_spec = None
 
     def ids(self, *, kind: str | None = None) -> list[str]:
         if kind is None:
@@ -637,12 +682,16 @@ class ReductionSession:
             target._face_specs[alias] = dict(spec)
         for step in recipe.get("construct") or []:
             target.apply_step(dict(step))
+        frame_spec = _parse_recipe_frame(recipe.get("frame"))
+        if frame_spec is not None:
+            _validate_frame_spec(target, frame_spec)
         self.clear()
         self._store.update(target._store)
         self._face_specs.update(target._face_specs)
         self._construct.extend(target._construct)
         self.visible.update(target.visible)
         self.anchors.update({k: np.asarray(v, dtype=np.float64).copy() for k, v in target.anchors.items()})
+        self.frame_spec = frame_spec
 
     @classmethod
     def from_recipe(
@@ -685,6 +734,11 @@ class ReductionSession:
             _rewrite_id_refs(step, old_id, new_id)
         for ent in self._store.values():
             _rewrite_id_refs(ent.record, old_id, new_id)
+        if self.frame_spec:
+            if self.frame_spec.get("axis") == old_id:
+                self.frame_spec["axis"] = new_id
+            if self.frame_spec.get("origin") == old_id:
+                self.frame_spec["origin"] = new_id
         return new_id
 
     def dependents(self, entity_id: str) -> list[str]:
@@ -720,6 +774,10 @@ class ReductionSession:
             self.anchors.pop(eid, None)
             self.display_mm.pop(eid, None)
             self.display_width_mm.pop(eid, None)
+        if self.frame_spec:
+            refs = {self.frame_spec.get("axis"), self.frame_spec.get("origin")}
+            if doomed & refs:
+                self.frame_spec = None
         return removed
 
     def overlay_mm(self, entity_id: str) -> float:
@@ -834,13 +892,33 @@ class ReductionSession:
         if not self._face_specs:
             raise ValueError("no scanned faces bound")
         ids = list(self._store.keys()) if export is None else list(export)
-        return {
+        out = {
             "version": 1,
             "units": "mm",
             "faces": dict(self._face_specs),
             "construct": [dict(s) for s in self._construct],
             "export": ids,
         }
+        if self.frame_spec:
+            out["frame"] = dict(self.frame_spec)
+        return out
+
+    def rigid_frame(self):
+        """Align Z pose from ``frame_spec``, or ``None`` if unset."""
+        spec = self.frame_spec
+        if not spec:
+            return None
+        from cloudet.frame import RigidFrame
+
+        line = self.line(spec["axis"])
+        origin = self.point(spec["origin"])
+        return RigidFrame.align_z(
+            line.direction,
+            origin,
+            flip_z=bool(spec.get("flip_z", False)),
+            axis_id=spec["axis"],
+            origin_id=spec["origin"],
+        )
 
     def to_result(
         self,

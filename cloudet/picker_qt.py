@@ -1539,7 +1539,7 @@ class PickerWindow(QMainWindow):
         def _mini_card(heading: str, *, expanded: bool = True) -> tuple[QFrame, QVBoxLayout]:
             return _make_collapsible_card(heading, expanded=expanded)
 
-        # ---- Operation picker -------------------------------------------
+        # ---- Operation + its inputs (one card; stack follows the combo) --
         op_card, op_lay = _mini_card("OPERATION")
         self.rd_op_combo = QComboBox()
         for label, key in (
@@ -1555,10 +1555,7 @@ class PickerWindow(QMainWindow):
             self.rd_op_combo.addItem(label, key)
         self.rd_op_combo.currentIndexChanged.connect(self._reduction_on_op_changed)
         op_lay.addWidget(self.rd_op_combo)
-        lay.addWidget(op_card)
 
-        # ---- Context panel (one page per operation) ---------------------
-        ctx_card, ctx_lay = _mini_card("PARAMETERS")
         self.rd_stack = QStackedWidget()
 
         # Shared id field lives above the stack so every op can name the result.
@@ -1568,7 +1565,7 @@ class PickerWindow(QMainWindow):
         self.rd_id_edit = QLineEdit()
         self.rd_id_edit.setPlaceholderText("result id (optional, auto if empty)")
         id_form.addRow("New id", self.rd_id_edit)
-        ctx_lay.addLayout(id_form)
+        op_lay.addLayout(id_form)
 
         def _entity_combo() -> QComboBox:
             c = QComboBox()
@@ -1701,15 +1698,15 @@ class PickerWindow(QMainWindow):
         mpage.layout().insertWidget(1, self.rd_mp_hint)
         self.rd_stack.addWidget(mpage)  # 7
 
-        ctx_lay.addWidget(self.rd_stack)
+        op_lay.addWidget(self.rd_stack)
 
         self.rd_apply_btn = QPushButton("Apply")
         self.rd_apply_btn.setObjectName("primaryBtn")
         self.rd_apply_btn.clicked.connect(
             lambda: self._guard(self._reduction_apply, busy=False)
         )
-        ctx_lay.addWidget(self.rd_apply_btn)
-        lay.addWidget(ctx_card)
+        op_lay.addWidget(self.rd_apply_btn)
+        lay.addWidget(op_card)
 
         # ---- Display (always available, secondary) ----------------------
         disp_card, disp_lay = _mini_card("DISPLAY", expanded=False)
@@ -1751,9 +1748,10 @@ class PickerWindow(QMainWindow):
                         slider.setValue(max(slider.minimum(), min(slider.maximum(), ticks)))
                     finally:
                         self._rd_size_sync = False
-                if not self._rd_size_loading:
-                    self._reduction_apply_overlay_size(kind, float(val))
-                self._refresh_reduction_actors()
+                if self._rd_size_loading:
+                    return
+                eids = self._reduction_apply_overlay_size(kind, float(val))
+                self._refresh_reduction_entity_overlays(eids, render=False)
                 self._reduction_update_live_preview()
 
             def on_slider(ticks: int):
@@ -1767,9 +1765,10 @@ class PickerWindow(QMainWindow):
                     spin.blockSignals(False)
                 finally:
                     self._rd_size_sync = False
-                if not self._rd_size_loading:
-                    self._reduction_apply_overlay_size(kind, val)
-                self._refresh_reduction_actors()
+                if self._rd_size_loading:
+                    return
+                eids = self._reduction_apply_overlay_size(kind, val)
+                self._refresh_reduction_entity_overlays(eids, render=False)
                 self._reduction_update_live_preview()
 
             spin.valueChanged.connect(on_spin)
@@ -1893,10 +1892,11 @@ class PickerWindow(QMainWindow):
         for c in (self.rd_frame_axis, self.rd_frame_origin):
             c.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             c.setMinimumContentsLength(12)
-            c.currentIndexChanged.connect(self._sync_frame_align_enabled)
+            c.currentIndexChanged.connect(self._on_frame_combo_changed)
         self.rd_frame_flip = QComboBox()
         self.rd_frame_flip.addItem("along axis", False)
         self.rd_frame_flip.addItem("flipped", True)
+        self.rd_frame_flip.currentIndexChanged.connect(self._on_frame_combo_changed)
         frame_form.addRow("Axis", self.rd_frame_axis)
         frame_form.addRow("Origin", self.rd_frame_origin)
         frame_form.addRow("+Z", self.rd_frame_flip)
@@ -1950,6 +1950,7 @@ class PickerWindow(QMainWindow):
         load_recipe_btn.setObjectName("secondaryBtn")
         load_recipe_btn.setToolTip(
             "Replace this session with a saved recipe.json. "
+            "FRAME axis/origin are restored if saved; Align Z is not applied. "
             "Load All also restores project_dir/recipe.json when present."
         )
         load_recipe_btn.clicked.connect(
@@ -2092,6 +2093,50 @@ class PickerWindow(QMainWindow):
             return p
         return self._view_frame.inverse_points(p)
 
+    def _on_frame_combo_changed(self, *_args) -> None:
+        self._sync_frame_align_enabled()
+        self._reduction_capture_frame_spec()
+
+    def _reduction_capture_frame_spec(self) -> None:
+        axis = self._reduction_combo_id(getattr(self, "rd_frame_axis", None))
+        origin = self._reduction_combo_id(getattr(self, "rd_frame_origin", None))
+        if not axis or not origin:
+            self._reduction.frame_spec = None
+            return
+        flip = False
+        if hasattr(self, "rd_frame_flip"):
+            flip = bool(self.rd_frame_flip.currentData())
+        self._reduction.frame_spec = {
+            "axis": axis,
+            "origin": origin,
+            "flip_z": flip,
+        }
+
+    def _reduction_restore_frame_combos(self) -> None:
+        if not hasattr(self, "rd_frame_axis"):
+            return
+        spec = self._reduction.frame_spec
+        for combo, key in (
+            (self.rd_frame_axis, "axis"),
+            (self.rd_frame_origin, "origin"),
+        ):
+            combo.blockSignals(True)
+            if spec:
+                idx = combo.findData(spec.get(key))
+                combo.setCurrentIndex(idx if idx >= 0 else 0)
+            elif combo.count():
+                combo.setCurrentIndex(0)
+            combo.blockSignals(False)
+        if hasattr(self, "rd_frame_flip"):
+            self.rd_frame_flip.blockSignals(True)
+            if spec:
+                idx = self.rd_frame_flip.findData(bool(spec.get("flip_z", False)))
+                self.rd_frame_flip.setCurrentIndex(idx if idx >= 0 else 0)
+            else:
+                self.rd_frame_flip.setCurrentIndex(0)
+            self.rd_frame_flip.blockSignals(False)
+        self._sync_frame_align_enabled()
+
     def _sync_frame_align_enabled(self) -> None:
         if not hasattr(self, "rd_frame_align_btn"):
             return
@@ -2160,6 +2205,7 @@ class PickerWindow(QMainWindow):
         self._refresh_aligned_view(reset_camera=reset_camera)
 
     def _frame_align(self) -> None:
+        self._reduction_capture_frame_spec()
         axis_id = self._reduction_combo_id(getattr(self, "rd_frame_axis", None))
         origin_id = self._reduction_combo_id(getattr(self, "rd_frame_origin", None))
         if not axis_id or not origin_id:
@@ -2458,7 +2504,7 @@ class PickerWindow(QMainWindow):
                 self._sync_frame_align_enabled()
 
     def _reduction_selected_ids(self) -> list[str]:
-        """Operand ids for the current operation (from PARAMETERS combos)."""
+        """Operand ids for the current operation (from OPERATION combos)."""
         op = self._reduction_current_op()
         ids: list[str] = []
         if op == "offset":
@@ -2812,7 +2858,7 @@ class PickerWindow(QMainWindow):
     def _reduction_bind_active(self):
         key = self._reduction_combo_id(getattr(self, "rd_bind_combo", None))
         if not key:
-            raise ValueError("choose a Groups plane in PARAMETERS")
+            raise ValueError("choose a Groups plane")
         gid_s, _, pi_s = key.partition(":")
         g = self._get_group(int(gid_s))
         if g is None or g.get("fit") is None:
@@ -2974,7 +3020,10 @@ class PickerWindow(QMainWindow):
 
     def _reduction_clear(self):
         self._reduction.clear()
+        if self._view_frame is not None:
+            self._set_view_frame(None, reset_camera=False)
         self._reduction_refresh_view()
+        self._reduction_restore_frame_combos()
         self._status("reduction session cleared")
 
     def _reduction_refresh_view(self):
@@ -3058,7 +3107,10 @@ class PickerWindow(QMainWindow):
             project_dir=self.project_dir,
             bind_face=self._reduction_try_bind_face,
         )
+        if self._view_frame is not None:
+            self._set_view_frame(None, reset_camera=False)
         self._reduction_refresh_view()
+        self._reduction_restore_frame_combos()
         return len(self._reduction.ids())
 
     def _reduction_load_recipe(self):
@@ -3077,6 +3129,7 @@ class PickerWindow(QMainWindow):
             self._status(f"loaded recipe → {path}  ({n} entities)")
 
     def _reduction_save_recipe(self):
+        self._reduction_capture_frame_spec()
         recipe = self._reduction.to_recipe()
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -3114,6 +3167,7 @@ class PickerWindow(QMainWindow):
             if Path(path).name == "geometry.json"
             else Path(path).stem + ".recipe.json"
         )
+        self._reduction_capture_frame_spec()
         write_recipe_json(recipe_path, self._reduction.to_recipe())
         if include_aligned:
             frame_note = f", survey + {self._frame_status_text()}"
@@ -3199,7 +3253,7 @@ class PickerWindow(QMainWindow):
                 return
             self._reduction.set_overlay_mm(eid, size)
             self._reduction_sync_size_controls_from_selection()
-            self._refresh_reduction_actors()
+            self._refresh_reduction_entity_overlays([eid])
             return
         if column in (1, 3):
             self.rd_tree.blockSignals(True)
@@ -3271,7 +3325,7 @@ class PickerWindow(QMainWindow):
             return tree
         return take(self._reduction_selected_ids())
 
-    def _reduction_apply_overlay_size(self, kind: str, size_mm: float) -> None:
+    def _reduction_apply_overlay_size(self, kind: str, size_mm: float) -> list[str]:
         size_mm = float(size_mm)
         entity_kind = "line" if kind == "line_diameter" else kind
         targets = self._reduction_size_targets(entity_kind)
@@ -3283,10 +3337,15 @@ class PickerWindow(QMainWindow):
                     self._reduction.set_overlay_mm(eid, size_mm)
             if kind != "line_diameter":
                 self._reduction_update_tree_size_cells(targets)
-            return
+            return targets
         self._reduction.display_default_mm[kind] = size_mm
         if kind == "line_diameter":
-            return
+            return [
+                eid
+                for eid in self._reduction.ids()
+                if self._reduction.kind_of(eid) == "line"
+                and eid not in self._reduction.display_width_mm
+            ]
         affected = [
             eid
             for eid in self._reduction.ids()
@@ -3294,6 +3353,7 @@ class PickerWindow(QMainWindow):
             and eid not in self._reduction.display_mm
         ]
         self._reduction_update_tree_size_cells(affected)
+        return affected
 
     def _reduction_reset_selected_overlay(self):
         ids = self._reduction_size_targets("plane")
@@ -3306,7 +3366,7 @@ class PickerWindow(QMainWindow):
             self._reduction.clear_overlay_width_mm(eid)
         self._reduction_update_tree_size_cells(ids)
         self._reduction_sync_size_controls_from_selection()
-        self._refresh_reduction_actors()
+        self._refresh_reduction_entity_overlays(ids)
         if ids:
             self._status("reset overlay size for " + ", ".join(ids))
 
@@ -3455,10 +3515,157 @@ class PickerWindow(QMainWindow):
 
     def _reduction_entity_actor_names(self, eid: str) -> list[str]:
         name = self._reduction_actor_name(eid)
-        return [
-            n for n in self._reduction_actor_names
-            if n == name or n.startswith(name + "_")
-        ]
+        want = {name, f"{name}_e", f"{name}_n", f"{name}_ring", f"{name}_cap0", f"{name}_cap1"}
+        return [n for n in self._reduction_actor_names if n in want]
+
+    def _remove_reduction_entity_overlay(self, eid: str) -> None:
+        names = self._reduction_entity_actor_names(eid)
+        for n in names:
+            self.plotter.remove_actor(n, render=False)
+        drop = set(names)
+        self._reduction_actor_names = [n for n in self._reduction_actor_names if n not in drop]
+
+    def _add_reduction_entity_overlay(self, eid: str, *, selected: bool) -> None:
+        kind = self._reduction.kind_of(eid)
+        name = self._reduction_actor_name(eid)
+        anchor = self._reduction.anchors.get(eid)
+        size = self._reduction.overlay_mm(eid)
+        try:
+            if kind == "plane":
+                plane = self._reduction.plane(eid)
+                corners_s = plane_patch_corners(
+                    plane, center=anchor, size_mm=size
+                )
+                corners = self._to_view_points(corners_s)
+                faces = np.array([3, 0, 1, 2, 3, 0, 2, 3], dtype=np.int64)
+                mesh = pv.PolyData(corners, faces=faces)
+                rec = self._reduction.record_of(eid)
+                color = (
+                    _RD_PLANE_SCANNED
+                    if rec.get("provenance") == "scanned"
+                    else _RD_PLANE_OFFSET
+                )
+                opacity = 0.55 if selected else 0.35
+                lw = 4 if selected else 2
+                self.plotter.add_mesh(
+                    mesh,
+                    name=name,
+                    color=color,
+                    opacity=opacity,
+                    reset_camera=False,
+                    pickable=False,
+                    render=False,
+                )
+                edge_name = name + "_e"
+                edge_color = _RD_SELECTED_RING if selected else color
+                self.plotter.add_mesh(
+                    mesh,
+                    name=edge_name,
+                    style="wireframe",
+                    color=edge_color,
+                    line_width=lw,
+                    reset_camera=False,
+                    pickable=False,
+                    render=False,
+                )
+                self._reduction_actor_names.extend([name, edge_name])
+                center = corners.mean(axis=0)
+                tip = self._to_view_point(
+                    corners_s.mean(axis=0) + plane.normal * (size * 0.2)
+                )
+                nar = pv.Line(center, tip)
+                nname = name + "_n"
+                self.plotter.add_mesh(
+                    nar,
+                    name=nname,
+                    color=_RD_NORMAL if not selected else "#ffffff",
+                    line_width=3 if selected else 2,
+                    reset_camera=False,
+                    pickable=False,
+                    render=False,
+                )
+                self._reduction_actor_names.append(nname)
+            elif kind == "line":
+                line = self._reduction.line(eid)
+                seg = line_segment_points(
+                    line, half_length_mm=size, center=anchor
+                )
+                seg = self._to_view_points(seg)
+                diam = self._reduction.overlay_width_mm(eid)
+                if selected:
+                    diam *= 1.25
+                mesh = _line_tube_mesh(seg[0], seg[1], diam)
+                self.plotter.add_mesh(
+                    mesh,
+                    name=name,
+                    color=_RD_AXIS,
+                    reset_camera=False,
+                    pickable=False,
+                    render=False,
+                )
+                self._reduction_actor_names.append(name)
+                if selected:
+                    cap_r = max(0.5 * self._reduction.overlay_width_mm(eid) * 1.6, 0.4)
+                    for i, pt in enumerate(seg):
+                        cap = pv.Sphere(
+                            radius=cap_r, center=pt.tolist()
+                        )
+                        cname = f"{name}_cap{i}"
+                        self.plotter.add_mesh(
+                            cap,
+                            name=cname,
+                            color=_RD_SELECTED_RING,
+                            reset_camera=False,
+                            pickable=False,
+                            render=False,
+                        )
+                        self._reduction_actor_names.append(cname)
+            elif kind == "point":
+                pt = self._to_view_point(self._reduction.point(eid))
+                r = size * (1.4 if selected else 1.0)
+                mesh = pv.Sphere(radius=r, center=pt.tolist())
+                self.plotter.add_mesh(
+                    mesh,
+                    name=name,
+                    color=_RD_POINT,
+                    reset_camera=False,
+                    pickable=False,
+                    render=False,
+                )
+                self._reduction_actor_names.append(name)
+                if selected:
+                    ring = pv.Sphere(radius=r * 1.35, center=pt.tolist())
+                    rname = name + "_ring"
+                    self.plotter.add_mesh(
+                        ring,
+                        name=rname,
+                        style="wireframe",
+                        color=_RD_SELECTED_RING,
+                        line_width=2,
+                        reset_camera=False,
+                        pickable=False,
+                        render=False,
+                    )
+                    self._reduction_actor_names.append(rname)
+        except Exception:
+            traceback.print_exc()
+
+    def _refresh_reduction_entity_overlays(
+        self, eids: list[str], *, render: bool = True
+    ) -> None:
+        """Rebuild overlays for ``eids`` only; leave the rest in place."""
+        if not eids:
+            if render:
+                self.plotter.render()
+            return
+        selected = set(self._reduction_selected_ids())
+        for eid in eids:
+            self._remove_reduction_entity_overlay(eid)
+            if eid in self._reduction.ids() and self._reduction.visible.get(eid, True):
+                self._add_reduction_entity_overlay(eid, selected=eid in selected)
+        self._refresh_reduction_labels(render=False)
+        if render:
+            self.plotter.render()
 
     def _refresh_reduction_labels(self, *, render: bool = True) -> None:
         self.plotter.remove_actor("rd_labels", render=False)
@@ -3498,7 +3705,9 @@ class PickerWindow(QMainWindow):
         names = self._reduction_entity_actor_names(eid)
         actors = getattr(self.plotter, "actors", None) or {}
         if visible and not names:
-            self._refresh_reduction_actors()
+            selected = eid in set(self._reduction_selected_ids())
+            self._add_reduction_entity_overlay(eid, selected=selected)
+            self._refresh_reduction_labels(render=True)
             return
         for n in names:
             actor = actors.get(n)
@@ -3512,130 +3721,7 @@ class PickerWindow(QMainWindow):
         for eid in self._reduction.ids():
             if not self._reduction.visible.get(eid, True):
                 continue
-            kind = self._reduction.kind_of(eid)
-            name = self._reduction_actor_name(eid)
-            anchor = self._reduction.anchors.get(eid)
-            sel = eid in selected
-            size = self._reduction.overlay_mm(eid)
-            try:
-                if kind == "plane":
-                    plane = self._reduction.plane(eid)
-                    corners_s = plane_patch_corners(
-                        plane, center=anchor, size_mm=size
-                    )
-                    corners = self._to_view_points(corners_s)
-                    faces = np.array([3, 0, 1, 2, 3, 0, 2, 3], dtype=np.int64)
-                    mesh = pv.PolyData(corners, faces=faces)
-                    rec = self._reduction.record_of(eid)
-                    color = (
-                        _RD_PLANE_SCANNED
-                        if rec.get("provenance") == "scanned"
-                        else _RD_PLANE_OFFSET
-                    )
-                    opacity = 0.55 if sel else 0.35
-                    lw = 4 if sel else 2
-                    self.plotter.add_mesh(
-                        mesh,
-                        name=name,
-                        color=color,
-                        opacity=opacity,
-                        reset_camera=False,
-                        pickable=False,
-                        render=False,
-                    )
-                    edge_name = name + "_e"
-                    edge_color = _RD_SELECTED_RING if sel else color
-                    self.plotter.add_mesh(
-                        mesh,
-                        name=edge_name,
-                        style="wireframe",
-                        color=edge_color,
-                        line_width=lw,
-                        reset_camera=False,
-                        pickable=False,
-                        render=False,
-                    )
-                    self._reduction_actor_names.extend([name, edge_name])
-                    center = corners.mean(axis=0)
-                    tip = self._to_view_point(
-                        corners_s.mean(axis=0) + plane.normal * (size * 0.2)
-                    )
-                    nar = pv.Line(center, tip)
-                    nname = name + "_n"
-                    self.plotter.add_mesh(
-                        nar,
-                        name=nname,
-                        color=_RD_NORMAL if not sel else "#ffffff",
-                        line_width=3 if sel else 2,
-                        reset_camera=False,
-                        pickable=False,
-                        render=False,
-                    )
-                    self._reduction_actor_names.append(nname)
-                elif kind == "line":
-                    line = self._reduction.line(eid)
-                    seg = line_segment_points(
-                        line, half_length_mm=size, center=anchor
-                    )
-                    seg = self._to_view_points(seg)
-                    diam = self._reduction.overlay_width_mm(eid)
-                    if sel:
-                        diam *= 1.25
-                    mesh = _line_tube_mesh(seg[0], seg[1], diam)
-                    self.plotter.add_mesh(
-                        mesh,
-                        name=name,
-                        color=_RD_AXIS,
-                        reset_camera=False,
-                        pickable=False,
-                        render=False,
-                    )
-                    self._reduction_actor_names.append(name)
-                    if sel:
-                        cap_r = max(0.5 * self._reduction.overlay_width_mm(eid) * 1.6, 0.4)
-                        for i, pt in enumerate(seg):
-                            cap = pv.Sphere(
-                                radius=cap_r, center=pt.tolist()
-                            )
-                            cname = f"{name}_cap{i}"
-                            self.plotter.add_mesh(
-                                cap,
-                                name=cname,
-                                color=_RD_SELECTED_RING,
-                                reset_camera=False,
-                                pickable=False,
-                                render=False,
-                            )
-                            self._reduction_actor_names.append(cname)
-                elif kind == "point":
-                    pt = self._to_view_point(self._reduction.point(eid))
-                    r = size * (1.4 if sel else 1.0)
-                    mesh = pv.Sphere(radius=r, center=pt.tolist())
-                    self.plotter.add_mesh(
-                        mesh,
-                        name=name,
-                        color=_RD_POINT,
-                        reset_camera=False,
-                        pickable=False,
-                        render=False,
-                    )
-                    self._reduction_actor_names.append(name)
-                    if sel:
-                        ring = pv.Sphere(radius=r * 1.35, center=pt.tolist())
-                        rname = name + "_ring"
-                        self.plotter.add_mesh(
-                            ring,
-                            name=rname,
-                            style="wireframe",
-                            color=_RD_SELECTED_RING,
-                            line_width=2,
-                            reset_camera=False,
-                            pickable=False,
-                            render=False,
-                        )
-                        self._reduction_actor_names.append(rname)
-            except Exception:
-                traceback.print_exc()
+            self._add_reduction_entity_overlay(eid, selected=eid in selected)
         self._refresh_reduction_labels(render=False)
         if render:
             self.plotter.render()

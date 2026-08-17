@@ -136,6 +136,7 @@ def test_reduction_beam_on_target(tmp_path):
     }
     result = run_reduction(project, recipe)
     assert np.allclose(result.points["beam_on_target"]["xyz"], [0.0, 0.0, 100.0])
+    assert result.aligned is None
     assert np.allclose(
         np.abs(result.lines["beam_axis"]["direction"]), [0.0, 0.0, 1.0]
     )
@@ -467,3 +468,160 @@ def test_apply_recipe_bind_face_fallback(tmp_path):
     )
     assert seen == ["tracker_left", "tracker_front", "target"]
     assert "beam_on_target" in sess.ids()
+
+
+def test_recipe_frame_roundtrip(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["frame"] = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": True,
+    }
+    sess = ReductionSession.from_recipe(recipe, project_dir=_make_project(tmp_path))
+    assert sess.frame_spec == {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": True,
+    }
+    out = sess.to_recipe()
+    assert out["frame"] == sess.frame_spec
+    assert all(s.get("op") != "frame" for s in out["construct"])
+
+    sess2 = ReductionSession.from_recipe(out, project_dir=_make_project(tmp_path))
+    assert sess2.frame_spec == sess.frame_spec
+    assert np.allclose(sess2.point("beam_on_target"), sess.point("beam_on_target"))
+    # GUI export uses to_result(); aligned is applied only when Align Z is active.
+    survey = sess.to_result()
+    assert survey.aligned is None
+    assert sess.rigid_frame() is not None
+
+
+def test_recipe_frame_optional(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession.from_recipe(
+        _beam_recipe(), project_dir=_make_project(tmp_path)
+    )
+    assert sess.frame_spec is None
+    assert "frame" not in sess.to_recipe()
+
+
+def test_recipe_frame_invalid_object():
+    from cloudet.reduce import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["frame"] = "beam_axis"
+    with pytest.raises(ValueError, match="recipe.frame must be an object"):
+        ReductionSession().apply_recipe(recipe, project_dir=".")
+
+
+def test_recipe_frame_incomplete():
+    from cloudet.reduce import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["frame"] = {"axis": "beam_axis"}
+    with pytest.raises(ValueError, match="axis and origin"):
+        ReductionSession().apply_recipe(recipe, project_dir=".")
+
+
+def test_recipe_frame_unknown_id(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["frame"] = {"axis": "nope", "origin": "beam_on_target"}
+    with pytest.raises(KeyError, match="frame.axis"):
+        ReductionSession.from_recipe(recipe, project_dir=_make_project(tmp_path))
+
+
+def test_recipe_frame_wrong_kind(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["frame"] = {"axis": "target", "origin": "beam_on_target"}
+    with pytest.raises(ValueError, match="must be a line"):
+        ReductionSession.from_recipe(recipe, project_dir=_make_project(tmp_path))
+
+
+def test_recipe_frame_rename_and_remove():
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession()
+    left = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
+    front = Plane(np.array([0.0, 1.0, 0.0]), 20.0)
+    target = Plane(np.array([0.0, 0.0, 1.0]), -100.0)
+    spare = Plane(np.array([0.0, 0.0, 1.0]), 10.0)
+    sess.bind_scanned("tracker_left", left, group_name="G0", group_id=0)
+    sess.bind_scanned("tracker_front", front, group_name="G1", group_id=1)
+    sess.bind_scanned("target", target, group_name="G2", group_id=2)
+    sess.bind_scanned("spare", spare, group_name="G3", group_id=3)
+    sess.offset("left_in", "tracker_left", 50.0)
+    sess.offset("front_in", "tracker_front", 20.0)
+    sess.intersect_planes("beam_axis", "left_in", "front_in")
+    sess.intersect_line_plane("beam_on_target", "beam_axis", "target")
+    sess.frame_spec = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+
+    sess.rename("beam_axis", "axis")
+    assert sess.frame_spec["axis"] == "axis"
+    sess.rename("beam_on_target", "hit")
+    assert sess.frame_spec["origin"] == "hit"
+    sess.remove("spare")
+    assert sess.frame_spec == {"axis": "axis", "origin": "hit", "flip_z": False}
+    sess.remove("axis")
+    assert sess.frame_spec is None
+
+
+def test_run_reduction_writes_aligned_when_recipe_has_frame(tmp_path):
+    recipe = _beam_recipe()
+    recipe["frame"] = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": True,
+    }
+    result = run_reduction(_make_project(tmp_path), recipe)
+    assert np.allclose(result.points["beam_on_target"]["xyz"], [0.0, 0.0, 100.0])
+    assert result.aligned is not None
+    assert np.allclose(result.aligned["points"]["beam_on_target"]["xyz"], [0.0, 0.0, 0.0])
+    assert np.allclose(
+        np.abs(result.aligned["lines"]["beam_axis"]["direction"]), [0.0, 0.0, 1.0]
+    )
+    assert result.frame["kind"] == "aligned"
+    assert result.frame["axis"] == "beam_axis"
+    assert result.frame["flip_z"] is True
+    assert result.recipe["echo"]["frame"]["axis"] == "beam_axis"
+
+
+def test_reduce_cli_writes_aligned(tmp_path):
+    from cloudet.cli import main
+
+    project = _make_project(tmp_path)
+    recipe = _beam_recipe()
+    recipe["frame"] = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    recipe_path = tmp_path / "recipe.json"
+    recipe_path.write_text(json.dumps(recipe))
+    out = tmp_path / "geometry.json"
+    assert main([
+        "reduce",
+        str(project),
+        "--recipe",
+        str(recipe_path),
+        "-o",
+        str(out),
+    ]) == 0
+    doc = json.loads(out.read_text())
+    assert np.allclose(doc["points"]["beam_on_target"]["xyz"], [0.0, 0.0, 100.0])
+    assert np.allclose(doc["aligned"]["points"]["beam_on_target"]["xyz"], [0.0, 0.0, 0.0])
+    assert np.allclose(
+        np.abs(doc["aligned"]["lines"]["beam_axis"]["direction"]), [0.0, 0.0, 1.0]
+    )
+    assert doc["frame"]["kind"] == "aligned"
+    assert doc["frame"]["origin"] == "beam_on_target"

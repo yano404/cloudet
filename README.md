@@ -29,6 +29,7 @@ cloudet/
   project.py    Project directory I/O (manifest / settings / group save)
   array_backend.py  Optional CuPy GPU backend (auto fallback to NumPy)
   geometry.py   Constructive ops (offset plane, intersections)
+  frame.py      Display-only Align Z pose (axis + origin → +Z)
   reduce.py     Recipe-driven reduction → geometry.json for analysis
   pipeline.py   Residual u–v maps (for GUI QC)
   picker_qt.py  Interactive app (PySide6 + PyVista)
@@ -126,7 +127,8 @@ Example recipe (tracker walls → beam axis ∩ target):
     { "id": "beam_axis", "op": "intersect_planes", "a": "left_in", "b": "front_in" },
     { "id": "beam_on_target", "op": "intersect_line_plane", "line": "beam_axis", "plane": "target" }
   ],
-  "export": ["beam_axis", "beam_on_target"]
+  "export": ["beam_axis", "beam_on_target"],
+  "frame": { "axis": "beam_axis", "origin": "beam_on_target", "flip_z": false }
 }
 ```
 
@@ -137,14 +139,31 @@ Supported construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
 Output `geometry.json` lists
 planes / lines / points with provenance (`scanned` | `offset` | `intersection`).
 
+Optional top-level `frame` is Align Z metadata only (`axis` line id, `origin`
+point id, `flip_z`). It is not a construct step and does not change survey
+coordinates. `cloudet reduce` still writes survey numbers at the top level;
+when `frame` is present it also writes an `aligned` copy plus the pose.
+The GUI restores those picks on Load recipe / Load All; it does **not**
+apply Align Z until you press the button.
+
 ### Interactive reduction (GUI)
 
 In the app, open the **Reduction** dock (tabified with Residuals):
 
-1. Choose an **operation** — PARAMETERS shows only that step’s inputs (plane / axis pickers, offset slider, …)
-2. For **Offset**: pick a plane in PARAMETERS, drag the distance slider for a green live preview, then Apply
-3. For intersections: pick the required planes/axes in PARAMETERS, then Apply
+1. Choose an **operation** — only that step’s inputs appear (plane / axis pickers, offset slider, …)
+2. For **Offset**: pick a plane, drag the distance slider for a green live preview, then Apply
+3. For intersections: pick the required planes/axes, then Apply
 4. Toggle visibility in Entities; **Save recipe…** / **Export geometry…** for analysis
+5. **FRAME** (display only): pick Axis (line) and Origin (point), then **Align Z**.
+   The view uses the smallest rotation that maps the axis to `(0, 0, 1)` with
+   the origin at `(0, 0, 0)`. Survey Y is **not** held fixed (no extra yaw).
+   **Survey** returns the view to survey coordinates. Groups, recipe constructs,
+   and Fit stay in survey; picking still uses the original cloud.
+6. With Align Z active, **Export geometry…** can also write an `aligned` copy
+   plus the frame pose. Top-level planes / lines / points remain survey.
+   `cloudet reduce` does the same when the recipe has `frame`.
+   Load recipe restores FRAME combos from `recipe.frame` but leaves the view
+   in survey until you press Align Z again.
 
 ## Roadmap
 
