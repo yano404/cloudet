@@ -10,6 +10,7 @@ import numpy as np
 import pyvista as pv
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
