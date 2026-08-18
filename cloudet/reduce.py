@@ -724,7 +724,7 @@ class ReductionSession:
         default_factory=lambda: {
             "plane": 200.0,
             "line": 300.0,
-            "point": 8.0,
+            "point": 4.0,
             "line_diameter": 1.0,
         }
     )
@@ -744,7 +744,7 @@ class ReductionSession:
         self.display_default_mm = {
             "plane": 200.0,
             "line": 300.0,
-            "point": 8.0,
+            "point": 4.0,
             "line_diameter": 1.0,
         }
         self.frame_spec = None

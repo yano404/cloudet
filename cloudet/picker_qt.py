@@ -1803,6 +1803,7 @@ class PickerWindow(QMainWindow):
         self.rd_stack.addWidget(rot_page)  # 11
 
         op_lay.addWidget(self.rd_stack)
+        self._reduction_lock_operation_stack_height()
 
         mode_row = QHBoxLayout()
         self.rd_mode_group = QButtonGroup(self)
@@ -3017,12 +3018,10 @@ class PickerWindow(QMainWindow):
         update_mode = self._reduction_is_update_mode()
         editing = update_mode and self._reduction_editing_id() is not None
         op = self._reduction_current_op()
-        show_id = not editing or op == "bind"
+        show_id = True
         if hasattr(self, "rd_id_edit"):
-            if not show_id and self.rd_id_edit.isVisible():
-                self.rd_id_edit.clear()
             self.rd_id_edit.setVisible(show_id)
-            self.rd_id_edit.setEnabled(show_id)
+            self.rd_id_edit.setEnabled((not editing) or op == "bind")
             label = None
             if hasattr(self, "rd_id_form"):
                 label = self.rd_id_form.labelForField(self.rd_id_edit)
@@ -3271,6 +3270,28 @@ class PickerWindow(QMainWindow):
             return
         self._refresh_reduction_actors()
         self._reduction_update_live_preview()
+
+    def _reduction_lock_operation_stack_height(self) -> None:
+        """Keep OPERATION card height stable across operation switches."""
+        if not hasattr(self, "rd_stack"):
+            return
+        stack = self.rd_stack
+        count = stack.count()
+        if count <= 0:
+            return
+        old_idx = stack.currentIndex()
+        max_h = 0
+        for i in range(count):
+            stack.setCurrentIndex(i)
+            page = stack.widget(i)
+            if page is None:
+                continue
+            page_h = page.sizeHint().height()
+            if page_h > max_h:
+                max_h = page_h
+        stack.setCurrentIndex(old_idx)
+        if max_h > 0:
+            stack.setFixedHeight(max_h)
 
     def _reduction_is_update_mode(self) -> bool:
         return hasattr(self, "rd_mode_update") and self.rd_mode_update.isChecked()
@@ -3598,7 +3619,7 @@ class PickerWindow(QMainWindow):
                 pickable=False,
                 render=False,
             )
-            r = max(float(self._reduction.display_default_mm.get("point", 8.0)), 0.5)
+            r = max(float(self._reduction.display_default_mm.get("point", 4.0)), 0.5)
             self.plotter.add_mesh(
                 pv.Sphere(radius=r * 1.4, center=self._to_view_point(mid).tolist()),
                 name="rd_preview_point",
@@ -4603,7 +4624,7 @@ class PickerWindow(QMainWindow):
     def _reduction_point_radius_mm(self, eid: str | None = None) -> float:
         if eid is not None and eid in self._reduction.ids():
             return max(self._reduction.overlay_mm(eid), 0.5)
-        return max(float(self._reduction.display_default_mm.get("point", 8.0)), 0.5)
+        return max(float(self._reduction.display_default_mm.get("point", 4.0)), 0.5)
 
     def _reduction_entity_actor_names(self, eid: str) -> list[str]:
         name = self._reduction_actor_name(eid)
