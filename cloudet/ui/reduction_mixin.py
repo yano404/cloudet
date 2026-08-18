@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
 )
 
-from cloudet.frame import RigidFrame
+from cloudet.frame import RigidFrame, transform_record
 from cloudet.geometry import (
     line_segment_points,
     plane_patch_corners,

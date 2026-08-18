@@ -7,11 +7,54 @@ import re
 from pathlib import Path
 
 _STDLIB_MODULES = frozenset({"os", "sys", "time", "traceback", "re", "json", "copy"})
+_LOCAL_OK = frozenset(
+    {
+        "dict",
+        "list",
+        "set",
+        "tuple",
+        "float",
+        "int",
+        "str",
+        "bool",
+        "len",
+        "max",
+        "min",
+        "range",
+        "sorted",
+        "isinstance",
+        "getattr",
+        "hasattr",
+        "print",
+        "Path",
+        "Exception",
+        "ValueError",
+        "KeyError",
+        "TypeError",
+        "any",
+        "all",
+        "enumerate",
+        "zip",
+        "abs",
+        "round",
+        "super",
+        "fn",  # _guard(fn) parameter name in lambdas
+        "open",
+        "sum",
+        "next",
+        "type",
+        "FileNotFoundError",
+        "_QT_MSG_PREV",
+        "_QT_MSG_FILTER_INSTALLED",
+        "_VTK_LOG_KEEPALIVE",
+    }
+)
 
 
 def _imported_names(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     imported: set[str] = set()
+    defined: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -23,6 +66,11 @@ def _imported_names(path: Path) -> set[str]:
                 imported.add(name)
                 if module == "datetime":
                     imported.add("datetime")
+        elif isinstance(node, ast.FunctionDef):
+            defined.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            defined.add(node.name)
+    imported |= defined
     return imported
 
 
@@ -52,7 +100,19 @@ def _missing_stdlib_modules(path: Path) -> list[str]:
     return sorted(used - imported)
 
 
-def test_ui_modules_import_all_qt_symbols():
+def _missing_call_names(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    imported = _imported_names(path)
+    missing: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            name = node.func.id
+            if name not in imported and name not in _LOCAL_OK:
+                missing.add(name)
+    return sorted(missing)
+
+
+def test_ui_modules_import_all_symbols():
     ui_dir = Path(__file__).resolve().parents[1] / "cloudet" / "ui"
     problems: list[str] = []
     for path in sorted(ui_dir.glob("*.py")):
@@ -64,4 +124,7 @@ def test_ui_modules_import_all_qt_symbols():
         missing_std = _missing_stdlib_modules(path)
         if missing_std:
             problems.append(f"{path.name} stdlib: {missing_std}")
+        missing_calls = _missing_call_names(path)
+        if missing_calls:
+            problems.append(f"{path.name} calls: {missing_calls}")
     assert not problems, "Missing imports in cloudet.ui:\n" + "\n".join(problems)
