@@ -105,14 +105,3 @@ def test_combined_detection_and_display():
     assert fx.detection_changed
     assert fx.invalidate_grid
     assert fx.refresh_display
-
-
-def test_compute_backend_is_detection_only():
-    det0 = PickParams()
-    det1 = replace(det0, compute_backend="cupy")
-    view = ViewSettings()
-    fx = classify_settings_apply(det0, det1, view, view)
-    assert fx.detection_changed
-    assert not fx.view_changed
-    assert not fx.refresh_display
-    assert not fx.invalidate_grid

@@ -18,10 +18,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Open3D: display voxel decimation (C++) and optional RANSAC backend.
-open3d = ["open3d>=0.17"]
-# GPU compute for fit / residual QC / display voxel (CuPy + CUDA 12.x headers).
-gpu = ["cupy-cuda12x[ctk]>=13.0"]
+# Faster display-only voxel decimation (Open3D C++); picking/fit stay on full cloud.
+fast = ["open3d>=0.17"]
 dev = ["pytest>=7"]
 
 [project.scripts]

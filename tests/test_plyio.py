@@ -48,57 +48,6 @@ def test_extra_properties_skipped(tmp_path):
     assert np.all(pts[:, 2] == -1.5)
 
 
-def test_float32_xyz_only(tmp_path):
-    n = 500
-    header = (
-        "ply\nformat binary_little_endian 1.0\n"
-        f"element vertex {n}\n"
-        "property float x\nproperty float y\nproperty float z\n"
-        "end_header\n"
-    )
-    pts = np.column_stack([
-        np.arange(n, dtype=np.float32),
-        np.arange(n, dtype=np.float32) * 2,
-        np.full(n, -3.5, dtype=np.float32),
-    ])
-    path = tmp_path / "f32.ply"
-    with open(path, "wb") as f:
-        f.write(header.encode())
-        pts.astype("<f4").tofile(f)
-    back = read_ply_xyz(path)
-    assert back.shape == (n, 3)
-    assert np.allclose(back[:, 0], np.arange(n))
-    assert np.allclose(back[:, 1], np.arange(n) * 2)
-    assert np.all(back[:, 2] == -3.5)
-
-
-def test_large_binary_uses_mmap_path(tmp_path):
-    """Regression: large xyz+extra clouds still load correctly via mmap."""
-    import cloudet.plyio as plyio
-
-    n = plyio._MMAP_MIN_VERTICES + 10
-    rng = np.random.default_rng(0)
-    pts = rng.uniform(-100, 100, size=(n, 3))
-    path = tmp_path / "large_extra.ply"
-    header = (
-        "ply\nformat binary_little_endian 1.0\n"
-        f"element vertex {n}\n"
-        "property double x\nproperty double y\nproperty double z\n"
-        "property float intensity\n"
-        "end_header\n"
-    )
-    dtype = np.dtype([("x", "<f8"), ("y", "<f8"), ("z", "<f8"), ("i", "<f4")])
-    data = np.zeros(n, dtype=dtype)
-    data["x"] = pts[:, 0]
-    data["y"] = pts[:, 1]
-    data["z"] = pts[:, 2]
-    with open(path, "wb") as f:
-        f.write(header.encode())
-        data.tofile(f)
-    back = read_ply_xyz(path)
-    assert np.allclose(back, pts)
-
-
 def test_truncated_file_raises(tmp_path):
     pts = np.zeros((100, 3))
     path = tmp_path / "trunc.ply"

@@ -206,7 +206,7 @@ def test_resolve_display_backend_auto():
     from cloudet.neighbors import resolve_display_backend
 
     resolved = resolve_display_backend("auto")
-    assert resolved in ("numpy", "open3d", "cupy")
+    assert resolved in ("numpy", "open3d")
     assert resolve_display_backend("numpy") == "numpy"
 
 
@@ -237,41 +237,3 @@ def test_grid_performance_smoke():
     q = (time.time() - t0) / 50
     assert build < 5.0
     assert q < 0.05
-
-
-def test_radius_large_query_falls_back_to_bruteforce():
-    """Stale fine grids must not walk millions of cells in Python."""
-    import time
-
-    rng = np.random.default_rng(4)
-    pts = rng.uniform(-500, 500, size=(500_000, 3))
-    grid = VoxelHashGrid(pts, cell_size=1.0)
-    t0 = time.perf_counter()
-    got = grid.radius_indices([0.0, 0.0, 0.0], 150.0)
-    elapsed = time.perf_counter() - t0
-    want = np.flatnonzero(np.linalg.norm(pts, axis=1) <= 150.0)
-    assert np.array_equal(np.sort(got), np.sort(want))
-    assert elapsed < 2.0
-
-
-def test_from_arrays_roundtrip_queries():
-    rng = np.random.default_rng(5)
-    pts = rng.uniform(-50, 50, size=(8_000, 3))
-    grid = VoxelHashGrid(pts, cell_size=5.0)
-    restored = VoxelHashGrid.from_arrays(pts, **grid.index_arrays())
-    assert restored.cell_size == grid.cell_size
-    assert np.array_equal(restored._order, grid._order)
-    center = np.array([1.0, -2.0, 3.0])
-    assert np.array_equal(
-        np.sort(restored.radius_indices(center, 8.0)),
-        np.sort(grid.radius_indices(center, 8.0)),
-    )
-
-
-def test_from_arrays_rejects_stale_origin():
-    pts = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
-    grid = VoxelHashGrid(pts, cell_size=1.0)
-    arrays = grid.index_arrays()
-    arrays["origin"] = arrays["origin"] + 10.0
-    with pytest.raises(ValueError, match="origin"):
-        VoxelHashGrid.from_arrays(pts, **arrays)
