@@ -1,0 +1,51 @@
+---
+description: Patterns for adding new reduction operations in picker_qt.py
+globs: cloudet/picker_qt.py
+alwaysApply: false
+---
+
+# Reduction Operation Implementation Checklist
+
+When adding a new construct operation, follow the existing ops (e.g. `plane_from_line_point`) exactly. Every new op requires ALL of the following:
+
+## 1. Mappings & Registration
+- `_RD_GUI_TO_RECIPE_OP` entry
+- `rd_op_combo` label+key tuple
+- `rd_stack` page with correct index (update all subsequent indices)
+- Page index in `_reduction_current_op()` mapping
+
+## 2. Combo Refresh
+- `keep` dict entry in `_reduction_refresh_operand_combos()`
+- `_reduction_fill_combo()` calls with correct `kind=`
+
+## 3. Form Load/Save
+- `_reduction_load_step_into_form()` branch
+- `_reduction_step_from_form()` branch
+- `_reduction_sync_apply_button()` label entry
+
+## 4. Preview
+- `_reduction_update_live_preview()` dispatch must include the new op
+- `_reduction_update_plane_preview()` (or axis/point) branch
+- Access data via `self._reduction.plane(id)`, `.line(id)`, `.point(id)` — NEVER `self._reduction.store` or `self._reduction._store`
+
+## 5. Apply Method
+The apply method MUST include all of these calls in order:
+
+```python
+eid = self._reduction_new_id("plane")  # prefix matches entity kind
+self._reduction.<op>(eid, ...)
+self.rd_id_edit.clear()
+self._clear_reduction_preview()
+self._refresh_reduction_tree()          # without this, entity won't appear in tree
+self._reduction_refresh_operand_combos()
+self._refresh_reduction_actors()
+self._status(f"...")
+```
+
+## 6. Operand IDs
+- `_reduction_operand_ids()` branch for selection highlighting
+
+## 7. reduce.py
+- Import new geometry function
+- `_run_construct_step()` handler
+- Public session method (e.g. `ReductionSession.plane_from_plane_point()`)
