@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import traceback
+from datetime import datetime
 
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QFont, QHelpEvent, QKeySequence, QShortcut
