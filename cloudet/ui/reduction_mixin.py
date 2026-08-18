@@ -334,6 +334,22 @@ class ReductionMixin:
         rot_page.layout().insertWidget(1, self.rd_rot_hint)
         self.rd_stack.addWidget(rot_page)  # 11
 
+        # page: source-plane normal ∩ destination plane → point
+        np_page, np_form = _form_page()
+        self.rd_np_src = _entity_combo()
+        self.rd_np_dst = _entity_combo()
+        np_form.addRow("Normal from", self.rd_np_src)
+        np_form.addRow("Hit plane", self.rd_np_dst)
+        self.rd_np_hint = QLabel(
+            "Ray along the source plane's normal (from its closest point to "
+            "the origin) intersecting the destination plane. The two planes "
+            "must not be parallel."
+        )
+        self.rd_np_hint.setObjectName("muted")
+        self.rd_np_hint.setWordWrap(True)
+        np_page.layout().insertWidget(1, self.rd_np_hint)
+        self.rd_stack.addWidget(np_page)  # 12
+
         op_lay.addWidget(self.rd_stack)
         self._reduction_lock_operation_stack_height()
 
@@ -856,6 +872,8 @@ class ReductionMixin:
             "l2p_b": self._reduction_combo_id(getattr(self, "rd_l2p_b", None)),
             "rot_plane": self._reduction_combo_id(getattr(self, "rd_rot_plane", None)),
             "rot_line": self._reduction_combo_id(getattr(self, "rd_rot_line", None)),
+            "np_src": self._reduction_combo_id(getattr(self, "rd_np_src", None)),
+            "np_dst": self._reduction_combo_id(getattr(self, "rd_np_dst", None)),
             "frame_axis": self._reduction_combo_id(getattr(self, "rd_frame_axis", None)),
             "frame_origin": self._reduction_combo_id(
                 getattr(self, "rd_frame_origin", None)
@@ -948,6 +966,13 @@ class ReductionMixin:
                 self._reduction_fill_combo(
                     self.rd_rot_line, kind="line", keep=keep["rot_line"], **fill_kw
                 )
+            if hasattr(self, "rd_np_src"):
+                self._reduction_fill_combo(
+                    self.rd_np_src, kind="plane", keep=keep["np_src"], **fill_kw
+                )
+                self._reduction_fill_combo(
+                    self.rd_np_dst, kind="plane", keep=keep["np_dst"], **fill_kw
+                )
             if include_frame and hasattr(self, "rd_frame_axis"):
                 self._reduction_fill_combo(
                     self.rd_frame_axis,
@@ -986,69 +1011,14 @@ class ReductionMixin:
     def _reduction_selected_ids(self) -> list[str]:
         """Operand ids for the current operation (from OPERATION combos)."""
         op = self._reduction_current_op()
+        op_def = REDUCTION_OP_BY_GUI.get(op)
+        if op_def is None:
+            return []
         ids: list[str] = []
-        if op == "offset":
-            eid = self._reduction_combo_id(getattr(self, "rd_offset_plane", None))
+        for field in op_def.operands:
+            eid = self._reduction_combo_id(getattr(self, field.widget, None))
             if eid:
                 ids.append(eid)
-        elif op == "intersect_planes":
-            for c in (getattr(self, "rd_p2_a", None), getattr(self, "rd_p2_b", None)):
-                eid = self._reduction_combo_id(c)
-                if eid:
-                    ids.append(eid)
-        elif op == "intersect_line_plane":
-            for c in (getattr(self, "rd_lp_line", None), getattr(self, "rd_lp_plane", None)):
-                eid = self._reduction_combo_id(c)
-                if eid:
-                    ids.append(eid)
-        elif op == "intersect_three":
-            for c in (
-                getattr(self, "rd_p3_a", None),
-                getattr(self, "rd_p3_b", None),
-                getattr(self, "rd_p3_c", None),
-            ):
-                eid = self._reduction_combo_id(c)
-                if eid:
-                    ids.append(eid)
-        elif op == "line_from_point_normal":
-            for c in (getattr(self, "rd_pn_point", None), getattr(self, "rd_pn_plane", None)):
-                eid = self._reduction_combo_id(c)
-                if eid:
-                    ids.append(eid)
-        elif op == "line_from_two_points":
-            for c in (getattr(self, "rd_pp_a", None), getattr(self, "rd_pp_b", None)):
-                eid = self._reduction_combo_id(c)
-                if eid:
-                    ids.append(eid)
-        elif op == "midpoint_line_planes":
-            for c in (
-                getattr(self, "rd_mp_line", None),
-                getattr(self, "rd_mp_a", None),
-                getattr(self, "rd_mp_b", None),
-            ):
-                eid = self._reduction_combo_id(c)
-                if eid:
-                    ids.append(eid)
-        elif op == "plane_from_plane_point":
-            for c in (getattr(self, "rd_pp_plane", None), getattr(self, "rd_pp_point", None)):
-                eid = self._reduction_combo_id(c)
-                if eid:
-                    ids.append(eid)
-        elif op == "plane_from_line_point":
-            for c in (getattr(self, "rd_lpp_line", None), getattr(self, "rd_lpp_point", None)):
-                eid = self._reduction_combo_id(c)
-                if eid:
-                    ids.append(eid)
-        elif op == "plane_from_two_lines":
-            for c in (getattr(self, "rd_l2p_a", None), getattr(self, "rd_l2p_b", None)):
-                eid = self._reduction_combo_id(c)
-                if eid:
-                    ids.append(eid)
-        elif op == "rotate_plane_about_line":
-            for c in (getattr(self, "rd_rot_plane", None), getattr(self, "rd_rot_line", None)):
-                eid = self._reduction_combo_id(c)
-                if eid:
-                    ids.append(eid)
         return ids
 
     def _reduction_current_op(self) -> str:
@@ -1104,6 +1074,8 @@ class ReductionMixin:
             self.rd_mode_update.setEnabled(
                 self._reduction_editing_id() is not None and op != "bind"
             )
+        if hasattr(self, "rd_op_combo"):
+            self.rd_op_combo.setEnabled(not editing)
         if not hasattr(self, "rd_apply_btn"):
             return
         if editing and op != "bind":
@@ -1462,7 +1434,13 @@ class ReductionMixin:
         self._status(message)
 
     def _reduction_update_step(self, entity_id: str) -> None:
+        existing = self._reduction.construct_step(entity_id)
         step = self._reduction_step_from_form(entity_id)
+        if existing is not None and str(existing.get("op") or "") != str(step.get("op") or ""):
+            raise ValueError(
+                f"cannot change operation of {entity_id!r} while updating; "
+                "switch to Create new to make a different kind of entity"
+            )
         self._reduction.replace_construct_step(entity_id, step)
         self._rd_form_entity_id = entity_id
         self._reduction_refresh_view()

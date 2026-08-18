@@ -68,3 +68,23 @@ def test_form_values_from_step_unknown_op():
     assert gui_key is None
     assert operands == {}
     assert scalars == {}
+
+
+def test_build_construct_step_intersect_normal_plane():
+    op = REDUCTION_OP_BY_GUI["intersect_normal_plane"]
+    step = build_construct_step(
+        op,
+        "hit",
+        operand_values={"rd_np_src": "wall", "rd_np_dst": "target"},
+        scalar_values={},
+    )
+    assert step == {
+        "id": "hit",
+        "op": "intersect_normal_plane",
+        "src": "wall",
+        "dst": "target",
+    }
+    gui_key, operands, scalars = form_values_from_step(step)
+    assert gui_key == "intersect_normal_plane"
+    assert operands == {"rd_np_src": "wall", "rd_np_dst": "target"}
+    assert scalars == {}

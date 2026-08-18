@@ -249,3 +249,27 @@ def test_measure_op_combo_uses_metadata(gui):
     labels = [gui.rd_measure_op.itemText(i) for i in range(gui.rd_measure_op.count())]
     expected = [label for label, _key in MEASURE_MENU_ITEMS]
     assert labels == expected
+
+
+def test_normal_plane_form_roundtrip(gui):
+    far = Plane(np.array([0.0, 0.0, 1.0]), -200.0)
+    gui._reduction.bind_scanned("far", far, group_name="G9", group_id=9)
+    gui._reduction.intersect_normal_plane("hit", "target", "far")
+    gui._reduction_refresh_operand_combos()
+    step = gui._reduction.construct_step("hit")
+    gui._reduction_load_step_into_form(step)
+    assert gui._reduction_current_op() == "intersect_normal_plane"
+    roundtrip = gui._reduction_step_from_form("hit")
+    assert roundtrip["src"] == "target"
+    assert roundtrip["dst"] == "far"
+    assert gui._reduction_combo_id(gui.rd_np_src) == "target"
+    assert gui._reduction_combo_id(gui.rd_np_dst) == "far"
+
+
+def test_update_mode_locks_op_combo(gui):
+    gui._select_tree_entity("left_in")
+    gui._reduction_sync_operation_from_selection()
+    assert not gui.rd_op_combo.isEnabled()
+    gui.rd_mode_new.setChecked(True)
+    gui._reduction_sync_apply_button()
+    assert gui.rd_op_combo.isEnabled()
