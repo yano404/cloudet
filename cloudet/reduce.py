@@ -43,6 +43,7 @@ from cloudet.frame import (
 )
 from cloudet.plane import Plane
 from cloudet.project import FittedPlane, load_fitted_plane, load_group_doc
+from cloudet.reduction_ops import MEASURE_OPERAND_FIELDS
 
 __all__ = [
     "ConstructPreview",
@@ -52,9 +53,43 @@ __all__ = [
     "load_recipe",
     "preview_construct_step",
     "run_reduction",
+    "scanned_plane_record",
     "write_geometry_json",
     "write_recipe_json",
 ]
+
+_SCANNED_QUALITY_KEYS = (
+    "status",
+    "mad_sigma_mm",
+    "threshold_mm",
+    "n_points",
+    "bimodal",
+    "reasons",
+)
+
+
+def scanned_plane_record(
+    plane: Plane,
+    *,
+    group_id: int,
+    group_name: str,
+    plane_index: int = 0,
+    quality: dict | None = None,
+) -> dict:
+    """Record dict for a scanned (Groups) plane binding."""
+    quality = dict(quality or {})
+    return {
+        "abcd": plane.as_array().tolist(),
+        "provenance": "scanned",
+        "group_id": int(group_id),
+        "group_name": str(group_name),
+        "plane_index": int(plane_index),
+        "quality": {
+            k: quality[k]
+            for k in _SCANNED_QUALITY_KEYS
+            if quality.get(k) is not None
+        },
+    }
 
 
 
@@ -138,18 +173,13 @@ def _bind_face(project_dir: Path, alias: str, spec: dict) -> tuple[Plane, dict]:
         group_id=None if group_id is None else int(group_id),
         plane_index=plane_index,
     )
-    record = {
-        "abcd": fitted.plane.as_array().tolist(),
-        "provenance": "scanned",
-        "group_id": fitted.group_id,
-        "group_name": fitted.group_name,
-        "plane_index": fitted.plane_index,
-        "quality": {
-            k: fitted.quality[k]
-            for k in ("status", "mad_sigma_mm", "threshold_mm", "n_points", "bimodal", "reasons")
-            if fitted.quality.get(k) is not None
-        },
-    }
+    record = scanned_plane_record(
+        fitted.plane,
+        group_id=fitted.group_id,
+        group_name=fitted.group_name,
+        plane_index=fitted.plane_index,
+        quality=fitted.quality,
+    )
     return fitted.plane, record
 
 
@@ -628,14 +658,7 @@ def _validate_frame_spec(session: "ReductionSession", spec: dict) -> None:
             raise ValueError(f"recipe.frame.yaw_line {yaw_line!r} must be a line")
 
 
-_MEASURE_OPS: dict[str, tuple[tuple[str, str], ...]] = {
-    "distance_points": (("a", "point"), ("b", "point")),
-    "distance_point_plane": (("point", "point"), ("plane", "plane")),
-    "distance_point_line": (("point", "point"), ("line", "line")),
-    "angle_planes": (("a", "plane"), ("b", "plane")),
-    "angle_lines": (("a", "line"), ("b", "line")),
-    "angle_line_plane": (("line", "line"), ("plane", "plane")),
-}
+_MEASURE_OPS = MEASURE_OPERAND_FIELDS
 
 
 def _parse_measure_spec(spec) -> dict:
@@ -689,7 +712,8 @@ def run_reduction(project_dir: str | Path, recipe: dict) -> ReductionResult:
     """Execute a reduction recipe against a saved project.
 
     Survey coordinates stay at the top level. If the recipe has ``frame``,
-    an ``aligned`` copy is attached (same layout as GUI export with Align Z).
+    an ``aligned`` copy is attached (same rule as GUI export with the
+    aligned-frame checkbox on).
     """
     project_dir = Path(project_dir)
     if not project_dir.is_dir():
@@ -733,6 +757,7 @@ class ConstructPreview:
     anchor: np.ndarray | None = None
     overlay_mm: float = 200.0
     overlay_width_mm: float = 1.0
+    segment_ends: tuple[np.ndarray, np.ndarray] | None = None
 
 
 def preview_construct_step(session: ReductionSession, step: dict) -> ConstructPreview:
@@ -766,11 +791,22 @@ def preview_construct_step(session: ReductionSession, step: dict) -> ConstructPr
             overlay_width_mm=trial.overlay_width_mm(entity_id),
         )
     if kind == "point":
+        rec = trial.record_of(entity_id)
+        ends = rec.get("ends")
+        segment_ends = None
+        if isinstance(ends, list) and len(ends) == 2:
+            segment_ends = (
+                np.asarray(ends[0], dtype=np.float64).reshape(3),
+                np.asarray(ends[1], dtype=np.float64).reshape(3),
+            )
         return ConstructPreview(
             entity_id=entity_id,
             kind=kind,
             point=trial.point(entity_id),
             anchor=anchor_arr if anchor_arr is not None else trial.point(entity_id),
+            overlay_mm=trial.overlay_mm(entity_id),
+            overlay_width_mm=trial.overlay_width_mm(entity_id),
+            segment_ends=segment_ends,
         )
     raise ValueError(f"unknown preview kind {kind!r}")
 
@@ -925,25 +961,13 @@ class ReductionSession:
         if alias in self._store:
             del self._store[alias]
         quality = dict(quality or {})
-        record = {
-            "abcd": plane.as_array().tolist(),
-            "provenance": "scanned",
-            "group_id": int(group_id),
-            "group_name": str(group_name),
-            "plane_index": int(plane_index),
-            "quality": {
-                k: quality[k]
-                for k in (
-                    "status",
-                    "mad_sigma_mm",
-                    "threshold_mm",
-                    "n_points",
-                    "bimodal",
-                    "reasons",
-                )
-                if k in quality and quality[k] is not None
-            },
-        }
+        record = scanned_plane_record(
+            plane,
+            group_name=str(group_name),
+            group_id=int(group_id),
+            plane_index=int(plane_index),
+            quality=quality,
+        )
         self._store[alias] = _Entity(kind="plane", value=plane, record=record)
         self._face_specs[alias] = {
             "from": "group",

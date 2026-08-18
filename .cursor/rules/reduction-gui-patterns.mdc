@@ -17,13 +17,14 @@ When adding a new construct operation, follow the existing ops (e.g. `plane_from
 - `_reduction_fill_combo()` calls with correct `kind=`
 
 ## 3. Form Load/Save
-- `_reduction_load_step_into_form()` branch
-- `_reduction_step_from_form()` branch
+- Prefer `build_construct_step()` / `form_values_from_step()` from `reduction_ops.py`
+- `_reduction_step_from_form()` / `_reduction_load_step_into_form()` delegate to those helpers
 - `_reduction_sync_apply_button()` label entry
 
 ## 4. Preview
-- `_reduction_update_live_preview()` dispatch must include the new op
-- `_reduction_update_plane_preview()` (or axis/point) branch
+- `_reduction_update_live_preview()` uses `preview_construct_step()` for all construct ops
+- `_reduction_draw_preview()` draws planes/lines/points; point previews may include
+  `preview.segment_ends` (e.g. midpoint between two planes)
 - Access data via `self._reduction.plane(id)`, `.line(id)`, `.point(id)` — NEVER `self._reduction.store` or `self._reduction._store`
 
 ## 5. Apply Method

@@ -166,7 +166,7 @@ coordinates. Each record includes provenance (`scanned` | `offset` | `intersecti
 
 **Aligned export:** `cloudet reduce` adds `aligned` + `frame` when the recipe
 has `frame`. In the GUI, check **Also write aligned-frame coordinates** and
-press **Align Z** before **Export geometry…** (FRAME picks alone are not enough).
+set FRAME **axis** and **origin** (Align Z is not required for export).
 The GUI also writes a sibling `geometry_recipe.json` for replay.
 
 #### Aligned axis operands (`aligned.x` / `aligned.y` / `aligned.z`)
@@ -221,11 +221,11 @@ Open **Reduction** to construct geometry:
    rotation only. **Survey** returns the view to survey coordinates. Groups, recipe constructs, and Fit stay in survey;
    picking still uses the original cloud. Once axis and origin are set, **aligned X/Y/Z**
    appear in line operand combos (rotate, line ∩ plane, …).
-6. With **Align Z** active and **Also write aligned-frame coordinates** checked,
-   **Export geometry…** adds an `aligned` copy plus `frame` under survey numbers.
-   `cloudet reduce` does the same when the recipe has `frame`.
-   Load recipe restores FRAME combos from `recipe.frame` but leaves the view
-   in survey until you press Align Z again.
+6. With **Also write aligned-frame coordinates** checked and FRAME **axis** and
+   **origin** set, **Export geometry…** adds an `aligned` copy plus `frame` under
+   survey numbers (Align Z is not required for export). `cloudet reduce` uses the
+   same rule when the recipe has `frame`. Load recipe restores FRAME combos from
+   `recipe.frame`; press Align Z when you want the 3D view aligned.
 
 Open **Measure** to read distances and angles from those entities:
 

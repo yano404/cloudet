@@ -50,9 +50,25 @@ from cloudet.geometry import (
     project_point_to_plane,
 )
 from cloudet.plane import Plane
-from cloudet.reduce import load_recipe, write_geometry_json, write_recipe_json
-from cloudet.reduce import export_reduction_result, preview_construct_step
-from cloudet.reduction_ops import GUI_APPLY_LABELS, GUI_ID_PREFIX, GUI_MENU_ITEMS, GUI_PAGE_INDEX
+from cloudet.reduce import (
+    export_reduction_result,
+    load_recipe,
+    preview_construct_step,
+    scanned_plane_record,
+    write_geometry_json,
+    write_recipe_json,
+)
+from cloudet.reduction_ops import (
+    GUI_APPLY_LABELS,
+    GUI_ID_PREFIX,
+    GUI_MENU_ITEMS,
+    GUI_PAGE_INDEX,
+    MEASURE_MENU_ITEMS,
+    MEASURE_OP_BY_KEY,
+    REDUCTION_OP_BY_GUI,
+    build_construct_step,
+    form_values_from_step,
+)
 from cloudet.ui.constants import (
     RD_AXIS,
     RD_GUI_TO_RECIPE_OP,
@@ -597,8 +613,9 @@ class ReductionMixin:
         self.rd_export_frame_cb = QCheckBox("Also write aligned-frame coordinates")
         self.rd_export_frame_cb.setChecked(True)
         self.rd_export_frame_cb.setToolTip(
-            "When Align Z is active, geometry.json keeps survey numbers and "
-            "adds an aligned copy under \"aligned\" plus the frame pose. "
+            "When FRAME axis and origin are set, geometry.json keeps survey numbers "
+            "and adds an aligned copy under \"aligned\" plus the frame pose. "
+            "Align Z is not required for export (same rule as cloudet reduce). "
             "Off: survey coordinates only. The recipe is never transformed."
         )
         exp_lay.addWidget(self.rd_export_frame_cb)
@@ -670,14 +687,7 @@ class ReductionMixin:
         lay.addWidget(hint)
 
         self.rd_measure_op = QComboBox()
-        for label, key in (
-            ("Distance (point - point)", "distance_points"),
-            ("Distance (point - plane)", "distance_point_plane"),
-            ("Distance (point - line)", "distance_point_line"),
-            ("Angle (plane - plane)", "angle_planes"),
-            ("Angle (line - line)", "angle_lines"),
-            ("Angle (line - plane)", "angle_line_plane"),
-        ):
+        for label, key in MEASURE_MENU_ITEMS:
             self.rd_measure_op.addItem(label, key)
         self.rd_measure_op.currentIndexChanged.connect(self._reduction_on_measure_op)
         lay.addWidget(self.rd_measure_op)
@@ -1122,55 +1132,49 @@ class ReductionMixin:
         self._reduction_load_step_into_form(step)
         self._reduction_sync_apply_button()
 
+    def _reduction_read_operand_values(self, op_def) -> dict[str, str | None]:
+        out: dict[str, str | None] = {}
+        for field in op_def.operands:
+            combo = getattr(self, field.widget, None)
+            out[field.widget] = self._reduction_combo_id(combo)
+        return out
+
+    def _reduction_read_scalar_values(self, op_def) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for field in op_def.scalars:
+            widget = getattr(self, field.widget, None)
+            if widget is not None:
+                out[field.widget] = float(widget.value())
+        return out
+
+    def _reduction_apply_form_values(
+        self,
+        gui_key: str,
+        operand_values: dict[str, str | None],
+        scalar_values: dict[str, float],
+    ) -> None:
+        op_def = REDUCTION_OP_BY_GUI[gui_key]
+        for field in op_def.operands:
+            self._reduction_set_combo(
+                getattr(self, field.widget, None),
+                operand_values.get(field.widget),
+            )
+        for field in op_def.scalars:
+            widget = getattr(self, field.widget, None)
+            if widget is not None:
+                widget.setValue(float(scalar_values.get(field.widget, 0.0)))
+
     def _reduction_load_step_into_form(self, step: dict) -> None:
-        gui_op = RD_RECIPE_TO_GUI_OP.get(str(step.get("op")))
-        if gui_op is None or not hasattr(self, "rd_op_combo"):
+        gui_key, operands, scalars = form_values_from_step(step)
+        if gui_key is None or not hasattr(self, "rd_op_combo"):
             return
         self._rd_loading_step = True
         try:
-            idx = self.rd_op_combo.findData(gui_op)
+            idx = self.rd_op_combo.findData(gui_key)
             if idx >= 0:
                 self.rd_op_combo.setCurrentIndex(idx)
             self._reduction_refresh_operand_combos()
-            if gui_op == "offset":
-                self._reduction_set_combo(self.rd_offset_plane, step.get("of"))
-                dist = float(step.get("distance_mm", 0.0))
-                if hasattr(self, "rd_offset_spin"):
-                    self.rd_offset_spin.setValue(dist)
-            elif gui_op == "intersect_planes":
-                self._reduction_set_combo(self.rd_p2_a, step.get("a"))
-                self._reduction_set_combo(self.rd_p2_b, step.get("b"))
-            elif gui_op == "intersect_line_plane":
-                self._reduction_set_combo(self.rd_lp_line, step.get("line"))
-                self._reduction_set_combo(self.rd_lp_plane, step.get("plane"))
-            elif gui_op == "intersect_three":
-                self._reduction_set_combo(self.rd_p3_a, step.get("a"))
-                self._reduction_set_combo(self.rd_p3_b, step.get("b"))
-                self._reduction_set_combo(self.rd_p3_c, step.get("c"))
-            elif gui_op == "line_from_point_normal":
-                self._reduction_set_combo(self.rd_pn_point, step.get("point"))
-                self._reduction_set_combo(self.rd_pn_plane, step.get("plane"))
-            elif gui_op == "line_from_two_points":
-                self._reduction_set_combo(self.rd_pp_a, step.get("a"))
-                self._reduction_set_combo(self.rd_pp_b, step.get("b"))
-            elif gui_op == "midpoint_line_planes":
-                self._reduction_set_combo(self.rd_mp_line, step.get("line"))
-                self._reduction_set_combo(self.rd_mp_a, step.get("a"))
-                self._reduction_set_combo(self.rd_mp_b, step.get("b"))
-            elif gui_op == "plane_from_plane_point":
-                self._reduction_set_combo(self.rd_pp_plane, step.get("plane"))
-                self._reduction_set_combo(self.rd_pp_point, step.get("point"))
-            elif gui_op == "plane_from_line_point":
-                self._reduction_set_combo(self.rd_lpp_line, step.get("line"))
-                self._reduction_set_combo(self.rd_lpp_point, step.get("point"))
-            elif gui_op == "plane_from_two_lines":
-                self._reduction_set_combo(self.rd_l2p_a, step.get("a"))
-                self._reduction_set_combo(self.rd_l2p_b, step.get("b"))
-            elif gui_op == "rotate_plane_about_line":
-                self._reduction_set_combo(self.rd_rot_plane, step.get("plane"))
-                self._reduction_set_combo(self.rd_rot_line, step.get("line"))
-                if hasattr(self, "rd_rot_angle"):
-                    self.rd_rot_angle.setValue(float(step.get("angle_deg", 0.0)))
+            self._reduction_apply_form_values(gui_key, operands, scalars)
         finally:
             self._rd_loading_step = False
         self._reduction_update_selection_label()
@@ -1179,120 +1183,15 @@ class ReductionMixin:
 
     def _reduction_step_from_form(self, entity_id: str) -> dict:
         op = self._reduction_current_op()
-        recipe_op = RD_GUI_TO_RECIPE_OP.get(op)
-        if recipe_op is None:
+        op_def = REDUCTION_OP_BY_GUI.get(op)
+        if op_def is None:
             raise ValueError(f"cannot update with operation {op!r}")
-        if op == "offset":
-            of = self._reduction_combo_id(getattr(self, "rd_offset_plane", None))
-            if not of:
-                raise ValueError("Offset needs a plane")
-            return {
-                "id": entity_id,
-                "op": "offset",
-                "of": of,
-                "distance_mm": float(self.rd_offset_spin.value()),
-            }
-        if op == "intersect_planes":
-            a = self._reduction_combo_id(getattr(self, "rd_p2_a", None))
-            b = self._reduction_combo_id(getattr(self, "rd_p2_b", None))
-            if not a or not b:
-                raise ValueError("Intersect planes needs 2 planes")
-            return {"id": entity_id, "op": "intersect_planes", "a": a, "b": b}
-        if op == "intersect_line_plane":
-            line = self._reduction_combo_id(getattr(self, "rd_lp_line", None))
-            plane = self._reduction_combo_id(getattr(self, "rd_lp_plane", None))
-            if not line or not plane:
-                raise ValueError("Line ∩ plane needs a line and a plane")
-            return {
-                "id": entity_id,
-                "op": "intersect_line_plane",
-                "line": line,
-                "plane": plane,
-            }
-        if op == "intersect_three":
-            a = self._reduction_combo_id(getattr(self, "rd_p3_a", None))
-            b = self._reduction_combo_id(getattr(self, "rd_p3_b", None))
-            c = self._reduction_combo_id(getattr(self, "rd_p3_c", None))
-            if not a or not b or not c:
-                raise ValueError("3 planes → point needs 3 planes")
-            return {
-                "id": entity_id,
-                "op": "intersect_three_planes",
-                "a": a,
-                "b": b,
-                "c": c,
-            }
-        if op == "line_from_point_normal":
-            point = self._reduction_combo_id(getattr(self, "rd_pn_point", None))
-            plane = self._reduction_combo_id(getattr(self, "rd_pn_plane", None))
-            if not point or not plane:
-                raise ValueError("Point + normal needs a point and a plane")
-            return {
-                "id": entity_id,
-                "op": "line_from_point_normal",
-                "point": point,
-                "plane": plane,
-            }
-        if op == "line_from_two_points":
-            a = self._reduction_combo_id(getattr(self, "rd_pp_a", None))
-            b = self._reduction_combo_id(getattr(self, "rd_pp_b", None))
-            if not a or not b:
-                raise ValueError("2 points → axis needs two points")
-            return {"id": entity_id, "op": "line_from_two_points", "a": a, "b": b}
-        if op == "midpoint_line_planes":
-            line = self._reduction_combo_id(getattr(self, "rd_mp_line", None))
-            a = self._reduction_combo_id(getattr(self, "rd_mp_a", None))
-            b = self._reduction_combo_id(getattr(self, "rd_mp_b", None))
-            if not line or not a or not b:
-                raise ValueError("midpoint needs 1 axis and 2 planes")
-            return {
-                "id": entity_id,
-                "op": "midpoint_line_planes",
-                "line": line,
-                "a": a,
-                "b": b,
-            }
-        if op == "plane_from_plane_point":
-            plane = self._reduction_combo_id(getattr(self, "rd_pp_plane", None))
-            point = self._reduction_combo_id(getattr(self, "rd_pp_point", None))
-            if not plane or not point:
-                raise ValueError("plane + point → plane needs a plane and a point")
-            return {
-                "id": entity_id,
-                "op": "plane_from_plane_point",
-                "plane": plane,
-                "point": point,
-            }
-        if op == "plane_from_line_point":
-            line = self._reduction_combo_id(getattr(self, "rd_lpp_line", None))
-            point = self._reduction_combo_id(getattr(self, "rd_lpp_point", None))
-            if not line or not point:
-                raise ValueError("line + point → plane needs an axis and a point")
-            return {
-                "id": entity_id,
-                "op": "plane_from_line_point",
-                "line": line,
-                "point": point,
-            }
-        if op == "plane_from_two_lines":
-            a = self._reduction_combo_id(getattr(self, "rd_l2p_a", None))
-            b = self._reduction_combo_id(getattr(self, "rd_l2p_b", None))
-            if not a or not b:
-                raise ValueError("2 lines → plane needs two axes")
-            return {"id": entity_id, "op": "plane_from_two_lines", "a": a, "b": b}
-        if op == "rotate_plane_about_line":
-            plane = self._reduction_combo_id(getattr(self, "rd_rot_plane", None))
-            line = self._reduction_combo_id(getattr(self, "rd_rot_line", None))
-            if not plane or not line:
-                raise ValueError("rotate plane needs a plane and an axis")
-            return {
-                "id": entity_id,
-                "op": "rotate_plane_about_line",
-                "plane": plane,
-                "line": line,
-                "angle_deg": float(self.rd_rot_angle.value()),
-            }
-        raise ValueError(f"cannot update with operation {op!r}")
+        return build_construct_step(
+            op_def,
+            entity_id,
+            operand_values=self._reduction_read_operand_values(op_def),
+            scalar_values=self._reduction_read_scalar_values(op_def),
+        )
 
     def _reduction_on_op_changed(self, *_args):
         op = self._reduction_current_op()
@@ -1428,11 +1327,7 @@ class ReductionMixin:
 
     def _reduction_update_live_preview(self):
         self._clear_reduction_preview()
-        op = self._reduction_current_op()
         try:
-            if op == "midpoint_line_planes":
-                self._reduction_update_midpoint_preview()
-                return
             preview = self._reduction_preview_step()
             if preview is None:
                 self.plotter.render()
@@ -1492,6 +1387,39 @@ class ReductionMixin:
             )
             return
         if preview.kind == "point" and preview.point is not None:
+            if preview.segment_ends is not None:
+                end_a, end_b = preview.segment_ends
+                diam = float(
+                    preview.overlay_width_mm
+                    or self._reduction.display_default_mm.get("line_diameter", 1.0)
+                )
+                self.plotter.add_mesh(
+                    _line_tube_mesh(
+                        self._to_view_point(end_a),
+                        self._to_view_point(end_b),
+                        diam,
+                    ),
+                    name="rd_preview_axis",
+                    color="#2ecc71",
+                    reset_camera=False,
+                    pickable=False,
+                    render=False,
+                )
+                for i, pt in enumerate((end_a, end_b)):
+                    self.plotter.add_mesh(
+                        pv.Sphere(
+                            radius=max(
+                                float(self._reduction.display_default_mm.get("point", 4.0)),
+                                0.5,
+                            ),
+                            center=self._to_view_point(pt).tolist(),
+                        ),
+                        name=f"rd_preview_end{i}",
+                        color="#27ae60",
+                        reset_camera=False,
+                        pickable=False,
+                        render=False,
+                    )
             r = max(float(self._reduction.display_default_mm.get("point", 4.0)), 0.5)
             self.plotter.add_mesh(
                 pv.Sphere(radius=r * 1.4, center=self._to_view_point(preview.point).tolist()),
@@ -1501,58 +1429,7 @@ class ReductionMixin:
                 pickable=False,
                 render=False,
             )
-
-    def _reduction_update_midpoint_preview(self):
-        """Live-preview the clipped segment and its midpoint."""
-        self._clear_reduction_preview()
-        if self._reduction_current_op() != "midpoint_line_planes":
-            self.plotter.render()
             return
-        line_id = self._reduction_combo_id(getattr(self, "rd_mp_line", None))
-        a = self._reduction_combo_id(getattr(self, "rd_mp_a", None))
-        b = self._reduction_combo_id(getattr(self, "rd_mp_b", None))
-        if not line_id or not a or not b or a == b:
-            self.plotter.render()
-            return
-        try:
-            from cloudet.geometry import intersect_line_plane, midpoint_line_planes
-
-            line = self._reduction.line(line_id)
-            pa = self._reduction.plane(a)
-            pb = self._reduction.plane(b)
-            end_a = intersect_line_plane(line, pa)
-            end_b = intersect_line_plane(line, pb)
-            mid = midpoint_line_planes(line, pa, pb)
-            diam = float(self._reduction.display_default_mm.get("line_diameter", 1.0))
-            self.plotter.add_mesh(
-                _line_tube_mesh(self._to_view_point(end_a), self._to_view_point(end_b), diam),
-                name="rd_preview_axis",
-                color="#2ecc71",
-                reset_camera=False,
-                pickable=False,
-                render=False,
-            )
-            r = max(float(self._reduction.display_default_mm.get("point", 4.0)), 0.5)
-            self.plotter.add_mesh(
-                pv.Sphere(radius=r * 1.4, center=self._to_view_point(mid).tolist()),
-                name="rd_preview_point",
-                color="#2ecc71",
-                reset_camera=False,
-                pickable=False,
-                render=False,
-            )
-            for i, pt in enumerate((end_a, end_b)):
-                self.plotter.add_mesh(
-                    pv.Sphere(radius=r * 0.7, center=self._to_view_point(pt).tolist()),
-                    name=f"rd_preview_end{i}",
-                    color="#27ae60",
-                    reset_camera=False,
-                    pickable=False,
-                    render=False,
-                )
-        except Exception:
-            traceback.print_exc()
-        self.plotter.render()
 
     def _reduction_apply(self):
         eid = self._reduction_editing_id()
@@ -1647,28 +1524,21 @@ class ReductionMixin:
         self._refresh_reduction_actors()
 
     def _measure_operand_meta(self) -> tuple[tuple[str, str], tuple[str, str]]:
-        op = None
-        if hasattr(self, "rd_measure_op"):
-            op = self.rd_measure_op.currentData()
-        return {
-            "distance_points": (("point", "point"), ("Point A", "Point B")),
-            "distance_point_plane": (("point", "plane"), ("Point", "Plane")),
-            "distance_point_line": (("point", "line"), ("Point", "Line")),
-            "angle_planes": (("plane", "plane"), ("Plane A", "Plane B")),
-            "angle_lines": (("line", "line"), ("Line A", "Line B")),
-            "angle_line_plane": (("line", "plane"), ("Line", "Plane")),
-        }.get(op, (("point", "point"), ("Point A", "Point B")))
+        op = self.rd_measure_op.currentData() if hasattr(self, "rd_measure_op") else None
+        measure = MEASURE_OP_BY_KEY.get(op)
+        if measure is None:
+            return (("point", "point"), ("Point A", "Point B"))
+        return (
+            (measure.operands[0].kind, measure.operands[1].kind),
+            (measure.operands[0].label, measure.operands[1].label),
+        )
 
     def _measure_operand_keys(self) -> tuple[str, str]:
         op = self.rd_measure_op.currentData() if hasattr(self, "rd_measure_op") else None
-        return {
-            "distance_points": ("a", "b"),
-            "distance_point_plane": ("point", "plane"),
-            "distance_point_line": ("point", "line"),
-            "angle_planes": ("a", "b"),
-            "angle_lines": ("a", "b"),
-            "angle_line_plane": ("line", "plane"),
-        }.get(op, ("a", "b"))
+        measure = MEASURE_OP_BY_KEY.get(op)
+        if measure is None:
+            return ("a", "b")
+        return (measure.operands[0].key, measure.operands[1].key)
 
     def _reduction_on_measure_op(self, *_args) -> None:
         kinds, labels = self._measure_operand_meta()
@@ -1888,13 +1758,12 @@ class ReductionMixin:
                 f"faces.{alias}: no plane_index={plane_index} on {g['name']}"
             )
         plane = Plane.from_array(p["abcd"])
-        record = {
-            "abcd": plane.as_array().tolist(),
-            "provenance": "scanned",
-            "group_id": int(g["id"]),
-            "group_name": str(g["name"]),
-            "plane_index": plane_index,
-            "quality": {
+        record = scanned_plane_record(
+            plane,
+            group_id=int(g["id"]),
+            group_name=str(g["name"]),
+            plane_index=plane_index,
+            quality={
                 k: p.get(k)
                 for k in (
                     "status",
@@ -1906,7 +1775,7 @@ class ReductionMixin:
                 )
                 if p.get(k) is not None
             },
-        }
+        )
         return plane, record, self._reduction_anchor_for_group(g)
 
     def _reduction_load_recipe_path(self, path: str | Path, *, confirm: bool = True) -> int:
@@ -1964,15 +1833,15 @@ class ReductionMixin:
         self._status(f"saved recipe → {path}")
 
     def _reduction_export_geometry(self):
-        include_aligned = (
-            bool(getattr(self, "rd_export_frame_cb", None) and self.rd_export_frame_cb.isChecked())
-            and self._view_frame is not None
-        )
         self._reduction_capture_frame_spec()
+        want_aligned = bool(
+            getattr(self, "rd_export_frame_cb", None) and self.rd_export_frame_cb.isChecked()
+        )
+        aligned_frame = self._reduction.rigid_frame() if want_aligned else None
         result = export_reduction_result(
             self._reduction,
             source_project=str(self.project_dir.resolve()),
-            aligned_frame=self._view_frame if include_aligned else None,
+            aligned_frame=aligned_frame,
         )
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -1991,10 +1860,12 @@ class ReductionMixin:
         )
         self._reduction_capture_frame_spec()
         write_recipe_json(recipe_path, self._reduction.to_recipe())
-        if include_aligned:
-            frame_note = f", survey + {self._frame_status_text()}"
+        if want_aligned and result.aligned is not None:
+            frame_note = ", survey + aligned"
+        elif want_aligned:
+            frame_note = ", survey (set FRAME axis and origin for aligned)"
         else:
-            frame_note = ", frame: survey"
+            frame_note = ", survey only"
         self._status(
             f"exported {path}  ({len(result.planes)} planes, "
             f"{len(result.lines)} lines, {len(result.points)} points{frame_note})"

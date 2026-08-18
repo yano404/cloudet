@@ -142,7 +142,7 @@ cloudet reduce <project> --recipe recipe.json -o geometry.json
 
 **aligned の書き出し:** `cloudet reduce` はレシピに `frame` があれば `aligned` と
 `frame` を付けます。GUI では **Also write aligned-frame coordinates** にチェックし、
-**Align Z** を押したうえで **Export geometry…** してください（FRAME の選択だけでは足りません）。
+FRAME の **Axis** と **Origin** を設定してください（Export に Align Z は不要）。
 GUI は同じフォルダに `geometry_recipe.json` も書きます。
 
 #### aligned 軸オペランド（`aligned.x` / `aligned.y` / `aligned.z`）
@@ -194,10 +194,11 @@ GUI は Load recipe / Load All でその選択を復元しますが、**Align Z 
    載せます。XY を空にすれば最小回転のままです。**Survey** で測量座標の表示に戻します。
    Groups・レシピの構築結果・Fit は測量のままです。pick も元の点群から行います。
    Axis/Origin 設定後は line オペランド（回転、line ∩ plane など）に **aligned X/Y/Z** が出ます。
-6. **Align Z** 適用中かつ **Also write aligned-frame coordinates** ON の
-   **Export geometry…** で、測量座標に加え `aligned` と `frame` を書けます。
-   `cloudet reduce` もレシピに `frame` があれば同じです。Load recipe は
-   `recipe.frame` から FRAME の選択を戻しますが、表示は Align Z を押すまで測量のままです。
+6. **Also write aligned-frame coordinates** ON かつ FRAME の **Axis/Origin** 設定後、
+   **Export geometry…** で測量座標に加え `aligned` と `frame` を書けます（Export に
+   Align Z は不要）。`cloudet reduce` もレシピに `frame` があれば同じです。
+   Load recipe は `recipe.frame` から FRAME の選択を戻します。3D 表示を合わせる
+   ときだけ Align Z を押してください。
 
 **Measure** で、構築したエンティティの距離・角度を読みます:
 

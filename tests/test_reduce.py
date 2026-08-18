@@ -397,6 +397,37 @@ def test_preview_construct_step_does_not_mutate_session():
     assert "tmp_off" not in sess.ids()
 
 
+def test_preview_construct_step_midpoint_segment_ends():
+    from cloudet.reduce import ReductionSession, preview_construct_step
+
+    sess = ReductionSession()
+    left = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
+    front = Plane(np.array([0.0, 1.0, 0.0]), 20.0)
+    z0 = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
+    z10 = Plane(np.array([0.0, 0.0, 1.0]), -10.0)
+    sess.bind_scanned("left", left, group_name="G0", group_id=0)
+    sess.bind_scanned("front", front, group_name="G1", group_id=1)
+    sess.bind_scanned("z0", z0, group_name="G2", group_id=2)
+    sess.bind_scanned("z10", z10, group_name="G3", group_id=3)
+    sess.intersect_planes("axis", "left", "front")
+    preview = preview_construct_step(
+        sess,
+        {
+            "id": "mid",
+            "op": "midpoint_line_planes",
+            "line": "axis",
+            "a": "z0",
+            "b": "z10",
+        },
+    )
+    assert preview.kind == "point"
+    assert preview.segment_ends is not None
+    assert np.allclose(preview.point, [-50.0, -20.0, 5.0])
+    assert np.allclose(preview.segment_ends[0][2], 0.0)
+    assert np.allclose(preview.segment_ends[1][2], 10.0)
+    assert "mid" not in sess.ids()
+
+
 def _beam_recipe():
     return {
         "version": 1,
@@ -617,10 +648,18 @@ def test_recipe_frame_roundtrip(tmp_path):
     sess2 = ReductionSession.from_recipe(out, project_dir=_make_project(tmp_path))
     assert sess2.frame_spec == sess.frame_spec
     assert np.allclose(sess2.point("beam_on_target"), sess.point("beam_on_target"))
-    # GUI export uses to_result(); aligned is applied only when Align Z is active.
+    # export uses rigid_frame() from frame_spec (Align Z view pose not required).
     survey = sess.to_result()
     assert survey.aligned is None
     assert sess.rigid_frame() is not None
+    from cloudet.reduce import export_reduction_result
+
+    aligned = export_reduction_result(
+        sess, source_project=str(tmp_path), aligned_frame=sess.rigid_frame()
+    )
+    assert aligned.aligned is not None
+    assert aligned.frame is not None
+    assert "beam_on_target" in aligned.aligned["points"]
 
 
 def test_recipe_frame_yaw_roundtrip(tmp_path):
