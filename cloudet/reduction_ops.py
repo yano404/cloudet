@@ -211,6 +211,21 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         scalars=(ScalarField("angle_deg", "rd_rot_angle"),),
         missing_msg="rotate plane needs a plane and an axis",
     ),
+    ReductionOpDef(
+        "intersect_normal_plane",
+        "intersect_normal_plane",
+        "Normal ∩ plane → point",
+        "Create point",
+        12,
+        "point",
+        "point",
+        operands=(
+            OperandField("src", "plane", "rd_np_src"),
+            OperandField("dst", "plane", "rd_np_dst"),
+        ),
+        missing_msg="Normal ∩ plane needs a source plane and a destination plane",
+        operands_must_differ=True,
+    ),
 )
 
 MEASURE_OPS: tuple[MeasureOpDef, ...] = (

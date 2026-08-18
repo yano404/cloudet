@@ -656,8 +656,6 @@ def _construct_step_schema(op: str) -> tuple[str, tuple[tuple[str, str], ...], t
         operands = tuple((field.step_key, field.kind) for field in defn.operands)
         scalars = tuple(field.step_key for field in defn.scalars)
         return defn.result_kind, operands, scalars, defn.operands_must_differ
-    if op == "intersect_normal_plane":
-        return "point", (("src", "plane"), ("dst", "plane")), (), False
     raise ValueError(f"unknown op {op!r}")
 
 
@@ -1128,6 +1126,7 @@ class ReductionSession:
             raise ValueError(f"id {entity_id!r} is reserved")
         if entity_id in self._store:
             raise ValueError(f"duplicate id {entity_id!r}")
+        _parse_construct_step(step, where=f"construct.{entity_id}")
         _run_construct_step(self._store, step, extra_lines=self.aligned_axis_lines())
         self._construct.append(step)
         self.visible[entity_id] = True
@@ -1202,6 +1201,12 @@ class ReductionSession:
         step["id"] = entity_id
         if not step.get("op"):
             raise ValueError("construct step needs op")
+        old_op = str(self._construct[idx].get("op") or "")
+        new_op = str(step.get("op") or "")
+        if old_op != new_op:
+            raise ValueError(
+                f"cannot change op of {entity_id!r} from {old_op!r} to {new_op!r}"
+            )
         allowed = self.operand_ids_before(entity_id)
         allowed.update(self.available_aligned_axis_ids(before=allowed))
         ops = _step_operand_ids(step)

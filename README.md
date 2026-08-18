@@ -143,7 +143,7 @@ Example recipe (tracker walls → beam axis ∩ target):
 ```
 
 Supported construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
-`intersect_line_plane`, `intersect_normal_plane`, `line_from_point_normal`
+`intersect_line_plane`, `intersect_normal_plane` (source-plane normal ∩ dest plane), `line_from_point_normal`
 (axis through a point along a plane normal), `line_from_two_points`,
 `midpoint_line_planes` (midpoint of the segment cut by two planes),
 `plane_from_plane_point`, `plane_from_line_point`, `plane_from_two_lines`,
@@ -212,7 +212,8 @@ Open **Reduction** to construct geometry:
 
 1. Choose an **operation** — only that step’s inputs appear (plane / axis pickers, offset slider, …)
 2. For **Offset**: pick a plane, drag the distance slider for a green live preview, then Apply
-3. For intersections: pick the required planes/axes, then Apply
+3. For intersections: pick the required planes/axes, then Apply.
+   **Normal ∩ plane → point** shoots the source plane's normal at another plane.
 4. Toggle visibility in Entities; **Save recipe…** / **Export geometry…** for analysis
 5. **FRAME** (display only): pick Axis (line) and Origin (point), then **Align Z**.
    The view uses the smallest rotation that maps the axis to `(0, 0, 1)` with

@@ -119,7 +119,7 @@ cloudet reduce <project> --recipe recipe.json -o geometry.json
 反対側（例: 外向き法線に対する「内側」）は負の距離を使います。
 
 対応する construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
-`intersect_line_plane`, `intersect_normal_plane`, `line_from_point_normal`
+`intersect_line_plane`, `intersect_normal_plane`（元の面の法線 ∩ 先の面）、`line_from_point_normal`
 （点を通り、面の法線方向の軸）、`line_from_two_points`（2点を通る軸）、
 `midpoint_line_planes`（直線を2平面で切った線分の中点）、
 `plane_from_plane_point`, `plane_from_line_point`, `plane_from_two_lines`,
@@ -186,7 +186,8 @@ GUI は Load recipe / Load All でその選択を復元しますが、**Align Z 
 
 1. まず **操作を選択** — その操作の入力だけ出る（面 / 軸の選択、オフセットスライダーなど）
 2. **Offset**: 面を選び、スライダーで距離をプレビュー（緑）→ Apply で確定
-3. 交差系: 必要な面・軸を選んで Apply
+3. 交差系: 必要な面・軸を選んで Apply。
+   **Normal ∩ plane → point** は元の面の法線を別の面に当てた交点です。
 4. Entities で表示切替後、**Save recipe…** / **Export geometry…**
 5. **FRAME**（表示専用）: Axis（直線）と Origin（点）を選び **Align Z**。
    軸を `(0, 0, 1)` に、原点を `(0, 0, 0)` に移す最小回転を使います。

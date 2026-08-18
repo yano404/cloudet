@@ -268,6 +268,25 @@ def test_reduction_session_line_from_two_points():
         sess.line_from_two_points("bad", "p1", "p1")
 
 
+def test_reduction_session_intersect_normal_plane():
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession()
+    src = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
+    dst = Plane(np.array([0.0, 0.0, 1.0]), -100.0)
+    sess.bind_scanned("src", src, group_name="G0", group_id=0)
+    sess.bind_scanned("dst", dst, group_name="G1", group_id=1)
+    sess.intersect_normal_plane("hit", "src", "dst")
+    assert np.allclose(sess.point("hit"), [0.0, 0.0, 100.0])
+    rec = sess.record_of("hit")
+    assert rec["op"] == "intersect_normal_plane"
+    step = [s for s in sess.to_recipe()["construct"] if s["id"] == "hit"][0]
+    assert step["src"] == "src"
+    assert step["dst"] == "dst"
+    with pytest.raises(ValueError, match="must differ"):
+        sess.intersect_normal_plane("bad", "src", "src")
+
+
 def test_reduction_session_midpoint_line_planes():
     from cloudet.reduce import ReductionSession
 
@@ -555,6 +574,25 @@ def test_replace_construct_step_rejects_later_operand(tmp_path):
         )
     assert sess.to_recipe()["construct"] == before["construct"]
     assert np.allclose(sess.point("beam_on_target"), [0.0, 0.0, 100.0])
+
+
+def test_replace_construct_step_rejects_op_change(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession.from_recipe(
+        _beam_recipe(), project_dir=_make_project(tmp_path)
+    )
+    with pytest.raises(ValueError, match="cannot change op"):
+        sess.replace_construct_step(
+            "left_in",
+            {
+                "id": "left_in",
+                "op": "intersect_planes",
+                "a": "tracker_left",
+                "b": "tracker_front",
+            },
+        )
+    assert sess.kind_of("left_in") == "plane"
 
 
 def test_replace_construct_step_rollback_on_failure(tmp_path):

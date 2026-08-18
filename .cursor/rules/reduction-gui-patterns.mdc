@@ -44,7 +44,8 @@ self._status(f"...")
 ```
 
 ## 6. Operand IDs
-- `_reduction_operand_ids()` branch for selection highlighting
+- `_reduction_selected_ids()` reads operand widgets from `REDUCTION_OPS` metadata
+  (no per-op branch)
 
 ## 7. reduce.py
 - Import new geometry function
