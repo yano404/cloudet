@@ -121,8 +121,54 @@ cloudet reduce <project> --recipe recipe.json -o geometry.json
 対応する construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
 `intersect_line_plane`, `intersect_normal_plane`, `line_from_point_normal`
 （点を通り、面の法線方向の軸）、`line_from_two_points`（2点を通る軸）、
-`midpoint_line_planes`（直線を2平面で切った線分の中点）。出力 `geometry.json` は
-planes / lines / points と provenance（`scanned` | `offset` | `intersection`）を含みます。
+`midpoint_line_planes`（直線を2平面で切った線分の中点）、
+`plane_from_plane_point`, `plane_from_line_point`, `plane_from_two_lines`,
+`rotate_plane_about_line`（任意の軸まわりの剛体回転。角度は度）。
+
+#### `geometry.json`（エクスポート出力）
+
+`geometry.json` はレシピを**実行した結果**に、各 entity の record を載せたものです（点群本体ではありません）。
+トップレベルの `planes` / `lines` / `points` は常に**測量（survey）座標**です。
+各 record には provenance（`scanned` | `offset` | `intersection` | `constructed`）と
+パラメータ（`abcd`, `point`/`direction`, `xyz` など）が入ります。
+
+| キー | 内容 |
+|------|------|
+| `recipe` | `{ "sha256", "echo" }` — 再現用にレシピ全文 |
+| `export` | 解析対象 id のリスト（メタデータ。全 entity は別途列挙） |
+| `frame` | 任意。Align Z 姿勢（`axis`, `origin`, `flip_z`, 任意で `yaw_*`） |
+| `aligned` | 任意。aligned 座標系の `{ planes, lines, points }` |
+| `measures` | 任意。pin した測定（再計算済み `value` / `unit`） |
+
+**aligned の書き出し:** `cloudet reduce` はレシピに `frame` があれば `aligned` と
+`frame` を付けます。GUI では **Also write aligned-frame coordinates** にチェックし、
+**Align Z** を押したうえで **Export geometry…** してください（FRAME の選択だけでは足りません）。
+GUI は同じフォルダに `geometry_recipe.json` も書きます。
+
+#### aligned 軸オペランド（`aligned.x` / `aligned.y` / `aligned.z`）
+
+`recipe.frame` で `axis` と `origin` を設定すると、construct の line 引数に
+仮想 id `aligned.x`, `aligned.y`, `aligned.z` が使えます。Align Z 後の
+ビュー triad（+X / +Y / +Z）方向の、原点を通る直線です。GUI では FRAME の
+Axis/Origin 選択後に line コンボに出ますが、独立 entity ではないため
+`geometry.json` には行として出ません。例:
+
+```json
+{
+  "frame": { "axis": "beam_axis", "origin": "beam_on_target", "flip_z": false },
+  "construct": [
+    {
+      "id": "tilted",
+      "op": "rotate_plane_about_line",
+      "plane": "target",
+      "line": "aligned.x",
+      "angle_deg": 90.0
+    }
+  ]
+}
+```
+
+出力 `geometry.json` は planes / lines / points と provenance を含みます。
 
 任意のトップレベル `frame` は Align Z のメタデータだけです（`axis` 直線 id、
 `origin` 点 id、`flip_z`、任意で `yaw_line` または `yaw_plane` と `yaw_to`
@@ -147,10 +193,11 @@ GUI は Load recipe / Load All でその選択を復元しますが、**Align Z 
    任意の **XY** で、**直線**または**平面法線**（水平成分のみ）を ±X / ±Y に
    載せます。XY を空にすれば最小回転のままです。**Survey** で測量座標の表示に戻します。
    Groups・レシピの構築結果・Fit は測量のままです。pick も元の点群から行います。
-6. Align Z 中の **Export geometry…** は、測量の planes / lines / points に加えて
-   `aligned` コピーと姿勢 `frame` を書けます。`cloudet reduce` もレシピに
-   `frame` があれば同じです。Load recipe は `recipe.frame` から
-   FRAME の選択を戻しますが、表示は Align Z を押すまで測量のままです。
+   Axis/Origin 設定後は line オペランド（回転、line ∩ plane など）に **aligned X/Y/Z** が出ます。
+6. **Align Z** 適用中かつ **Also write aligned-frame coordinates** ON の
+   **Export geometry…** で、測量座標に加え `aligned` と `frame` を書けます。
+   `cloudet reduce` もレシピに `frame` があれば同じです。Load recipe は
+   `recipe.frame` から FRAME の選択を戻しますが、表示は Align Z を押すまで測量のままです。
 
 **Measure** で、構築したエンティティの距離・角度を読みます:
 

@@ -47,3 +47,21 @@ self._status(f"...")
 - Import new geometry function
 - `_run_construct_step()` handler
 - Public session method (e.g. `ReductionSession.plane_from_plane_point()`)
+
+## Aligned axis operands (`aligned.x` / `aligned.y` / `aligned.z`)
+
+Virtual line ids resolved from `frame_spec` (not stored in `_store`):
+
+- **Session:** `ReductionSession.aligned_axis_lines()` / `available_aligned_axis_ids()`
+  / `line("aligned.x")` via `cloudet.frame.aligned_axis_line`
+- **Construct:** pass `extra_lines=session.aligned_axis_lines()` into `_run_construct_step`
+- **Recipe load:** set `target.frame_spec` before running construct so aligned ops resolve
+- **GUI line combos:** `_reduction_fill_combo(..., kind="line")` prepends aligned entries
+  when `include_aligned_axes=True` (default). Use `include_aligned_axes=False` for
+  FRAME axis combo and frame yaw ref — aligned ids must not be frame axis/origin.
+- **Refresh:** `_on_frame_combo_changed` calls `_reduction_refresh_operand_combos(include_frame=False)`
+  to update line combos without resetting FRAME widgets.
+- **Update mode allowlist:** `operand_ids_before()` + `available_aligned_axis_ids(before=...)`
+- **Reserved ids:** reject `aligned.*` as construct result ids in `apply_step` / `rename`
+- **Not in tree/export rows:** aligned axes are operands only; recipe may reference
+  `"line": "aligned.x"` but geometry.json has no separate `lines.aligned.x` entry

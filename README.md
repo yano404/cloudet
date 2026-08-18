@@ -145,9 +145,55 @@ Example recipe (tracker walls → beam axis ∩ target):
 Supported construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
 `intersect_line_plane`, `intersect_normal_plane`, `line_from_point_normal`
 (axis through a point along a plane normal), `line_from_two_points`,
-`midpoint_line_planes` (midpoint of the segment cut by two planes).
-Output `geometry.json` lists
-planes / lines / points with provenance (`scanned` | `offset` | `intersection`).
+`midpoint_line_planes` (midpoint of the segment cut by two planes),
+`plane_from_plane_point`, `plane_from_line_point`, `plane_from_two_lines`,
+`rotate_plane_about_line` (rigid rotation about any axis; angle in degrees).
+
+#### `geometry.json` (export output)
+
+`geometry.json` is the **executed** recipe plus computed entity records (not the
+point cloud). Top-level `planes` / `lines` / `points` are always in **survey**
+coordinates. Each record includes provenance (`scanned` | `offset` | `intersection`
+| `constructed`) and parameters (`abcd`, `point`/`direction`, `xyz`, …).
+
+| Key | Contents |
+|-----|----------|
+| `recipe` | `{ "sha256", "echo" }` — full recipe copy for reproducibility |
+| `export` | ids marked for analysis (metadata; all entities are still listed) |
+| `frame` | optional Align Z pose (`axis`, `origin`, `flip_z`, optional `yaw_*`) |
+| `aligned` | optional `{ planes, lines, points }` in the aligned frame |
+| `measures` | optional pinned measurements with recomputed `value` / `unit` |
+
+**Aligned export:** `cloudet reduce` adds `aligned` + `frame` when the recipe
+has `frame`. In the GUI, check **Also write aligned-frame coordinates** and
+press **Align Z** before **Export geometry…** (FRAME picks alone are not enough).
+The GUI also writes a sibling `geometry_recipe.json` for replay.
+
+#### Aligned axis operands (`aligned.x` / `aligned.y` / `aligned.z`)
+
+When `recipe.frame` sets `axis` and `origin`, construct steps may reference
+virtual line ids `aligned.x`, `aligned.y`, `aligned.z` as operands. They are
+lines through the frame origin along the view triad (+X / +Y / +Z in survey
+space after Align Z). They appear in GUI **line** combos once FRAME axis and
+origin are chosen; they are **not** stored as separate entities and do not
+appear in `geometry.json` as their own rows. Example:
+
+```json
+{
+  "frame": { "axis": "beam_axis", "origin": "beam_on_target", "flip_z": false },
+  "construct": [
+    {
+      "id": "tilted",
+      "op": "rotate_plane_about_line",
+      "plane": "target",
+      "line": "aligned.x",
+      "angle_deg": 90.0
+    }
+  ]
+}
+```
+
+Output `geometry.json` lists planes / lines / points with provenance.
 
 Optional top-level `frame` is Align Z metadata only (`axis` line id, `origin`
 point id, `flip_z`, and optionally `yaw_line` or `yaw_plane` with `yaw_to`
@@ -173,9 +219,10 @@ Open **Reduction** to construct geometry:
    the origin at `(0, 0, 0)`. Optional **XY**: map a **line** or **plane
    normal** (horizontal component only) onto ±X or ±Y. Omit XY for the smallest
    rotation only. **Survey** returns the view to survey coordinates. Groups, recipe constructs, and Fit stay in survey;
-   picking still uses the original cloud.
-6. With Align Z active, **Export geometry…** can also write an `aligned` copy
-   plus the frame pose. Top-level planes / lines / points remain survey.
+   picking still uses the original cloud. Once axis and origin are set, **aligned X/Y/Z**
+   appear in line operand combos (rotate, line ∩ plane, …).
+6. With **Align Z** active and **Also write aligned-frame coordinates** checked,
+   **Export geometry…** adds an `aligned` copy plus `frame` under survey numbers.
    `cloudet reduce` does the same when the recipe has `frame`.
    Load recipe restores FRAME combos from `recipe.frame` but leaves the view
    in survey until you press Align Z again.
