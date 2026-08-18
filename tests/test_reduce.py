@@ -397,6 +397,37 @@ def test_preview_construct_step_does_not_mutate_session():
     assert "tmp_off" not in sess.ids()
 
 
+def test_preview_construct_step_midpoint_segment_ends():
+    from cloudet.reduce import ReductionSession, preview_construct_step
+
+    sess = ReductionSession()
+    left = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
+    front = Plane(np.array([0.0, 1.0, 0.0]), 20.0)
+    z0 = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
+    z10 = Plane(np.array([0.0, 0.0, 1.0]), -10.0)
+    sess.bind_scanned("left", left, group_name="G0", group_id=0)
+    sess.bind_scanned("front", front, group_name="G1", group_id=1)
+    sess.bind_scanned("z0", z0, group_name="G2", group_id=2)
+    sess.bind_scanned("z10", z10, group_name="G3", group_id=3)
+    sess.intersect_planes("axis", "left", "front")
+    preview = preview_construct_step(
+        sess,
+        {
+            "id": "mid",
+            "op": "midpoint_line_planes",
+            "line": "axis",
+            "a": "z0",
+            "b": "z10",
+        },
+    )
+    assert preview.kind == "point"
+    assert preview.segment_ends is not None
+    assert np.allclose(preview.point, [-50.0, -20.0, 5.0])
+    assert np.allclose(preview.segment_ends[0][2], 0.0)
+    assert np.allclose(preview.segment_ends[1][2], 10.0)
+    assert "mid" not in sess.ids()
+
+
 def _beam_recipe():
     return {
         "version": 1,
@@ -617,10 +648,18 @@ def test_recipe_frame_roundtrip(tmp_path):
     sess2 = ReductionSession.from_recipe(out, project_dir=_make_project(tmp_path))
     assert sess2.frame_spec == sess.frame_spec
     assert np.allclose(sess2.point("beam_on_target"), sess.point("beam_on_target"))
-    # GUI export uses to_result(); aligned is applied only when Align Z is active.
+    # export uses rigid_frame() from frame_spec (Align Z view pose not required).
     survey = sess.to_result()
     assert survey.aligned is None
     assert sess.rigid_frame() is not None
+    from cloudet.reduce import export_reduction_result
+
+    aligned = export_reduction_result(
+        sess, source_project=str(tmp_path), aligned_frame=sess.rigid_frame()
+    )
+    assert aligned.aligned is not None
+    assert aligned.frame is not None
+    assert "beam_on_target" in aligned.aligned["points"]
 
 
 def test_recipe_frame_yaw_roundtrip(tmp_path):
@@ -1035,3 +1074,109 @@ def test_remove_frame_axis_drops_aligned_axis_dependents(tmp_path):
     assert "tilted" in removed
     assert "tilted" not in sess.ids()
     assert sess.frame_spec is None
+
+
+def test_replay_warns_when_frame_becomes_invalid():
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession()
+    left = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
+    front = Plane(np.array([0.0, 1.0, 0.0]), 20.0)
+    sess.bind_scanned("left", left, group_name="G0", group_id=0)
+    sess.bind_scanned("front", front, group_name="G1", group_id=1)
+    sess.intersect_planes("axis", "left", "front")
+    sess.frame_spec = {"axis": "axis", "origin": "missing", "flip_z": False}
+    wall = Plane(np.array([1.0, 0.0, 0.0]), 0.0)
+    sess.bind_scanned("left", wall, group_name="G0", group_id=0)
+    assert sess.frame_spec is None
+    assert any("dropped frame" in w for w in sess.replay_warnings)
+
+
+def test_replay_warns_when_measure_becomes_invalid(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=_make_project(tmp_path))
+    sess.measures.append(
+        {
+            "id": "d1",
+            "op": "distance_points",
+            "a": "beam_on_target",
+            "b": "missing_point",
+        }
+    )
+    wall = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
+    sess.bind_scanned("tracker_left", wall, group_name="G0", group_id=0)
+    assert not any(m["id"] == "d1" for m in sess.measures)
+    assert any("dropped measure 'd1'" in w for w in sess.replay_warnings)
+
+
+def test_check_recipe_rejects_unknown_construct_op():
+    from cloudet.reduce import _check_recipe
+
+    recipe = {
+        "version": 1,
+        "units": "mm",
+        "faces": {"wall": {"from": "group", "name": "wall"}},
+        "construct": [{"id": "x", "op": "not_real", "a": "wall"}],
+    }
+    with pytest.raises(ValueError, match="unknown op"):
+        _check_recipe(recipe)
+
+
+def test_check_recipe_rejects_duplicate_construct_id():
+    from cloudet.reduce import _check_recipe
+
+    recipe = {
+        "version": 1,
+        "units": "mm",
+        "faces": {"wall": {"from": "group", "name": "wall"}},
+        "construct": [
+            {"id": "same", "op": "offset", "of": "wall", "distance_mm": 1.0},
+            {"id": "same", "op": "offset", "of": "wall", "distance_mm": 2.0},
+        ],
+    }
+    with pytest.raises(ValueError, match="duplicate id"):
+        _check_recipe(recipe)
+
+
+def test_apply_recipe_validates_construct_operand_kind(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["construct"].append(
+        {"id": "bad", "op": "intersect_planes", "a": "beam_on_target", "b": "target"}
+    )
+    with pytest.raises(ValueError, match="must be a plane"):
+        ReductionSession.from_recipe(recipe, project_dir=_make_project(tmp_path))
+
+
+def test_build_frame_spec_yaw_exclusive():
+    from cloudet.reduce import build_frame_spec, normalize_frame_spec
+
+    spec = build_frame_spec(
+        axis="axis",
+        origin="origin",
+        flip_z=True,
+        yaw_to="x",
+        yaw_kind="plane",
+        yaw_ref="p1",
+    )
+    assert spec == {
+        "axis": "axis",
+        "origin": "origin",
+        "flip_z": True,
+        "yaw_to": "x",
+        "yaw_plane": "p1",
+    }
+    assert "yaw_line" not in spec
+    roundtrip = normalize_frame_spec(
+        {
+            "axis": "axis",
+            "origin": "origin",
+            "flip_z": False,
+            "yaw_line": "line1",
+            "yaw_to": "y",
+        }
+    )
+    assert roundtrip["yaw_line"] == "line1"
+    assert "yaw_plane" not in roundtrip

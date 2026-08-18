@@ -7,6 +7,7 @@ import numpy as np
 from PySide6.QtWidgets import QComboBox
 
 from cloudet.frame import RigidFrame, transform_record, with_aligned_copy
+from cloudet.reduce import build_frame_spec
 from cloudet.ui.widgets import _reset_combo
 
 
@@ -70,22 +71,25 @@ class FrameMixin:
         flip = False
         if hasattr(self, "rd_frame_flip"):
             flip = bool(self.rd_frame_flip.currentData())
-        self._reduction.frame_spec = {
-            "axis": axis,
-            "origin": origin,
-            "flip_z": flip,
-        }
         yaw_to = None
         if hasattr(self, "rd_frame_yaw_to"):
             yaw_to = self.rd_frame_yaw_to.currentData()
         yaw_ref = self._reduction_combo_id(getattr(self, "rd_frame_yaw_ref", None))
         if yaw_to and yaw_ref:
-            self._reduction.frame_spec["yaw_to"] = str(yaw_to)
-            kind = self._frame_yaw_kind()
-            if kind == "plane":
-                self._reduction.frame_spec["yaw_plane"] = yaw_ref
-            else:
-                self._reduction.frame_spec["yaw_line"] = yaw_ref
+            self._reduction.frame_spec = build_frame_spec(
+                axis=axis,
+                origin=origin,
+                flip_z=flip,
+                yaw_to=str(yaw_to),
+                yaw_kind=self._frame_yaw_kind(),
+                yaw_ref=yaw_ref,
+            )
+        else:
+            self._reduction.frame_spec = build_frame_spec(
+                axis=axis,
+                origin=origin,
+                flip_z=flip,
+            )
 
     def _reduction_restore_frame_combos(self) -> None:
         if not hasattr(self, "rd_frame_axis"):
