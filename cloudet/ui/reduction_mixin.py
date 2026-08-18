@@ -812,7 +812,7 @@ class ReductionMixin:
             )
             for eid in extras:
                 label = ALIGNED_AXIS_LABELS.get(eid, eid)
-                combo.addItem(f"{label}  (axis)", eid)
+                combo.addItem(label, eid)
         for eid in ids:
             tag = RD_KIND_LABEL.get(self._reduction.kind_of(eid), "")
             combo.addItem(f"{eid}  ({tag})" if tag else eid, eid)

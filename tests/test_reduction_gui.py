@@ -299,7 +299,7 @@ def test_aligned_axes_appear_at_tree_bottom_when_frame_set(gui):
     ids = _tree_ids(gui)
     assert ids[-3:] == ["aligned.x", "aligned.y", "aligned.z"]
     item = gui.rd_tree.topLevelItem(gui.rd_tree.topLevelItemCount() - 3)
-    assert item.text(0) == "aligned X"
+    assert item.text(0) == "aligned X axis"
     assert item.text(1) == "axis"
     assert item.text(2) == "—"
     assert item.checkState(0) == Qt.Checked

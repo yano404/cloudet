@@ -222,7 +222,7 @@ Open **Reduction** to construct geometry:
    rotation only. **Survey** returns the view to survey coordinates. Groups, recipe constructs, and Fit stay in survey;
    picking still uses the original cloud. Once axis and origin are set, **aligned X/Y/Z**
    appear in line operand combos (rotate, line ∩ plane, …) and as thin
-   **aligned X/Y/Z** rows at the bottom of Entities (visibility only;
+   **aligned X/Y/Z axis** rows at the bottom of Entities (visibility only;
    rename/delete stay off).
 6. With **Also write aligned-frame coordinates** checked and FRAME **axis** and
    **origin** set, **Export geometry…** adds an `aligned` copy plus `frame` under

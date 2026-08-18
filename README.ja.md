@@ -195,7 +195,7 @@ GUI は Load recipe / Load All でその選択を復元しますが、**Align Z 
    載せます。XY を空にすれば最小回転のままです。**Survey** で測量座標の表示に戻します。
    Groups・レシピの構築結果・Fit は測量のままです。pick も元の点群から行います。
    Axis/Origin 設定後は line オペランド（回転、line ∩ plane など）と
-   Entities 最下部に **aligned X/Y/Z** が出ます（表示切替のみ。rename/delete 不可）。
+   Entities 最下部に **aligned X/Y/Z axis** が出ます（表示切替のみ。rename/delete 不可）。
 6. **Also write aligned-frame coordinates** ON かつ FRAME の **Axis/Origin** 設定後、
    **Export geometry…** で測量座標に加え `aligned` と `frame` を書けます（Export に
    Align Z は不要）。`cloudet reduce` もレシピに `frame` があれば同じです。
