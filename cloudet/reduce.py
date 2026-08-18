@@ -29,7 +29,12 @@ from cloudet.geometry import (
     intersect_three_planes,
     line_from_point_normal,
     line_from_two_points,
+    midpoint_line_planes,
     offset_plane,
+    plane_from_line_point,
+    plane_from_plane_point,
+    plane_from_two_lines,
+    rotate_plane_about_line,
 )
 from cloudet.plane import Plane
 from cloudet.project import FittedPlane, load_fitted_plane, load_group_doc
@@ -353,6 +358,95 @@ def _run_construct_step(store: dict[str, _Entity], step: dict) -> None:
                     np.asarray(end_a, dtype=np.float64).tolist(),
                     np.asarray(end_b, dtype=np.float64).tolist(),
                 ],
+            },
+        )
+        return
+
+    if op == "plane_from_plane_point":
+        plane_id = step["plane"]
+        point_id = step["point"]
+        plane = plane_from_plane_point(
+            _require_plane(store, plane_id, where=where),
+            _require_point(store, point_id, where=where),
+        )
+        _put(
+            store,
+            entity_id,
+            "plane",
+            plane,
+            {
+                "abcd": plane.as_array().tolist(),
+                "provenance": "constructed",
+                "of": [plane_id, point_id],
+                "op": "plane_from_plane_point",
+            },
+        )
+        return
+
+    if op == "plane_from_line_point":
+        line_id = step["line"]
+        point_id = step["point"]
+        plane = plane_from_line_point(
+            _require_line(store, line_id, where=where),
+            _require_point(store, point_id, where=where),
+        )
+        _put(
+            store,
+            entity_id,
+            "plane",
+            plane,
+            {
+                "abcd": plane.as_array().tolist(),
+                "provenance": "constructed",
+                "of": [line_id, point_id],
+                "op": "plane_from_line_point",
+            },
+        )
+        return
+
+    if op == "plane_from_two_lines":
+        a = step["a"]
+        b = step["b"]
+        if a == b:
+            raise ValueError(f"{where}: lines a and b must differ")
+        plane = plane_from_two_lines(
+            _require_line(store, a, where=where),
+            _require_line(store, b, where=where),
+        )
+        _put(
+            store,
+            entity_id,
+            "plane",
+            plane,
+            {
+                "abcd": plane.as_array().tolist(),
+                "provenance": "constructed",
+                "of": [a, b],
+                "op": "plane_from_two_lines",
+            },
+        )
+        return
+
+    if op == "rotate_plane_about_line":
+        plane_id = step["plane"]
+        line_id = step["line"]
+        angle_deg = float(step["angle_deg"])
+        plane = rotate_plane_about_line(
+            _require_plane(store, plane_id, where=where),
+            _require_line(store, line_id, where=where),
+            angle_deg,
+        )
+        _put(
+            store,
+            entity_id,
+            "plane",
+            plane,
+            {
+                "abcd": plane.as_array().tolist(),
+                "provenance": "constructed",
+                "of": [plane_id, line_id],
+                "op": "rotate_plane_about_line",
+                "angle_deg": angle_deg,
             },
         )
         return
@@ -760,6 +854,9 @@ class ReductionSession:
             self.anchors[entity_id] = self.point(entity_id)
             return entity_id
         # Inherit overlay centre from an operand when possible.
+        if step.get("point") in self._store and self._store[step["point"]].kind == "point":
+            self.anchors[entity_id] = self.point(step["point"])
+            return entity_id
         of = step.get("of") or step.get("a") or step.get("src") or step.get("line")
         if of in self.anchors:
             self.anchors[entity_id] = self.anchors[of].copy()
@@ -1138,6 +1235,41 @@ class ReductionSession:
             "line": line,
             "a": a,
             "b": b,
+        })
+
+    def plane_from_plane_point(self, entity_id: str, plane: str, point: str) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "plane_from_plane_point",
+            "plane": plane,
+            "point": point,
+        })
+
+    def plane_from_line_point(self, entity_id: str, line: str, point: str) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "plane_from_line_point",
+            "line": line,
+            "point": point,
+        })
+
+    def plane_from_two_lines(self, entity_id: str, a: str, b: str) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "plane_from_two_lines",
+            "a": a,
+            "b": b,
+        })
+
+    def rotate_plane_about_line(
+        self, entity_id: str, plane: str, line: str, angle_deg: float
+    ) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "rotate_plane_about_line",
+            "plane": plane,
+            "line": line,
+            "angle_deg": float(angle_deg),
         })
 
     def unique_id(self, prefix: str) -> str:

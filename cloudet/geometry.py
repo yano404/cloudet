@@ -27,6 +27,10 @@ __all__ = [
     "line_from_point_normal",
     "line_from_two_points",
     "midpoint_line_planes",
+    "plane_from_line_point",
+    "plane_from_plane_point",
+    "plane_from_two_lines",
+    "rotate_plane_about_line",
     "plane_patch_corners",
     "line_segment_points",
     "distance_points",
@@ -159,6 +163,79 @@ def midpoint_line_planes(line: Line, plane_a: Plane, plane_b: Plane) -> np.ndarr
     a = intersect_line_plane(line, plane_a)
     b = intersect_line_plane(line, plane_b)
     return 0.5 * (a + b)
+
+
+def plane_from_plane_point(plane: Plane, point: np.ndarray) -> Plane:
+    """Plane parallel to ``plane`` passing through ``point``."""
+    p = np.asarray(point, dtype=np.float64).reshape(3)
+    n = plane.normal
+    return Plane(n, -float(n @ p))
+
+
+def plane_from_line_point(line: Line, point: np.ndarray) -> Plane:
+    """Plane through ``point`` with normal = the line direction."""
+    p = np.asarray(point, dtype=np.float64).reshape(3)
+    n = line.direction
+    return Plane(n, -float(n @ p))
+
+
+def plane_from_two_lines(a: Line, b: Line) -> Plane:
+    """Plane containing two non-skew lines.
+
+    Parallel lines must be coplanar; intersecting lines must meet. Skew or
+    collinear lines are an error.
+    """
+    d1 = a.direction
+    d2 = b.direction
+    w = b.point - a.point
+    cross = np.cross(d1, d2)
+    cross_norm = float(cross @ cross)
+
+    if cross_norm < _PARALLEL_EPS:
+        sep = np.cross(d1, w)
+        sep_norm = float(sep @ sep)
+        if sep_norm < _PARALLEL_EPS:
+            raise ValueError("lines are collinear; no unique plane")
+        n = sep / np.sqrt(sep_norm)
+        return Plane(n, -float(n @ a.point))
+
+    triple = float(w @ cross)
+    if abs(triple) > _PARALLEL_EPS * max(1.0, float(np.linalg.norm(w))):
+        raise ValueError("lines are skew; no common plane")
+
+    n = cross / np.sqrt(cross_norm)
+    a11 = float(d1 @ d1)
+    a12 = float(d1 @ d2)
+    a22 = float(d2 @ d2)
+    b1 = float(d1 @ w)
+    b2 = float(d2 @ w)
+    denom = a11 * a22 - a12 * a12
+    if abs(denom) < _PARALLEL_EPS:
+        raise ValueError("lines do not define a unique plane")
+    t = (a12 * b2 - a22 * b1) / denom
+    pt = a.point + t * d1
+    return Plane(n, -float(n @ pt))
+
+
+def _rotate_vector_about_axis(vector: np.ndarray, axis: np.ndarray, angle_rad: float) -> np.ndarray:
+    k = np.asarray(axis, dtype=np.float64).reshape(3)
+    v = np.asarray(vector, dtype=np.float64).reshape(3)
+    c = float(np.cos(angle_rad))
+    s = float(np.sin(angle_rad))
+    return v * c + np.cross(k, v) * s + k * float(k @ v) * (1.0 - c)
+
+
+def rotate_plane_about_line(plane: Plane, axis: Line, angle_deg: float) -> Plane:
+    """Rotate ``plane`` about ``axis`` (line in the plane) by ``angle_deg``.
+
+    Positive angle follows the right-hand rule around ``axis.direction``.
+    """
+    k = axis.direction
+    if abs(float(plane.normal @ k)) > 1e-6:
+        raise ValueError("axis must lie in the plane (normal ⊥ axis)")
+    theta = float(np.deg2rad(angle_deg))
+    n_rot = _rotate_vector_about_axis(plane.normal, k, theta)
+    return Plane(n_rot, -float(n_rot @ axis.point))
 
 
 def _plane_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
