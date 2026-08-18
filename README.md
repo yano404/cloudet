@@ -29,7 +29,7 @@ cloudet/
   project.py    Project directory I/O (manifest / settings / group save)
   array_backend.py  Optional CuPy GPU backend (auto fallback to NumPy)
   geometry.py   Constructive ops (offset plane, intersections)
-  frame.py      Display-only Align Z pose (axis + origin → +Z)
+  frame.py      Display-only Align Z pose (axis → +Z, optional line → XY)
   reduce.py     Recipe-driven reduction → geometry.json for analysis
   pipeline.py   Residual u–v maps (for GUI QC)
   picker_qt.py  Interactive app (PySide6 + PyVista)
@@ -140,8 +140,10 @@ Output `geometry.json` lists
 planes / lines / points with provenance (`scanned` | `offset` | `intersection`).
 
 Optional top-level `frame` is Align Z metadata only (`axis` line id, `origin`
-point id, `flip_z`). It is not a construct step and does not change survey
-coordinates. `cloudet reduce` still writes survey numbers at the top level;
+point id, `flip_z`, and optionally `yaw_line` or `yaw_plane` with `yaw_to`
+(`x`, `-x`, `y`, or `-y`). The line direction or plane normal is projected
+into the XY plane after the axis maps to +Z. It is not a construct step and
+does not change survey coordinates. `cloudet reduce` still writes survey numbers at the top level;
 when `frame` is present it also writes an `aligned` copy plus the pose.
 The GUI restores those picks on Load recipe / Load All; it does **not**
 apply Align Z until you press the button.
@@ -158,9 +160,10 @@ Open **Reduction** to construct geometry:
 4. Toggle visibility in Entities; **Save recipe…** / **Export geometry…** for analysis
 5. **FRAME** (display only): pick Axis (line) and Origin (point), then **Align Z**.
    The view uses the smallest rotation that maps the axis to `(0, 0, 1)` with
-   the origin at `(0, 0, 0)`. Survey Y is **not** held fixed (no extra yaw).
-   **Survey** returns the view to survey coordinates. Groups, recipe constructs,
-   and Fit stay in survey; picking still uses the original cloud.
+   the origin at `(0, 0, 0)`. Optional **XY**: map a **line** or **plane
+   normal** (horizontal component only) onto ±X or ±Y. Omit XY for the smallest
+   rotation only. **Survey** returns the view to survey coordinates. Groups, recipe constructs, and Fit stay in survey;
+   picking still uses the original cloud.
 6. With Align Z active, **Export geometry…** can also write an `aligned` copy
    plus the frame pose. Top-level planes / lines / points remain survey.
    `cloudet reduce` does the same when the recipe has `frame`.

@@ -1,9 +1,10 @@
 """Rigid view frame: align a chosen axis to global +Z without mutating survey data.
 
-The transform is ``x' = R (x − origin)``, where ``R`` is the smallest rotation
-that maps the axis direction onto ``(0, 0, 1)``. Rotation about Z is left
-unspecified (no extra yaw). Survey coordinates, Groups, and recipes stay in
-the original frame; only display and optional geometry export apply this pose.
+The transform is ``x' = R (x − origin)``. ``R`` is the smallest rotation that
+maps the axis onto ``(0, 0, 1)``, optionally followed by a rotation about Z
+so another line's direction maps onto ±X or ±Y in the view. Survey
+coordinates, Groups, and recipes stay in the original frame; only display
+and optional geometry export apply this pose.
 """
 
 from __future__ import annotations
@@ -18,13 +19,22 @@ from cloudet.plane import Plane
 
 __all__ = [
     "RigidFrame",
-    "rotation_mapping_to_z",
+    "YAW_TO",
     "result_in_frame",
+    "rotation_mapping_to_z",
+    "rotation_yaw_about_z",
     "transform_record",
     "with_aligned_copy",
 ]
 
 _ALIGN_EPS = 1e-12
+YAW_TO = ("x", "-x", "y", "-y")
+_YAW_XY = {
+    "x": np.array([1.0, 0.0], dtype=np.float64),
+    "-x": np.array([-1.0, 0.0], dtype=np.float64),
+    "y": np.array([0.0, 1.0], dtype=np.float64),
+    "-y": np.array([0.0, -1.0], dtype=np.float64),
+}
 
 
 def _skew(v: np.ndarray) -> np.ndarray:
@@ -60,6 +70,32 @@ def rotation_mapping_to_z(direction: np.ndarray) -> np.ndarray:
     return np.eye(3, dtype=np.float64) + vx + (vx @ vx) * ((1.0 - c) / float(v @ v))
 
 
+def rotation_yaw_about_z(direction_view: np.ndarray, yaw_to: str) -> np.ndarray:
+    """Rotate about +Z so the XY part of ``direction_view`` maps onto ``yaw_to``.
+
+    ``yaw_to`` is one of ``x``, ``-x``, ``y``, ``-y``. The Z component is
+    ignored (the line need not be horizontal). Parallel to Z has no XY
+    projection and is an error.
+    """
+    key = str(yaw_to)
+    if key not in _YAW_XY:
+        raise ValueError(f"yaw_to must be one of {list(YAW_TO)}, got {yaw_to!r}")
+    d = np.asarray(direction_view, dtype=np.float64).reshape(3)
+    xy = d[:2]
+    n = float(np.linalg.norm(xy))
+    if not np.isfinite(n) or n < _ALIGN_EPS:
+        raise ValueError("yaw reference is parallel to Z; cannot set XY")
+    xy = xy / n
+    target = _YAW_XY[key]
+    delta = float(np.arctan2(target[1], target[0]) - np.arctan2(xy[1], xy[0]))
+    c = float(np.cos(delta))
+    s = float(np.sin(delta))
+    return np.array(
+        [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+
+
 def _as_nx3(xyz) -> tuple[np.ndarray, bool]:
     p = np.asarray(xyz, dtype=np.float64)
     if p.ndim == 1:
@@ -80,6 +116,9 @@ class RigidFrame:
     axis_id: str = ""
     origin_id: str = ""
     flip_z: bool = False
+    yaw_id: str = ""
+    yaw_kind: str = ""  # "line" | "plane"
+    yaw_to: str = ""
 
     def __post_init__(self):
         o = np.asarray(self.origin, dtype=np.float64).reshape(3).copy()
@@ -96,16 +135,35 @@ class RigidFrame:
         flip_z: bool = False,
         axis_id: str = "",
         origin_id: str = "",
+        yaw_direction=None,
+        yaw_to: str | None = None,
+        yaw_id: str = "",
+        yaw_kind: str = "line",
     ) -> "RigidFrame":
         d = np.asarray(direction, dtype=np.float64).reshape(3)
         if flip_z:
             d = -d
+        rotation = rotation_mapping_to_z(d)
+        yaw_key = str(yaw_to or "")
+        kind = str(yaw_kind or "line")
+        if yaw_direction is not None:
+            if not yaw_key:
+                yaw_key = "x"
+            if kind not in ("line", "plane"):
+                raise ValueError(f"yaw_kind must be 'line' or 'plane', got {kind!r}")
+            yaw_view = rotation @ np.asarray(yaw_direction, dtype=np.float64).reshape(3)
+            rotation = rotation_yaw_about_z(yaw_view, yaw_key) @ rotation
+        elif yaw_key:
+            raise ValueError("yaw_to needs a yaw reference direction")
         return cls(
             origin=np.asarray(origin, dtype=np.float64).reshape(3),
-            rotation=rotation_mapping_to_z(d),
+            rotation=rotation,
             axis_id=str(axis_id),
             origin_id=str(origin_id),
             flip_z=bool(flip_z),
+            yaw_id=str(yaw_id) if yaw_direction is not None else "",
+            yaw_kind=kind if yaw_direction is not None else "",
+            yaw_to=yaw_key if yaw_direction is not None else "",
         )
 
     def apply_points(self, xyz) -> np.ndarray:
@@ -138,10 +196,13 @@ class RigidFrame:
             axis_id=new_id if self.axis_id == old_id else self.axis_id,
             origin_id=new_id if self.origin_id == old_id else self.origin_id,
             flip_z=self.flip_z,
+            yaw_id=new_id if self.yaw_id == old_id else self.yaw_id,
+            yaw_kind=self.yaw_kind,
+            yaw_to=self.yaw_to,
         )
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "kind": "aligned",
             "axis": self.axis_id,
             "origin": self.origin_id,
@@ -149,6 +210,11 @@ class RigidFrame:
             "origin_xyz": self.origin.tolist(),
             "rotation": self.rotation.tolist(),
         }
+        if self.yaw_id and self.yaw_to:
+            yaw_key = "yaw_plane" if self.yaw_kind == "plane" else "yaw_line"
+            out[yaw_key] = self.yaw_id
+            out["yaw_to"] = self.yaw_to
+        return out
 
 
 def transform_record(kind: str, record: dict, frame: RigidFrame) -> dict:

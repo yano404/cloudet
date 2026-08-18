@@ -29,7 +29,7 @@ cloudet/
   project.py    プロジェクトディレクトリ I/O（manifest / settings / group 保存）
   array_backend.py  任意 CuPy GPU バックエンド（無ければ NumPy）
   geometry.py   構築演算（オフセット平面・交差）
-  frame.py      表示専用 Align Z 姿勢（軸 + 原点 → +Z）
+  frame.py      表示専用 Align Z 姿勢（軸 → +Z、任意で直線 → XY）
   reduce.py     レシピ駆動リダクション → 解析用 geometry.json
   pipeline.py   残差 u–v マップ（GUI QC 用）
   picker_qt.py  対話的アプリ（PySide6 + PyVista）
@@ -115,7 +115,9 @@ cloudet reduce <project> --recipe recipe.json -o geometry.json
 planes / lines / points と provenance（`scanned` | `offset` | `intersection`）を含みます。
 
 任意のトップレベル `frame` は Align Z のメタデータだけです（`axis` 直線 id、
-`origin` 点 id、`flip_z`）。construct のステップではなく、測量座標は変わりません。
+`origin` 点 id、`flip_z`、任意で `yaw_line` または `yaw_plane` と `yaw_to`
+（`x` / `-x` / `y` / `-y`）。直線の向きまたは平面法線の XY 射影で Z まわりを
+決めます。construct のステップではなく、測量座標は変わりません。
 `cloudet reduce` もトップレベルは測量のまま書き、`frame` があるときは
 `aligned` コピーと姿勢を足します。
 GUI は Load recipe / Load All でその選択を復元しますが、**Align Z は自動ではかけません**。
@@ -132,7 +134,8 @@ GUI は Load recipe / Load All でその選択を復元しますが、**Align Z 
 4. Entities で表示切替後、**Save recipe…** / **Export geometry…**
 5. **FRAME**（表示専用）: Axis（直線）と Origin（点）を選び **Align Z**。
    軸を `(0, 0, 1)` に、原点を `(0, 0, 0)` に移す最小回転を使います。
-   測量の Y は固定しません（追加の yaw なし）。**Survey** で測量座標の表示に戻します。
+   任意の **XY** で、**直線**または**平面法線**（水平成分のみ）を ±X / ±Y に
+   載せます。XY を空にすれば最小回転のままです。**Survey** で測量座標の表示に戻します。
    Groups・レシピの構築結果・Fit は測量のままです。pick も元の点群から行います。
 6. Align Z 中の **Export geometry…** は、測量の planes / lines / points に加えて
    `aligned` コピーと姿勢 `frame` を書けます。`cloudet reduce` もレシピに
