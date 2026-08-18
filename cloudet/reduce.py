@@ -6,6 +6,7 @@ build offset planes, intersection lines, and points for analysis export.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -717,6 +718,116 @@ class ReductionSession:
         elif kind == "line":
             self.anchors[entity_id] = self.line(entity_id).point.copy()
         return entity_id
+
+    def construct_step(self, entity_id: str) -> dict | None:
+        """Copy of the construct step that produced ``entity_id``, if any."""
+        entity_id = str(entity_id)
+        for step in self._construct:
+            if str(step.get("id")) == entity_id:
+                return dict(step)
+        return None
+
+    def operand_ids_before(self, entity_id: str) -> set[str]:
+        """Ids a construct step may read: scanned faces and earlier results."""
+        entity_id = str(entity_id)
+        idx = next(
+            (i for i, s in enumerate(self._construct) if str(s.get("id")) == entity_id),
+            None,
+        )
+        if idx is None:
+            raise KeyError(f"{entity_id!r} is not a construct step")
+        allowed = set(self._face_specs)
+        for step in self._construct[:idx]:
+            sid = str(step.get("id") or "")
+            if sid:
+                allowed.add(sid)
+        return allowed
+
+    def replace_construct_step(self, entity_id: str, step: dict) -> None:
+        """Replace one construct step (same id) and replay from scanned faces.
+
+        Operands must be scanned faces or earlier construct results — not this
+        step and not anything after it. Overlay sizes, visibility, frame, and
+        measures for surviving ids are kept. On failure the session is left
+        unchanged.
+        """
+        entity_id = str(entity_id)
+        if entity_id in self._face_specs:
+            raise ValueError(f"{entity_id!r} is a scanned face; cannot edit here")
+        idx = next(
+            (i for i, s in enumerate(self._construct) if str(s.get("id")) == entity_id),
+            None,
+        )
+        if idx is None:
+            raise KeyError(f"{entity_id!r} is not a construct step")
+        step = dict(step)
+        step["id"] = entity_id
+        if not step.get("op"):
+            raise ValueError("construct step needs op")
+        allowed = self.operand_ids_before(entity_id)
+        ops = _step_operand_ids(step)
+        if entity_id in ops:
+            raise ValueError(f"{entity_id!r} cannot reference itself")
+        bad = ops - allowed
+        if bad:
+            raise ValueError(
+                "operand not available yet (must be a face or earlier "
+                f"construct): {sorted(bad)}"
+            )
+        trial = copy.deepcopy(self)
+        trial._construct[idx] = step
+        trial._replay_construct()
+        self._adopt(trial)
+
+    def _replay_construct(self) -> None:
+        """Drop construct results and re-run ``_construct`` from scanned faces."""
+        vis = dict(self.visible)
+        display_mm = dict(self.display_mm)
+        display_width = dict(self.display_width_mm)
+        steps = [dict(s) for s in self._construct]
+        face_ids = set(self._face_specs)
+        for eid in list(self._store):
+            if eid not in face_ids:
+                self._store.pop(eid, None)
+                self.visible.pop(eid, None)
+                self.anchors.pop(eid, None)
+                self.display_mm.pop(eid, None)
+                self.display_width_mm.pop(eid, None)
+        self._construct.clear()
+        for step in steps:
+            self.apply_step(step)
+        for eid, shown in vis.items():
+            if eid in self._store:
+                self.visible[eid] = shown
+        self.display_mm = {k: v for k, v in display_mm.items() if k in self._store}
+        self.display_width_mm = {
+            k: v for k, v in display_width.items() if k in self._store
+        }
+        if self.frame_spec:
+            try:
+                _validate_frame_spec(self, self.frame_spec)
+            except Exception:
+                self.frame_spec = None
+        kept: list[dict] = []
+        for spec in self.measures:
+            try:
+                _validate_measure_spec(self, spec)
+                kept.append(spec)
+            except Exception:
+                continue
+        self.measures = kept
+
+    def _adopt(self, other: "ReductionSession") -> None:
+        self._store = other._store
+        self._face_specs = other._face_specs
+        self._construct = other._construct
+        self.visible = other.visible
+        self.anchors = other.anchors
+        self.display_mm = other.display_mm
+        self.display_width_mm = other.display_width_mm
+        self.display_default_mm = other.display_default_mm
+        self.frame_spec = other.frame_spec
+        self.measures = other.measures
 
     def apply_recipe(
         self,

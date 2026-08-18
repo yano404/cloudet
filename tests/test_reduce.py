@@ -429,6 +429,101 @@ def test_session_apply_recipe_keeps_existing_on_failure(tmp_path):
     assert sess.ids() == before
 
 
+def test_replace_construct_step_rebuilds_dependents(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    project = _make_project(tmp_path)
+    sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
+    sess.offset("extra", "target", 5.0)
+    extra_before = sess.plane("extra").as_array().copy()
+    sess.set_overlay_mm("beam_axis", 123.0)
+    sess.visible["beam_on_target"] = False
+    mid = sess.add_measure({
+        "id": "to_left",
+        "op": "distance_point_plane",
+        "point": "beam_on_target",
+        "plane": "tracker_left",
+    })
+    assert sess.evaluate_measure(sess.measures[0])["value"] == pytest.approx(50.0)
+
+    sess.replace_construct_step(
+        "left_in",
+        {"id": "left_in", "op": "offset", "of": "tracker_left", "distance_mm": 40.0},
+    )
+
+    assert sess.ids() == [
+        "tracker_left",
+        "tracker_front",
+        "target",
+        "left_in",
+        "front_in",
+        "beam_axis",
+        "beam_on_target",
+        "extra",
+    ]
+    assert sess.construct_step("left_in")["distance_mm"] == 40.0
+    assert np.allclose(sess.point("beam_on_target"), [-10.0, 0.0, 100.0])
+    assert np.allclose(sess.plane("extra").as_array(), extra_before)
+    assert sess.overlay_mm("beam_axis") == pytest.approx(123.0)
+    assert sess.visible["beam_on_target"] is False
+    assert sess.measures[0]["id"] == mid
+    assert sess.evaluate_measure(sess.measures[0])["value"] == pytest.approx(40.0)
+
+
+def test_replace_construct_step_rejects_later_operand(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession.from_recipe(
+        _beam_recipe(), project_dir=_make_project(tmp_path)
+    )
+    before = sess.to_recipe()
+    with pytest.raises(ValueError, match="operand not available"):
+        sess.replace_construct_step(
+            "left_in",
+            {"id": "left_in", "op": "offset", "of": "beam_axis", "distance_mm": 1.0},
+        )
+    with pytest.raises(ValueError, match="cannot reference itself"):
+        sess.replace_construct_step(
+            "left_in",
+            {"id": "left_in", "op": "offset", "of": "left_in", "distance_mm": 1.0},
+        )
+    with pytest.raises(ValueError, match="scanned face"):
+        sess.replace_construct_step(
+            "tracker_left",
+            {"id": "tracker_left", "op": "offset", "of": "target", "distance_mm": 1.0},
+        )
+    assert sess.to_recipe()["construct"] == before["construct"]
+    assert np.allclose(sess.point("beam_on_target"), [0.0, 0.0, 100.0])
+
+
+def test_replace_construct_step_rollback_on_failure(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession.from_recipe(
+        _beam_recipe(), project_dir=_make_project(tmp_path)
+    )
+    sess.set_overlay_mm("beam_axis", 50.0)
+    before_ids = list(sess.ids())
+    before_point = sess.point("beam_on_target").copy()
+    before_step = sess.construct_step("left_in")
+
+    with pytest.raises(ValueError, match="parallel"):
+        sess.replace_construct_step(
+            "left_in",
+            {
+                "id": "left_in",
+                "op": "offset",
+                "of": "tracker_front",
+                "distance_mm": 20.0,
+            },
+        )
+
+    assert sess.ids() == before_ids
+    assert sess.construct_step("left_in") == before_step
+    assert np.allclose(sess.point("beam_on_target"), before_point)
+    assert sess.overlay_mm("beam_axis") == pytest.approx(50.0)
+
+
 def test_session_apply_recipe_missing_face(tmp_path):
     from cloudet.reduce import ReductionSession
 
