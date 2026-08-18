@@ -1920,9 +1920,29 @@ class PickerWindow(QMainWindow):
         self.rd_frame_flip.addItem("along axis", False)
         self.rd_frame_flip.addItem("flipped", True)
         self.rd_frame_flip.currentIndexChanged.connect(self._on_frame_combo_changed)
+        self.rd_frame_yaw_to = QComboBox()
+        self.rd_frame_yaw_to.addItem("(none)", None)
+        self.rd_frame_yaw_to.addItem("→ +X", "x")
+        self.rd_frame_yaw_to.addItem("→ −X", "-x")
+        self.rd_frame_yaw_to.addItem("→ +Y", "y")
+        self.rd_frame_yaw_to.addItem("→ −Y", "-y")
+        self.rd_frame_yaw_to.currentIndexChanged.connect(self._on_frame_combo_changed)
+        self.rd_frame_yaw_kind = QComboBox()
+        self.rd_frame_yaw_kind.addItem("Line", "line")
+        self.rd_frame_yaw_kind.addItem("Plane normal", "plane")
+        self.rd_frame_yaw_kind.currentIndexChanged.connect(self._on_frame_yaw_kind_changed)
+        self.rd_frame_yaw_ref = QComboBox()
+        self.rd_frame_yaw_ref.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.rd_frame_yaw_ref.setMinimumContentsLength(12)
+        self.rd_frame_yaw_ref.currentIndexChanged.connect(self._on_frame_combo_changed)
         frame_form.addRow("Axis", self.rd_frame_axis)
         frame_form.addRow("Origin", self.rd_frame_origin)
         frame_form.addRow("+Z", self.rd_frame_flip)
+        frame_form.addRow("XY", self.rd_frame_yaw_to)
+        frame_form.addRow("XY from", self.rd_frame_yaw_kind)
+        frame_form.addRow("", self.rd_frame_yaw_ref)
         frame_lay.addLayout(frame_form)
         frame_btn_row = QHBoxLayout()
         self.rd_frame_align_btn = QPushButton("Align Z")
@@ -1930,7 +1950,8 @@ class PickerWindow(QMainWindow):
         self.rd_frame_align_btn.setEnabled(False)
         self.rd_frame_align_btn.setToolTip(
             "Show the cloud and overlays with this axis as global +Z "
-            "and this origin at (0, 0, 0). Survey data is not rewritten."
+            "and this origin at (0, 0, 0). Optionally map a line direction or "
+            "plane normal (XY projection) onto ±X or ±Y. Survey data is not rewritten."
         )
         self.rd_frame_align_btn.clicked.connect(
             lambda: self._guard(self._frame_align, busy=False)
@@ -2004,6 +2025,7 @@ class PickerWindow(QMainWindow):
             self.uv_dock.raise_()
 
         self._rd_offset_sync = False
+        self._reduction_fill_frame_yaw_ref()
         self._reduction_on_op_changed()
         self._update_frame_controls()
 
@@ -2192,6 +2214,9 @@ class PickerWindow(QMainWindow):
         axis = fr.axis_id or "?"
         origin = fr.origin_id or "?"
         extra = ", flip" if fr.flip_z else ""
+        if fr.yaw_id and fr.yaw_to:
+            tag = "n:" if fr.yaw_kind == "plane" else ""
+            extra += f", {tag}{fr.yaw_id}→{fr.yaw_to.upper()}"
         return f"frame: aligned ({axis}, {origin}{extra})"
 
     def _rebuild_status_default(self) -> None:
@@ -2223,6 +2248,23 @@ class PickerWindow(QMainWindow):
             return p
         return self._view_frame.inverse_points(p)
 
+    def _frame_yaw_kind(self) -> str:
+        if not hasattr(self, "rd_frame_yaw_kind"):
+            return "line"
+        kind = self.rd_frame_yaw_kind.currentData()
+        return str(kind or "line")
+
+    def _reduction_fill_frame_yaw_ref(self, *, keep: str | None = None) -> None:
+        if not hasattr(self, "rd_frame_yaw_ref"):
+            return
+        kind = self._frame_yaw_kind()
+        self._reduction_fill_combo(self.rd_frame_yaw_ref, kind=kind, keep=keep)
+
+    def _on_frame_yaw_kind_changed(self, *_args) -> None:
+        keep = self._reduction_combo_id(getattr(self, "rd_frame_yaw_ref", None))
+        self._reduction_fill_frame_yaw_ref(keep=keep)
+        self._on_frame_combo_changed()
+
     def _on_frame_combo_changed(self, *_args) -> None:
         self._sync_frame_align_enabled()
         self._reduction_capture_frame_spec()
@@ -2241,6 +2283,17 @@ class PickerWindow(QMainWindow):
             "origin": origin,
             "flip_z": flip,
         }
+        yaw_to = None
+        if hasattr(self, "rd_frame_yaw_to"):
+            yaw_to = self.rd_frame_yaw_to.currentData()
+        yaw_ref = self._reduction_combo_id(getattr(self, "rd_frame_yaw_ref", None))
+        if yaw_to and yaw_ref:
+            self._reduction.frame_spec["yaw_to"] = str(yaw_to)
+            kind = self._frame_yaw_kind()
+            if kind == "plane":
+                self._reduction.frame_spec["yaw_plane"] = yaw_ref
+            else:
+                self._reduction.frame_spec["yaw_line"] = yaw_ref
 
     def _reduction_restore_frame_combos(self) -> None:
         if not hasattr(self, "rd_frame_axis"):
@@ -2265,6 +2318,30 @@ class PickerWindow(QMainWindow):
             else:
                 self.rd_frame_flip.setCurrentIndex(0)
             self.rd_frame_flip.blockSignals(False)
+        if hasattr(self, "rd_frame_yaw_to"):
+            self.rd_frame_yaw_to.blockSignals(True)
+            if spec and spec.get("yaw_to"):
+                idx = self.rd_frame_yaw_to.findData(spec.get("yaw_to"))
+                self.rd_frame_yaw_to.setCurrentIndex(idx if idx >= 0 else 0)
+            else:
+                self.rd_frame_yaw_to.setCurrentIndex(0)
+            self.rd_frame_yaw_to.blockSignals(False)
+        yaw_kind = "line"
+        yaw_keep = None
+        if spec:
+            if spec.get("yaw_plane"):
+                yaw_kind = "plane"
+                yaw_keep = spec.get("yaw_plane")
+            elif spec.get("yaw_line"):
+                yaw_kind = "line"
+                yaw_keep = spec.get("yaw_line")
+        if hasattr(self, "rd_frame_yaw_kind"):
+            self.rd_frame_yaw_kind.blockSignals(True)
+            idx = self.rd_frame_yaw_kind.findData(yaw_kind)
+            self.rd_frame_yaw_kind.setCurrentIndex(idx if idx >= 0 else 0)
+            self.rd_frame_yaw_kind.blockSignals(False)
+        if hasattr(self, "rd_frame_yaw_ref"):
+            self._reduction_fill_frame_yaw_ref(keep=yaw_keep)
         self._sync_frame_align_enabled()
 
     def _sync_frame_align_enabled(self) -> None:
@@ -2272,7 +2349,19 @@ class PickerWindow(QMainWindow):
             return
         axis = self._reduction_combo_id(getattr(self, "rd_frame_axis", None))
         origin = self._reduction_combo_id(getattr(self, "rd_frame_origin", None))
-        self.rd_frame_align_btn.setEnabled(bool(axis and origin))
+        ok = bool(axis and origin)
+        yaw_to = None
+        if hasattr(self, "rd_frame_yaw_to"):
+            yaw_to = self.rd_frame_yaw_to.currentData()
+        if hasattr(self, "rd_frame_yaw_kind"):
+            enabled = bool(yaw_to)
+            self.rd_frame_yaw_kind.setEnabled(enabled)
+        if hasattr(self, "rd_frame_yaw_ref"):
+            self.rd_frame_yaw_ref.setEnabled(bool(yaw_to))
+        if yaw_to:
+            yaw_ref = self._reduction_combo_id(getattr(self, "rd_frame_yaw_ref", None))
+            ok = ok and bool(yaw_ref)
+        self.rd_frame_align_btn.setEnabled(ok)
 
     def _place_orientation_axes(self) -> None:
         """Lift the corner triad so the frame label fits underneath."""
@@ -2319,6 +2408,10 @@ class PickerWindow(QMainWindow):
     def _refresh_aligned_view(self, *, reset_camera: bool = False) -> None:
         self._refresh_base_actor()
         self._refresh_group_actors()
+        # Keep group plane n,d readable in the current view coordinate system.
+        # DISPLAY-only transforms change how the plane equation should be shown.
+        if hasattr(self, "tree"):
+            self._refresh_tree()
         self._refresh_active_plane_bbox(render=False)
         if hasattr(self, "rd_tree"):
             self._refresh_reduction_tree()
@@ -2340,16 +2433,14 @@ class PickerWindow(QMainWindow):
         origin_id = self._reduction_combo_id(getattr(self, "rd_frame_origin", None))
         if not axis_id or not origin_id:
             raise ValueError("choose an axis and an origin")
-        flip = bool(self.rd_frame_flip.currentData()) if hasattr(self, "rd_frame_flip") else False
-        line = self._reduction.line(axis_id)
-        origin = self._reduction.point(origin_id)
-        frame = RigidFrame.align_z(
-            line.direction,
-            origin,
-            flip_z=flip,
-            axis_id=axis_id,
-            origin_id=origin_id,
-        )
+        yaw_to = None
+        if hasattr(self, "rd_frame_yaw_to"):
+            yaw_to = self.rd_frame_yaw_to.currentData()
+        if yaw_to and not self._reduction_combo_id(getattr(self, "rd_frame_yaw_ref", None)):
+            raise ValueError("choose a line or plane for XY")
+        frame = self._reduction.rigid_frame()
+        if frame is None:
+            raise ValueError("choose an axis and an origin")
         self._set_view_frame(frame, reset_camera=True)
         self._status(self._frame_status_text())
 
@@ -2592,6 +2683,9 @@ class PickerWindow(QMainWindow):
             "frame_origin": self._reduction_combo_id(
                 getattr(self, "rd_frame_origin", None)
             ),
+            "frame_yaw": self._reduction_combo_id(
+                getattr(self, "rd_frame_yaw_ref", None)
+            ),
             "measure_a": self._reduction_combo_id(getattr(self, "rd_measure_a", None)),
             "measure_b": self._reduction_combo_id(getattr(self, "rd_measure_b", None)),
         }
@@ -2655,6 +2749,15 @@ class PickerWindow(QMainWindow):
                 self._reduction_fill_combo(
                     self.rd_frame_origin, kind="point", keep=keep.get("frame_origin")
                 )
+                if hasattr(self, "rd_frame_yaw_ref"):
+                    spec = self._reduction.frame_spec or {}
+                    yaw_kind = "plane" if spec.get("yaw_plane") else "line"
+                    idx = self.rd_frame_yaw_kind.findData(yaw_kind)
+                    if idx >= 0:
+                        self.rd_frame_yaw_kind.blockSignals(True)
+                        self.rd_frame_yaw_kind.setCurrentIndex(idx)
+                        self.rd_frame_yaw_kind.blockSignals(False)
+                    self._reduction_fill_frame_yaw_ref(keep=keep.get("frame_yaw"))
                 if rename and self._view_frame is not None:
                     old, new = rename
                     self._view_frame = self._view_frame.relabel(old, new)
@@ -6473,6 +6576,12 @@ class PickerWindow(QMainWindow):
             if g["fit"] is not None:
                 for p in g["fit"]["planes"]:
                     abcd = p["abcd"]
+                    # When Align Z is active, rewrite the plane equation into the
+                    # current view frame so n,d match what the user sees.
+                    if self._view_frame is not None:
+                        plane = Plane.from_array(abcd)
+                        plane = self._view_frame.apply_plane(plane)
+                        abcd = plane.as_array()
                     label = _plane_label(p)
                     nxyz = (
                         f"n=({abcd[0]:+.4f}, {abcd[1]:+.4f}, {abcd[2]:+.4f})  "
@@ -6567,6 +6676,10 @@ class PickerWindow(QMainWindow):
                     p = self._find_plane(g, data[2])
                     if p is not None:
                         abcd = p["abcd"]
+                        if self._view_frame is not None:
+                            plane = Plane.from_array(abcd)
+                            plane = self._view_frame.apply_plane(plane)
+                            abcd = plane.as_array()
                         self.tree.blockSignals(True)
                         item.setText(
                             1,

@@ -408,7 +408,11 @@ def _check_recipe(recipe: dict) -> None:
 
 
 def _parse_recipe_frame(spec) -> dict | None:
-    """Optional Align Z metadata: ``{axis, origin, flip_z}``. Not a construct step."""
+    """Optional Align Z metadata: ``{axis, origin, flip_z, yaw_*, yaw_to}``.
+
+    Not a construct step. Set ``yaw_line`` or ``yaw_plane`` (not both) with
+    ``yaw_to`` to fix rotation about Z after the axis is mapped to +Z.
+    """
     if spec is None:
         return None
     if not isinstance(spec, dict):
@@ -417,11 +421,42 @@ def _parse_recipe_frame(spec) -> dict | None:
     origin = spec.get("origin")
     if not axis or not origin:
         raise ValueError("recipe.frame needs axis and origin ids")
-    return {
+    out = {
         "axis": str(axis),
         "origin": str(origin),
         "flip_z": bool(spec.get("flip_z", False)),
     }
+    yaw_line = spec.get("yaw_line")
+    yaw_plane = spec.get("yaw_plane")
+    yaw_to = spec.get("yaw_to")
+    if yaw_line and yaw_plane:
+        raise ValueError("recipe.frame: use yaw_line or yaw_plane, not both")
+    yaw_ref = yaw_line or yaw_plane
+    if yaw_ref:
+        key = str(yaw_to or "x")
+        if key not in ("x", "-x", "y", "-y"):
+            raise ValueError(
+                f"recipe.frame.yaw_to must be one of ['x', '-x', 'y', '-y'], got {key!r}"
+            )
+        out["yaw_to"] = key
+        if yaw_plane:
+            out["yaw_plane"] = str(yaw_plane)
+        else:
+            out["yaw_line"] = str(yaw_line)
+    elif yaw_to:
+        raise ValueError("recipe.frame.yaw_to needs yaw_line or yaw_plane")
+    return out
+
+
+def _frame_yaw_direction(session: "ReductionSession", spec: dict):
+    """Line direction or plane normal used to fix yaw, or ``None``."""
+    yaw_plane = spec.get("yaw_plane")
+    if yaw_plane:
+        return session.plane(yaw_plane).normal, "plane", str(yaw_plane)
+    yaw_line = spec.get("yaw_line")
+    if yaw_line:
+        return session.line(yaw_line).direction, "line", str(yaw_line)
+    return None, "", ""
 
 
 def _validate_frame_spec(session: "ReductionSession", spec: dict) -> None:
@@ -435,6 +470,19 @@ def _validate_frame_spec(session: "ReductionSession", spec: dict) -> None:
         raise ValueError(f"recipe.frame.axis {axis!r} must be a line")
     if session.kind_of(origin) != "point":
         raise ValueError(f"recipe.frame.origin {origin!r} must be a point")
+    yaw_plane = spec.get("yaw_plane")
+    if yaw_plane:
+        if yaw_plane not in session._store:
+            raise KeyError(f"recipe.frame.yaw_plane: unknown id {yaw_plane!r}")
+        if session.kind_of(yaw_plane) != "plane":
+            raise ValueError(f"recipe.frame.yaw_plane {yaw_plane!r} must be a plane")
+        return
+    yaw_line = spec.get("yaw_line")
+    if yaw_line:
+        if yaw_line not in session._store:
+            raise KeyError(f"recipe.frame.yaw_line: unknown id {yaw_line!r}")
+        if session.kind_of(yaw_line) != "line":
+            raise ValueError(f"recipe.frame.yaw_line {yaw_line!r} must be a line")
 
 
 _MEASURE_OPS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -586,7 +634,7 @@ class ReductionSession:
             "line_diameter": 1.0,
         }
     )
-    # Optional Align Z pick: {axis, origin, flip_z}. Display pose is not stored.
+    # Optional Align Z pick: {axis, origin, flip_z, yaw_line|yaw_plane, yaw_to?}.
     frame_spec: dict | None = None
     # Pinned measurements: [{id, op, ...operands}]. Not construct entities.
     measures: list[dict] = field(default_factory=list)
@@ -934,6 +982,10 @@ class ReductionSession:
                 self.frame_spec["axis"] = new_id
             if self.frame_spec.get("origin") == old_id:
                 self.frame_spec["origin"] = new_id
+            if self.frame_spec.get("yaw_line") == old_id:
+                self.frame_spec["yaw_line"] = new_id
+            if self.frame_spec.get("yaw_plane") == old_id:
+                self.frame_spec["yaw_plane"] = new_id
         for spec in self.measures:
             _rewrite_id_refs(spec, old_id, new_id)
         return new_id
@@ -975,6 +1027,12 @@ class ReductionSession:
             refs = {self.frame_spec.get("axis"), self.frame_spec.get("origin")}
             if doomed & refs:
                 self.frame_spec = None
+            elif self.frame_spec.get("yaw_line") in doomed:
+                self.frame_spec.pop("yaw_line", None)
+                self.frame_spec.pop("yaw_to", None)
+            elif self.frame_spec.get("yaw_plane") in doomed:
+                self.frame_spec.pop("yaw_plane", None)
+                self.frame_spec.pop("yaw_to", None)
         self.measures = [
             m for m in self.measures if not (_measure_operand_ids(m) & doomed)
         ]
@@ -1184,12 +1242,17 @@ class ReductionSession:
 
         line = self.line(spec["axis"])
         origin = self.point(spec["origin"])
+        yaw_dir, yaw_kind, yaw_id = _frame_yaw_direction(self, spec)
         return RigidFrame.align_z(
             line.direction,
             origin,
             flip_z=bool(spec.get("flip_z", False)),
             axis_id=spec["axis"],
             origin_id=spec["origin"],
+            yaw_direction=yaw_dir,
+            yaw_to=spec.get("yaw_to"),
+            yaw_id=yaw_id,
+            yaw_kind=yaw_kind or "line",
         )
 
     def to_result(

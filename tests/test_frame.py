@@ -57,6 +57,76 @@ def test_flip_z_reverses_axis():
     assert np.allclose(p, [0.0, 0.0, -4.0])
 
 
+def test_yaw_line_to_plus_x():
+    origin = np.zeros(3)
+    frame = RigidFrame.align_z(
+        [0.0, 0.0, 1.0],
+        origin,
+        yaw_direction=[0.0, 1.0, 0.0],
+        yaw_to="x",
+        yaw_id="horiz",
+    )
+    assert np.allclose(frame.apply_direction([0.0, 0.0, 1.0]), [0.0, 0.0, 1.0])
+    assert np.allclose(frame.apply_direction([0.0, 1.0, 0.0]), [1.0, 0.0, 0.0])
+    assert frame.yaw_id == "horiz"
+    assert frame.yaw_to == "x"
+    assert frame.to_dict()["yaw_line"] == "horiz"
+
+
+def test_yaw_line_to_plus_y():
+    origin = np.zeros(3)
+    frame = RigidFrame.align_z(
+        [0.0, 0.0, 1.0],
+        origin,
+        yaw_direction=[1.0, 0.0, 0.0],
+        yaw_to="y",
+    )
+    assert np.allclose(frame.apply_direction([1.0, 0.0, 0.0]), [0.0, 1.0, 0.0])
+    assert np.allclose(frame.apply_direction([0.0, 0.0, 1.0]), [0.0, 0.0, 1.0])
+
+
+def test_yaw_plane_normal_to_plus_x():
+    origin = np.zeros(3)
+    frame = RigidFrame.align_z(
+        [0.0, 0.0, 1.0],
+        origin,
+        yaw_direction=[1.0, 0.0, 0.0],
+        yaw_to="x",
+        yaw_id="wall",
+        yaw_kind="plane",
+    )
+    assert frame.yaw_kind == "plane"
+    assert np.allclose(frame.apply_direction([1.0, 0.0, 0.0]), [1.0, 0.0, 0.0])
+    assert np.allclose(frame.apply_direction([0.0, 0.0, 1.0]), [0.0, 0.0, 1.0])
+    assert frame.to_dict()["yaw_plane"] == "wall"
+
+
+def test_yaw_plane_parallel_to_z_errors():
+    with pytest.raises(ValueError, match="parallel to Z"):
+        RigidFrame.align_z(
+            [0.0, 0.0, 1.0],
+            np.zeros(3),
+            yaw_direction=[0.0, 0.0, 1.0],
+            yaw_to="x",
+            yaw_kind="plane",
+        )
+
+
+def test_yaw_keeps_axis_on_z_when_axis_was_x():
+    origin = np.array([1.0, 2.0, 3.0])
+    frame = RigidFrame.align_z(
+        [1.0, 0.0, 0.0],
+        origin,
+        yaw_direction=[0.0, 1.0, 0.0],
+        yaw_to="y",
+    )
+    assert np.allclose(frame.apply_direction([1.0, 0.0, 0.0]), [0.0, 0.0, 1.0])
+    d = frame.apply_direction([0.0, 1.0, 0.0])
+    assert abs(d[0]) < 1e-12
+    assert d[1] == pytest.approx(1.0)
+    assert abs(d[2]) < 1e-12
+
+
 def test_plane_incidence_preserved():
     plane = Plane(np.array([1.0, 0.0, 0.0]), -5.0)  # x = 5
     origin = np.array([5.0, 1.0, 2.0])

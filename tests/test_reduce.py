@@ -593,6 +593,108 @@ def test_recipe_frame_roundtrip(tmp_path):
     assert sess.rigid_frame() is not None
 
 
+def test_recipe_frame_yaw_roundtrip(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["construct"].append(
+        {
+            "id": "horiz",
+            "op": "intersect_planes",
+            "a": "tracker_left",
+            "b": "target",
+        }
+    )
+    recipe["frame"] = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+        "yaw_line": "horiz",
+        "yaw_to": "x",
+    }
+    sess = ReductionSession.from_recipe(recipe, project_dir=_make_project(tmp_path))
+    assert sess.frame_spec["yaw_line"] == "horiz"
+    assert sess.frame_spec["yaw_to"] == "x"
+    frame = sess.rigid_frame()
+    assert np.allclose(np.abs(frame.apply_direction(sess.line("beam_axis").direction)), [0.0, 0.0, 1.0])
+    d = frame.apply_direction(sess.line("horiz").direction)
+    assert abs(d[1]) < 1e-9
+    assert abs(d[2]) < 1e-9
+    assert abs(abs(d[0]) - 1.0) < 1e-9
+    out = sess.to_recipe()
+    assert out["frame"]["yaw_line"] == "horiz"
+    assert out["frame"]["yaw_to"] == "x"
+    sess.rename("horiz", "h")
+    assert sess.frame_spec["yaw_line"] == "h"
+    sess.remove("h")
+    assert sess.frame_spec["axis"] == "beam_axis"
+    assert "yaw_line" not in sess.frame_spec
+
+
+def test_recipe_frame_yaw_plane_roundtrip(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["frame"] = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "yaw_plane": "tracker_left",
+        "yaw_to": "x",
+    }
+    sess = ReductionSession.from_recipe(recipe, project_dir=_make_project(tmp_path))
+    assert sess.frame_spec["yaw_plane"] == "tracker_left"
+    frame = sess.rigid_frame()
+    n = frame.apply_direction(sess.plane("tracker_left").normal)
+    assert abs(n[1]) < 1e-9
+    assert abs(n[2]) < 1e-9
+    assert n[0] == pytest.approx(1.0)
+    out = sess.to_recipe()
+    assert out["frame"]["yaw_plane"] == "tracker_left"
+    assert "yaw_line" not in out["frame"]
+
+
+def test_recipe_frame_yaw_line_and_plane_exclusive(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["frame"] = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "yaw_line": "beam_axis",
+        "yaw_plane": "tracker_left",
+        "yaw_to": "x",
+    }
+    with pytest.raises(ValueError, match="not both"):
+        ReductionSession.from_recipe(recipe, project_dir=_make_project(tmp_path))
+
+
+def test_recipe_frame_yaw_to_needs_reference(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["frame"] = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "yaw_to": "x",
+    }
+    with pytest.raises(ValueError, match="yaw_line or yaw_plane"):
+        ReductionSession.from_recipe(recipe, project_dir=_make_project(tmp_path))
+
+
+def test_recipe_frame_yaw_wrong_kind(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["frame"] = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "yaw_line": "target",
+        "yaw_to": "y",
+    }
+    with pytest.raises(ValueError, match="must be a line"):
+        ReductionSession.from_recipe(recipe, project_dir=_make_project(tmp_path))
+
+
 def test_recipe_frame_optional(tmp_path):
     from cloudet.reduce import ReductionSession
 
