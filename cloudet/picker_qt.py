@@ -59,6 +59,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QSlider,
@@ -142,6 +143,10 @@ _RD_GUI_TO_RECIPE_OP = {
     "line_from_point_normal": "line_from_point_normal",
     "line_from_two_points": "line_from_two_points",
     "midpoint_line_planes": "midpoint_line_planes",
+    "plane_from_plane_point": "plane_from_plane_point",
+    "plane_from_line_point": "plane_from_line_point",
+    "plane_from_two_lines": "plane_from_two_lines",
+    "rotate_plane_about_line": "rotate_plane_about_line",
 }
 _RD_RECIPE_TO_GUI_OP = {v: k for k, v in _RD_GUI_TO_RECIPE_OP.items()}
 
@@ -409,11 +414,17 @@ def _make_collapsible_card(
     body_lay.setSpacing(6)
     body.setVisible(expanded)
 
-    def _on_toggled(checked: bool, *, t=toggle, b=body) -> None:
+    def _on_toggled(checked: bool, *, t=toggle, b=body, c=card) -> None:
         b.setVisible(checked)
         t.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        if checked:
+            c.setMaximumHeight(16777215)
+        else:
+            c.setMaximumHeight(t.sizeHint().height() + 20)
 
     toggle.toggled.connect(_on_toggled)
+    if not expanded:
+        card.setMaximumHeight(toggle.sizeHint().height() + 20)
     if header_extra is None:
         outer.addWidget(toggle)
     else:
@@ -1573,6 +1584,10 @@ class PickerWindow(QMainWindow):
             ("Point + normal → axis", "line_from_point_normal"),
             ("2 points → axis", "line_from_two_points"),
             ("Line ∩ 2 planes → midpoint", "midpoint_line_planes"),
+            ("Plane + point → parallel plane", "plane_from_plane_point"),
+            ("Line + point → plane", "plane_from_line_point"),
+            ("2 lines → plane", "plane_from_two_lines"),
+            ("Rotate plane about axis", "rotate_plane_about_line"),
         ):
             self.rd_op_combo.addItem(label, key)
         self.rd_op_combo.currentIndexChanged.connect(self._reduction_on_op_changed)
@@ -1721,7 +1736,86 @@ class PickerWindow(QMainWindow):
         mpage.layout().insertWidget(1, self.rd_mp_hint)
         self.rd_stack.addWidget(mpage)  # 7
 
+        # page: plane + point → parallel plane
+        pp_page, pp_form = _form_page()
+        self.rd_pp_plane = _entity_combo()
+        self.rd_pp_point = _entity_combo()
+        pp_form.addRow("Plane", self.rd_pp_plane)
+        pp_form.addRow("Point", self.rd_pp_point)
+        self.rd_pp_hint = QLabel(
+            "Plane parallel to the source, passing through the point."
+        )
+        self.rd_pp_hint.setObjectName("muted")
+        self.rd_pp_hint.setWordWrap(True)
+        pp_page.layout().insertWidget(1, self.rd_pp_hint)
+        self.rd_stack.addWidget(pp_page)  # 8
+
+        # page: line + point → plane
+        lpp_page, lpp_form = _form_page()
+        self.rd_lpp_line = _entity_combo()
+        self.rd_lpp_point = _entity_combo()
+        lpp_form.addRow("Axis", self.rd_lpp_line)
+        lpp_form.addRow("Point", self.rd_lpp_point)
+        self.rd_lpp_hint = QLabel(
+            "Plane through the point with normal = the axis direction."
+        )
+        self.rd_lpp_hint.setObjectName("muted")
+        self.rd_lpp_hint.setWordWrap(True)
+        lpp_page.layout().insertWidget(1, self.rd_lpp_hint)
+        self.rd_stack.addWidget(lpp_page)  # 9
+
+        # page: 2 lines → plane
+        l2p_page, l2p_form = _form_page()
+        self.rd_l2p_a = _entity_combo()
+        self.rd_l2p_b = _entity_combo()
+        l2p_form.addRow("Axis A", self.rd_l2p_a)
+        l2p_form.addRow("Axis B", self.rd_l2p_b)
+        self.rd_l2p_hint = QLabel(
+            "Plane containing both axes. They must be coplanar (intersect or "
+            "parallel in the same plane); skew lines are rejected."
+        )
+        self.rd_l2p_hint.setObjectName("muted")
+        self.rd_l2p_hint.setWordWrap(True)
+        l2p_page.layout().insertWidget(1, self.rd_l2p_hint)
+        self.rd_stack.addWidget(l2p_page)  # 10
+
+        # page: rotate plane about axis
+        rot_page, rot_form = _form_page()
+        self.rd_rot_plane = _entity_combo()
+        self.rd_rot_line = _entity_combo()
+        self.rd_rot_angle = QDoubleSpinBox()
+        self.rd_rot_angle.setRange(-360.0, 360.0)
+        self.rd_rot_angle.setDecimals(3)
+        self.rd_rot_angle.setSingleStep(1.0)
+        self.rd_rot_angle.setSuffix(" °")
+        self.rd_rot_angle.setValue(0.0)
+        self.rd_rot_angle.valueChanged.connect(self._reduction_on_operand_combo)
+        rot_form.addRow("Plane", self.rd_rot_plane)
+        rot_form.addRow("Axis", self.rd_rot_line)
+        rot_form.addRow("Angle", self.rd_rot_angle)
+        self.rd_rot_hint = QLabel(
+            "Pivot the plane about an axis that lies in it. Positive angle "
+            "follows the right-hand rule around the axis direction."
+        )
+        self.rd_rot_hint.setObjectName("muted")
+        self.rd_rot_hint.setWordWrap(True)
+        rot_page.layout().insertWidget(1, self.rd_rot_hint)
+        self.rd_stack.addWidget(rot_page)  # 11
+
         op_lay.addWidget(self.rd_stack)
+        self._reduction_lock_operation_stack_height()
+
+        mode_row = QHBoxLayout()
+        self.rd_mode_group = QButtonGroup(self)
+        self.rd_mode_update = QRadioButton("Update selected")
+        self.rd_mode_new = QRadioButton("Create new")
+        self.rd_mode_group.addButton(self.rd_mode_update, 0)
+        self.rd_mode_group.addButton(self.rd_mode_new, 1)
+        self.rd_mode_new.setChecked(True)
+        self.rd_mode_group.idToggled.connect(self._reduction_on_mode_toggled)
+        mode_row.addWidget(self.rd_mode_update)
+        mode_row.addWidget(self.rd_mode_new)
+        op_lay.addLayout(mode_row)
 
         self.rd_apply_btn = QPushButton("Apply")
         self.rd_apply_btn.setObjectName("primaryBtn")
@@ -1884,6 +1978,9 @@ class PickerWindow(QMainWindow):
         )
         self.rd_tree.itemChanged.connect(self._on_reduction_item_changed)
         self.rd_tree.itemSelectionChanged.connect(self._sync_reduction_entity_actions)
+        _esc = QShortcut(QKeySequence(Qt.Key_Escape), self.rd_tree)
+        _esc.setContext(Qt.WidgetShortcut)
+        _esc.activated.connect(self.rd_tree.clearSelection)
         tree_lay.addWidget(self.rd_tree)
         ent_btn_row = QHBoxLayout()
         self.rd_delete_btn = QPushButton("Delete")
@@ -2016,7 +2113,11 @@ class PickerWindow(QMainWindow):
         exp_lay.addLayout(exp_row)
         lay.addWidget(exp_card)
 
-        dock.setWidget(w)
+        scroll = QScrollArea()
+        scroll.setWidget(w)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        dock.setWidget(scroll)
         dock.setMinimumWidth(340)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
         self.reduction_dock = dock
@@ -2679,6 +2780,14 @@ class PickerWindow(QMainWindow):
             "mp_line": self._reduction_combo_id(getattr(self, "rd_mp_line", None)),
             "mp_a": self._reduction_combo_id(getattr(self, "rd_mp_a", None)),
             "mp_b": self._reduction_combo_id(getattr(self, "rd_mp_b", None)),
+            "pp_plane": self._reduction_combo_id(getattr(self, "rd_pp_plane", None)),
+            "pp_point": self._reduction_combo_id(getattr(self, "rd_pp_point", None)),
+            "lpp_line": self._reduction_combo_id(getattr(self, "rd_lpp_line", None)),
+            "lpp_point": self._reduction_combo_id(getattr(self, "rd_lpp_point", None)),
+            "l2p_a": self._reduction_combo_id(getattr(self, "rd_l2p_a", None)),
+            "l2p_b": self._reduction_combo_id(getattr(self, "rd_l2p_b", None)),
+            "rot_plane": self._reduction_combo_id(getattr(self, "rd_rot_plane", None)),
+            "rot_line": self._reduction_combo_id(getattr(self, "rd_rot_line", None)),
             "frame_axis": self._reduction_combo_id(getattr(self, "rd_frame_axis", None)),
             "frame_origin": self._reduction_combo_id(
                 getattr(self, "rd_frame_origin", None)
@@ -2741,6 +2850,35 @@ class PickerWindow(QMainWindow):
                 )
                 self._reduction_fill_combo(
                     self.rd_mp_b, kind="plane", keep=keep["mp_b"], **fill_kw
+                )
+            if hasattr(self, "rd_pp_plane"):
+                self._reduction_fill_combo(
+                    self.rd_pp_plane, kind="plane", keep=keep["pp_plane"], **fill_kw
+                )
+            if hasattr(self, "rd_pp_point"):
+                self._reduction_fill_combo(
+                    self.rd_pp_point, kind="point", keep=keep["pp_point"], **fill_kw
+                )
+            if hasattr(self, "rd_lpp_line"):
+                self._reduction_fill_combo(
+                    self.rd_lpp_line, kind="line", keep=keep["lpp_line"], **fill_kw
+                )
+                self._reduction_fill_combo(
+                    self.rd_lpp_point, kind="point", keep=keep["lpp_point"], **fill_kw
+                )
+            if hasattr(self, "rd_l2p_a"):
+                self._reduction_fill_combo(
+                    self.rd_l2p_a, kind="line", keep=keep["l2p_a"], **fill_kw
+                )
+                self._reduction_fill_combo(
+                    self.rd_l2p_b, kind="line", keep=keep["l2p_b"], **fill_kw
+                )
+            if hasattr(self, "rd_rot_plane"):
+                self._reduction_fill_combo(
+                    self.rd_rot_plane, kind="plane", keep=keep["rot_plane"], **fill_kw
+                )
+                self._reduction_fill_combo(
+                    self.rd_rot_line, kind="line", keep=keep["rot_line"], **fill_kw
                 )
             if hasattr(self, "rd_frame_axis"):
                 self._reduction_fill_combo(
@@ -2820,6 +2958,26 @@ class PickerWindow(QMainWindow):
                 eid = self._reduction_combo_id(c)
                 if eid:
                     ids.append(eid)
+        elif op == "plane_from_plane_point":
+            for c in (getattr(self, "rd_pp_plane", None), getattr(self, "rd_pp_point", None)):
+                eid = self._reduction_combo_id(c)
+                if eid:
+                    ids.append(eid)
+        elif op == "plane_from_line_point":
+            for c in (getattr(self, "rd_lpp_line", None), getattr(self, "rd_lpp_point", None)):
+                eid = self._reduction_combo_id(c)
+                if eid:
+                    ids.append(eid)
+        elif op == "plane_from_two_lines":
+            for c in (getattr(self, "rd_l2p_a", None), getattr(self, "rd_l2p_b", None)):
+                eid = self._reduction_combo_id(c)
+                if eid:
+                    ids.append(eid)
+        elif op == "rotate_plane_about_line":
+            for c in (getattr(self, "rd_rot_plane", None), getattr(self, "rd_rot_line", None)):
+                eid = self._reduction_combo_id(c)
+                if eid:
+                    ids.append(eid)
         return ids
 
     def _reduction_current_op(self) -> str:
@@ -2841,6 +2999,8 @@ class PickerWindow(QMainWindow):
         return eid
 
     def _reduction_operand_allowlist(self) -> set[str] | None:
+        if not self._reduction_is_update_mode():
+            return None
         eid = self._reduction_editing_id()
         if eid is None:
             return None
@@ -2855,19 +3015,22 @@ class PickerWindow(QMainWindow):
         combo.blockSignals(False)
 
     def _reduction_sync_apply_button(self) -> None:
-        editing = self._reduction_editing_id() is not None
+        update_mode = self._reduction_is_update_mode()
+        editing = update_mode and self._reduction_editing_id() is not None
         op = self._reduction_current_op()
-        show_id = not editing or op == "bind"
+        show_id = True
         if hasattr(self, "rd_id_edit"):
-            if not show_id and self.rd_id_edit.isVisible():
-                self.rd_id_edit.clear()
             self.rd_id_edit.setVisible(show_id)
-            self.rd_id_edit.setEnabled(show_id)
+            self.rd_id_edit.setEnabled((not editing) or op == "bind")
             label = None
             if hasattr(self, "rd_id_form"):
                 label = self.rd_id_form.labelForField(self.rd_id_edit)
             if label is not None:
                 label.setVisible(show_id)
+        if hasattr(self, "rd_mode_update"):
+            self.rd_mode_update.setEnabled(
+                self._reduction_editing_id() is not None and op != "bind"
+            )
         if not hasattr(self, "rd_apply_btn"):
             return
         if editing and op != "bind":
@@ -2882,11 +3045,20 @@ class PickerWindow(QMainWindow):
             "line_from_point_normal": "Create axis",
             "line_from_two_points": "Create axis",
             "midpoint_line_planes": "Create midpoint",
+            "plane_from_plane_point": "Create plane",
+            "plane_from_line_point": "Create plane",
+            "plane_from_two_lines": "Create plane",
+            "rotate_plane_about_line": "Rotate plane",
         }
         self.rd_apply_btn.setText(labels.get(op, "Apply"))
 
     def _reduction_sync_operation_from_selection(self) -> None:
         eid = self._reduction_editing_id()
+        if hasattr(self, "rd_mode_update"):
+            if eid is not None:
+                self.rd_mode_update.setChecked(True)
+            else:
+                self.rd_mode_new.setChecked(True)
         if eid == getattr(self, "_rd_form_entity_id", None):
             self._reduction_sync_apply_button()
             return
@@ -2936,6 +3108,20 @@ class PickerWindow(QMainWindow):
                 self._reduction_set_combo(self.rd_mp_line, step.get("line"))
                 self._reduction_set_combo(self.rd_mp_a, step.get("a"))
                 self._reduction_set_combo(self.rd_mp_b, step.get("b"))
+            elif gui_op == "plane_from_plane_point":
+                self._reduction_set_combo(self.rd_pp_plane, step.get("plane"))
+                self._reduction_set_combo(self.rd_pp_point, step.get("point"))
+            elif gui_op == "plane_from_line_point":
+                self._reduction_set_combo(self.rd_lpp_line, step.get("line"))
+                self._reduction_set_combo(self.rd_lpp_point, step.get("point"))
+            elif gui_op == "plane_from_two_lines":
+                self._reduction_set_combo(self.rd_l2p_a, step.get("a"))
+                self._reduction_set_combo(self.rd_l2p_b, step.get("b"))
+            elif gui_op == "rotate_plane_about_line":
+                self._reduction_set_combo(self.rd_rot_plane, step.get("plane"))
+                self._reduction_set_combo(self.rd_rot_line, step.get("line"))
+                if hasattr(self, "rd_rot_angle"):
+                    self.rd_rot_angle.setValue(float(step.get("angle_deg", 0.0)))
         finally:
             self._rd_loading_step = False
         self._reduction_update_selection_label()
@@ -3017,6 +3203,46 @@ class PickerWindow(QMainWindow):
                 "a": a,
                 "b": b,
             }
+        if op == "plane_from_plane_point":
+            plane = self._reduction_combo_id(getattr(self, "rd_pp_plane", None))
+            point = self._reduction_combo_id(getattr(self, "rd_pp_point", None))
+            if not plane or not point:
+                return None
+            return {
+                "id": eid,
+                "op": "plane_from_plane_point",
+                "plane": plane,
+                "point": point,
+            }
+        if op == "plane_from_line_point":
+            line = self._reduction_combo_id(getattr(self, "rd_lpp_line", None))
+            point = self._reduction_combo_id(getattr(self, "rd_lpp_point", None))
+            if not line or not point:
+                raise ValueError("line + point → plane needs an axis and a point")
+            return {
+                "id": entity_id,
+                "op": "plane_from_line_point",
+                "line": line,
+                "point": point,
+            }
+        if op == "plane_from_two_lines":
+            a = self._reduction_combo_id(getattr(self, "rd_l2p_a", None))
+            b = self._reduction_combo_id(getattr(self, "rd_l2p_b", None))
+            if not a or not b:
+                raise ValueError("2 lines → plane needs two axes")
+            return {"id": entity_id, "op": "plane_from_two_lines", "a": a, "b": b}
+        if op == "rotate_plane_about_line":
+            plane = self._reduction_combo_id(getattr(self, "rd_rot_plane", None))
+            line = self._reduction_combo_id(getattr(self, "rd_rot_line", None))
+            if not plane or not line:
+                raise ValueError("rotate plane needs a plane and an axis")
+            return {
+                "id": entity_id,
+                "op": "rotate_plane_about_line",
+                "plane": plane,
+                "line": line,
+                "angle_deg": float(self.rd_rot_angle.value()),
+            }
         raise ValueError(f"cannot update with operation {op!r}")
 
     def _reduction_on_op_changed(self, *_args):
@@ -3030,6 +3256,10 @@ class PickerWindow(QMainWindow):
             "line_from_point_normal": 5,
             "line_from_two_points": 6,
             "midpoint_line_planes": 7,
+            "plane_from_plane_point": 8,
+            "plane_from_line_point": 9,
+            "plane_from_two_lines": 10,
+            "rotate_plane_about_line": 11,
         }.get(op, 0)
         if hasattr(self, "rd_stack"):
             self.rd_stack.setCurrentIndex(page)
@@ -3038,6 +3268,38 @@ class PickerWindow(QMainWindow):
         self._reduction_update_selection_label()
         if self._rd_loading_step:
             return
+        self._refresh_reduction_actors()
+        self._reduction_update_live_preview()
+
+    def _reduction_lock_operation_stack_height(self) -> None:
+        """Keep OPERATION card height stable across operation switches."""
+        if not hasattr(self, "rd_stack"):
+            return
+        stack = self.rd_stack
+        count = stack.count()
+        if count <= 0:
+            return
+        old_idx = stack.currentIndex()
+        max_h = 0
+        for i in range(count):
+            stack.setCurrentIndex(i)
+            page = stack.widget(i)
+            if page is None:
+                continue
+            page_h = page.sizeHint().height()
+            if page_h > max_h:
+                max_h = page_h
+        stack.setCurrentIndex(old_idx)
+        if max_h > 0:
+            stack.setFixedHeight(max_h)
+
+    def _reduction_is_update_mode(self) -> bool:
+        return hasattr(self, "rd_mode_update") and self.rd_mode_update.isChecked()
+
+    def _reduction_on_mode_toggled(self, _id, _checked):
+        self._reduction_sync_apply_button()
+        self._reduction_refresh_operand_combos()
+        self._reduction_update_selection_label()
         self._refresh_reduction_actors()
         self._reduction_update_live_preview()
 
@@ -3124,6 +3386,13 @@ class PickerWindow(QMainWindow):
             self._reduction_update_offset_preview()
         elif op in ("line_from_point_normal", "line_from_two_points"):
             self._reduction_update_axis_preview()
+        elif op in (
+            "plane_from_plane_point",
+            "plane_from_line_point",
+            "plane_from_two_lines",
+            "rotate_plane_about_line",
+        ):
+            self._reduction_update_plane_preview()
         elif op == "midpoint_line_planes":
             self._reduction_update_midpoint_preview()
         else:
@@ -3148,6 +3417,95 @@ class PickerWindow(QMainWindow):
             plane = offset_plane(src, dist)
             anchor = self._reduction.anchors.get(ids[0])
             patch = self._reduction.overlay_mm(ids[0])
+            corners = plane_patch_corners(plane, center=anchor, size_mm=patch)
+            corners = self._to_view_points(corners)
+            faces = np.array([3, 0, 1, 2, 3, 0, 2, 3], dtype=np.int64)
+            mesh = pv.PolyData(corners, faces=faces)
+            self.plotter.add_mesh(
+                mesh,
+                name="rd_preview_offset",
+                color="#2ecc71",
+                opacity=0.45,
+                reset_camera=False,
+                pickable=False,
+                render=False,
+            )
+            self.plotter.add_mesh(
+                mesh,
+                name="rd_preview_offset_e",
+                style="wireframe",
+                color="#27ae60",
+                line_width=2,
+                reset_camera=False,
+                pickable=False,
+                render=False,
+            )
+        except Exception:
+            traceback.print_exc()
+        self.plotter.render()
+
+    def _reduction_update_plane_preview(self):
+        """Live-preview a constructed plane without committing."""
+        self._clear_reduction_preview()
+        op = self._reduction_current_op()
+        plane = None
+        anchor = None
+        patch = float(self._reduction.display_default_mm.get("plane", 200.0))
+        try:
+            if op == "plane_from_plane_point":
+                from cloudet.geometry import plane_from_plane_point
+
+                plane_id = self._reduction_combo_id(getattr(self, "rd_pp_plane", None))
+                point_id = self._reduction_combo_id(getattr(self, "rd_pp_point", None))
+                if not plane_id or not point_id:
+                    return
+                src_plane = self._reduction.plane(plane_id)
+                pt = self._reduction.point(point_id)
+                plane = plane_from_plane_point(src_plane, pt)
+                anchor = pt
+            elif op == "plane_from_line_point":
+                from cloudet.geometry import plane_from_line_point
+
+                line_id = self._reduction_combo_id(getattr(self, "rd_lpp_line", None))
+                point_id = self._reduction_combo_id(getattr(self, "rd_lpp_point", None))
+                if not line_id or not point_id:
+                    self.plotter.render()
+                    return
+                plane = plane_from_line_point(
+                    self._reduction.line(line_id),
+                    self._reduction.point(point_id),
+                )
+                anchor = self._reduction.point(point_id)
+            elif op == "plane_from_two_lines":
+                from cloudet.geometry import plane_from_two_lines
+
+                a = self._reduction_combo_id(getattr(self, "rd_l2p_a", None))
+                b = self._reduction_combo_id(getattr(self, "rd_l2p_b", None))
+                if not a or not b or a == b:
+                    self.plotter.render()
+                    return
+                la = self._reduction.line(a)
+                lb = self._reduction.line(b)
+                plane = plane_from_two_lines(la, lb)
+                anchor = 0.5 * (la.point + lb.point)
+            elif op == "rotate_plane_about_line":
+                from cloudet.geometry import rotate_plane_about_line
+
+                plane_id = self._reduction_combo_id(getattr(self, "rd_rot_plane", None))
+                line_id = self._reduction_combo_id(getattr(self, "rd_rot_line", None))
+                if not plane_id or not line_id:
+                    self.plotter.render()
+                    return
+                plane = rotate_plane_about_line(
+                    self._reduction.plane(plane_id),
+                    self._reduction.line(line_id),
+                    float(self.rd_rot_angle.value()),
+                )
+                anchor = self._reduction.anchors.get(plane_id)
+                patch = self._reduction.overlay_mm(plane_id)
+            else:
+                self.plotter.render()
+                return
             corners = plane_patch_corners(plane, center=anchor, size_mm=patch)
             corners = self._to_view_points(corners)
             faces = np.array([3, 0, 1, 2, 3, 0, 2, 3], dtype=np.int64)
@@ -3261,7 +3619,7 @@ class PickerWindow(QMainWindow):
                 pickable=False,
                 render=False,
             )
-            r = max(float(self._reduction.display_default_mm.get("point", 8.0)), 0.5)
+            r = max(float(self._reduction.display_default_mm.get("point", 4.0)), 0.5)
             self.plotter.add_mesh(
                 pv.Sphere(radius=r * 1.4, center=self._to_view_point(mid).tolist()),
                 name="rd_preview_point",
@@ -3286,7 +3644,7 @@ class PickerWindow(QMainWindow):
     def _reduction_apply(self):
         eid = self._reduction_editing_id()
         op = self._reduction_current_op()
-        if eid is not None and op != "bind":
+        if self._reduction_is_update_mode() and eid is not None and op != "bind":
             self._reduction_update_step(eid)
             return
         if op == "bind":
@@ -3305,6 +3663,14 @@ class PickerWindow(QMainWindow):
             self._reduction_line_from_two_points()
         elif op == "midpoint_line_planes":
             self._reduction_midpoint_line_planes()
+        elif op == "plane_from_plane_point":
+            self._reduction_plane_from_plane_point()
+        elif op == "plane_from_line_point":
+            self._reduction_plane_from_line_point()
+        elif op == "plane_from_two_lines":
+            self._reduction_plane_from_two_lines()
+        elif op == "rotate_plane_about_line":
+            self._reduction_rotate_plane_about_line()
         else:
             raise ValueError(f"unknown operation {op!r}")
 
@@ -3485,6 +3851,76 @@ class PickerWindow(QMainWindow):
         self._reduction_refresh_operand_combos()
         self._refresh_reduction_actors()
         self._status(f"midpoint {eid}: {line_id} ∩ {a} / {b}")
+
+    def _reduction_plane_from_plane_point(self):
+        plane_id = self._reduction_combo_id(getattr(self, "rd_pp_plane", None))
+        point_id = self._reduction_combo_id(getattr(self, "rd_pp_point", None))
+        if not plane_id or not point_id:
+            raise ValueError("plane + point → plane needs a plane and a point")
+        eid = self._reduction_new_id("plane")
+        self._reduction.plane_from_plane_point(eid, plane_id, point_id)
+        self.rd_id_edit.clear()
+        self._clear_reduction_preview()
+        self._refresh_reduction_tree()
+        self._reduction_refresh_operand_combos()
+        self._refresh_reduction_actors()
+        self._status(f"plane {eid}: parallel to {plane_id} through {point_id}")
+
+    def _reduction_plane_from_line_point(self):
+        line_id = self._reduction_combo_id(getattr(self, "rd_lpp_line", None))
+        point_id = self._reduction_combo_id(getattr(self, "rd_lpp_point", None))
+        if not line_id or not point_id:
+            raise ValueError("line + point → plane needs an axis and a point")
+        if self._reduction.kind_of(line_id) != "line":
+            raise ValueError(f"{line_id!r} is not an axis")
+        if self._reduction.kind_of(point_id) != "point":
+            raise ValueError(f"{point_id!r} is not a point")
+        eid = self._reduction_new_id("plane")
+        self._reduction.plane_from_line_point(eid, line_id, point_id)
+        self.rd_id_edit.clear()
+        self._clear_reduction_preview()
+        self._refresh_reduction_tree()
+        self._reduction_refresh_operand_combos()
+        self._refresh_reduction_actors()
+        self._status(f"plane {eid}: normal = {line_id}, through {point_id}")
+
+    def _reduction_plane_from_two_lines(self):
+        a = self._reduction_combo_id(getattr(self, "rd_l2p_a", None))
+        b = self._reduction_combo_id(getattr(self, "rd_l2p_b", None))
+        if not a or not b:
+            raise ValueError("2 lines → plane needs two axes")
+        if a == b:
+            raise ValueError("choose two different axes")
+        for eid in (a, b):
+            if self._reduction.kind_of(eid) != "line":
+                raise ValueError(f"{eid!r} is not an axis")
+        eid = self._reduction_new_id("plane")
+        self._reduction.plane_from_two_lines(eid, a, b)
+        self.rd_id_edit.clear()
+        self._clear_reduction_preview()
+        self._refresh_reduction_tree()
+        self._reduction_refresh_operand_combos()
+        self._refresh_reduction_actors()
+        self._status(f"plane {eid}: through {a} and {b}")
+
+    def _reduction_rotate_plane_about_line(self):
+        plane_id = self._reduction_combo_id(getattr(self, "rd_rot_plane", None))
+        line_id = self._reduction_combo_id(getattr(self, "rd_rot_line", None))
+        if not plane_id or not line_id:
+            raise ValueError("rotate plane needs a plane and an axis")
+        if self._reduction.kind_of(plane_id) != "plane":
+            raise ValueError(f"{plane_id!r} is not a plane")
+        if self._reduction.kind_of(line_id) != "line":
+            raise ValueError(f"{line_id!r} is not an axis")
+        angle = float(self.rd_rot_angle.value())
+        eid = self._reduction_new_id("plane")
+        self._reduction.rotate_plane_about_line(eid, plane_id, line_id, angle)
+        self.rd_id_edit.clear()
+        self._clear_reduction_preview()
+        self._refresh_reduction_tree()
+        self._reduction_refresh_operand_combos()
+        self._refresh_reduction_actors()
+        self._status(f"plane {eid}: {plane_id} rotated {angle:g}° about {line_id}")
 
     def _reduction_clear(self):
         self._reduction.clear()
@@ -4188,7 +4624,7 @@ class PickerWindow(QMainWindow):
     def _reduction_point_radius_mm(self, eid: str | None = None) -> float:
         if eid is not None and eid in self._reduction.ids():
             return max(self._reduction.overlay_mm(eid), 0.5)
-        return max(float(self._reduction.display_default_mm.get("point", 8.0)), 0.5)
+        return max(float(self._reduction.display_default_mm.get("point", 4.0)), 0.5)
 
     def _reduction_entity_actor_names(self, eid: str) -> list[str]:
         name = self._reduction_actor_name(eid)

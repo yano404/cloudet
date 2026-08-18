@@ -883,3 +883,58 @@ def test_add_measure_and_cli_export(tmp_path):
     result = run_reduction(project, recipe)
     assert result.measures[0]["id"] == "dplane_1"
     assert result.measures[0]["value"] == pytest.approx(0.0)
+
+
+def test_construct_plane_from_plane_point(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    project = _make_project(tmp_path)
+    sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
+    pt = sess.point("beam_on_target")
+    sess.plane_from_plane_point("shifted", "target", "beam_on_target")
+    plane = sess.plane("shifted")
+    assert np.allclose(plane.normal, sess.plane("target").normal)
+    assert abs(plane.signed_distances(pt.reshape(1, 3))[0]) < 1e-9
+
+
+def test_construct_plane_from_line_point(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    project = _make_project(tmp_path)
+    sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
+    sess.plane_from_line_point("wall", "beam_axis", "beam_on_target")
+    plane = sess.plane("wall")
+    assert np.allclose(np.abs(plane.normal), [0.0, 0.0, 1.0])
+    assert abs(plane.signed_distances(sess.point("beam_on_target").reshape(1, 3))[0]) < 1e-9
+
+
+def test_construct_plane_from_two_lines(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    project = _make_project(tmp_path)
+    recipe = _beam_recipe()
+    recipe["construct"].append({
+        "id": "horiz",
+        "op": "intersect_planes",
+        "a": "left_in",
+        "b": "target",
+    })
+    sess = ReductionSession.from_recipe(recipe, project_dir=project)
+    sess.plane_from_two_lines("face", "beam_axis", "horiz")
+    plane = sess.plane("face")
+    assert abs(plane.signed_distances(sess.point("beam_on_target").reshape(1, 3))[0]) < 1e-9
+
+
+def test_construct_rotate_plane_about_line(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    project = _make_project(tmp_path)
+    sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
+    sess.line_from_point_normal("edge_x", "beam_on_target", "left_in")
+    sess.rotate_plane_about_line("tilted", "target", "edge_x", 90.0)
+    plane = sess.plane("tilted")
+    assert np.allclose(plane.normal, [0.0, 1.0, 0.0], atol=1e-9)
+    out = sess.to_recipe()
+    step = next(s for s in out["construct"] if s["id"] == "tilted")
+    assert step["op"] == "rotate_plane_about_line"
+    assert step["angle_deg"] == pytest.approx(90.0)

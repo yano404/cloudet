@@ -20,8 +20,12 @@ from cloudet.geometry import (
     midpoint_line_planes,
     offset_plane,
     plane_patch_corners,
+    plane_from_line_point,
+    plane_from_plane_point,
+    plane_from_two_lines,
     project_point_to_line,
     project_point_to_plane,
+    rotate_plane_about_line,
 )
 from cloudet.plane import Plane
 
@@ -222,3 +226,60 @@ def test_distance_point_line_and_angles():
     assert angle_line_plane_deg(x, xy) == pytest.approx(0.0)
     diag = Line(np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 1.0]))
     assert angle_line_plane_deg(diag, xy) == pytest.approx(45.0)
+
+
+def test_plane_from_plane_point():
+    xy = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
+    pt = np.array([5.0, 7.0, 3.0])
+    result = plane_from_plane_point(xy, pt)
+    assert np.allclose(result.normal, [0.0, 0.0, 1.0])
+    assert result.signed_distances(pt.reshape(1, 3))[0] == pytest.approx(0.0)
+    assert result.signed_distances(np.array([[0.0, 0.0, 0.0]]))[0] == pytest.approx(-3.0)
+
+
+def test_plane_from_line_point():
+    line = Line(np.array([1.0, 2.0, 3.0]), np.array([0.0, 0.0, 1.0]))
+    pt = np.array([10.0, 20.0, 30.0])
+    plane = plane_from_line_point(line, pt)
+    assert np.allclose(np.abs(plane.normal), [0.0, 0.0, 1.0])
+    assert plane.signed_distances(pt.reshape(1, 3))[0] == pytest.approx(0.0)
+    assert plane.signed_distances(np.array([[10.0, 20.0, 40.0]]))[0] == pytest.approx(10.0)
+
+
+def test_plane_from_two_lines_intersecting():
+    a = Line(np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]))
+    b = Line(np.array([0.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]))
+    plane = plane_from_two_lines(a, b)
+    assert np.allclose(np.abs(plane.normal), [0.0, 0.0, 1.0])
+    for p in (a.point, b.point, np.array([1.0, 1.0, 0.0])):
+        assert abs(plane.signed_distances(p.reshape(1, 3))[0]) < 1e-12
+
+
+def test_plane_from_two_lines_parallel_coplanar():
+    a = Line(np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]))
+    b = Line(np.array([0.0, 1.0, 0.0]), np.array([1.0, 0.0, 0.0]))
+    plane = plane_from_two_lines(a, b)
+    assert abs(plane.normal[2]) == pytest.approx(1.0)
+    assert plane.signed_distances(np.array([[0.0, 0.5, 0.0]]))[0] == pytest.approx(0.0)
+
+
+def test_plane_from_two_lines_skew_raises():
+    a = Line(np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]))
+    b = Line(np.array([0.0, 0.0, 1.0]), np.array([0.0, 1.0, 0.0]))
+    with pytest.raises(ValueError, match="skew"):
+        plane_from_two_lines(a, b)
+
+
+def test_rotate_plane_about_line():
+    plane = Plane(np.array([0.0, 0.0, 1.0]), 0.0)  # z = 0
+    axis = Line(np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]))
+    rotated = rotate_plane_about_line(plane, axis, 90.0)
+    assert np.allclose(rotated.normal, [0.0, 1.0, 0.0], atol=1e-12)
+    assert rotated.signed_distances(np.array([[0.0, 0.0, 0.0]]))[0] == pytest.approx(0.0)
+
+
+def test_rotate_plane_about_line_axis_not_in_plane_raises():
+    plane = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
+    axis = Line(np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]))
+    with pytest.raises(ValueError, match="axis must lie"):
+        rotate_plane_about_line(plane, axis, 10.0)
