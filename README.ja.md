@@ -32,7 +32,17 @@ cloudet/
   frame.py      表示専用 Align Z 姿勢（軸 → +Z、任意で直線 → XY）
   reduce.py     レシピ駆動リダクション → 解析用 geometry.json
   pipeline.py   残差 u–v マップ（GUI QC 用）
-  picker_qt.py  対話的アプリ（PySide6 + PyVista）
+  app_window.py Qtアプリの推奨エントリポイント
+  picker_qt.py  互換 re-export（新規は app_window または ui.main_window）
+  ui/
+    main_window.py    CloudetAppWindow + run_picker_qt
+    groups_mixin.py   Groups / Settings ドック、ピック、フィット、ツリー
+    reduction_mixin.py  Reduction + Measure ドック
+    uv_mixin.py       残差 u–v マップ ドック
+    render_mixin.py   3D アクター描画
+    frame_mixin.py    Align Z 表示フレーム
+    widgets.py        共通 Qt スタイル・ヘルパー
+  reduction_ops.py  Reduction 操作メタデータ（GUI ↔ recipe）
   cli.py        cloudet [project] [--cloud ...] | reduce | version
 tests/          合成データによる検証（σ=0.03mm の FARO 条件を模擬）
 ```

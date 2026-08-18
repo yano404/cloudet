@@ -32,7 +32,17 @@ cloudet/
   frame.py      Display-only Align Z pose (axis → +Z, optional line → XY)
   reduce.py     Recipe-driven reduction → geometry.json for analysis
   pipeline.py   Residual u–v maps (for GUI QC)
-  picker_qt.py  Interactive app (PySide6 + PyVista)
+  app_window.py Preferred Qt app window entrypoint
+  picker_qt.py  Legacy re-exports (use app_window or ui.main_window)
+  ui/
+    main_window.py    CloudetAppWindow + run_picker_qt
+    groups_mixin.py   Groups / Settings dock, pick, fit, tree
+    reduction_mixin.py  Reduction + Measure docks
+    uv_mixin.py       Residual u–v map dock
+    render_mixin.py   3D actor rendering
+    frame_mixin.py    Align Z view frame
+    widgets.py        Shared Qt styling and helpers
+  reduction_ops.py  Shared reduction op metadata (GUI ↔ recipe)
   cli.py        cloudet [project] [--cloud ...] | reduce | version
 tests/          Synthetic validation (FARO-like σ ≈ 0.03 mm)
 ```

@@ -1,6 +1,6 @@
 ---
-description: Patterns for adding new reduction operations in picker_qt.py
-globs: cloudet/picker_qt.py
+description: Patterns for adding new reduction operations in Qt UI modules
+globs: cloudet/{ui/reduction_mixin.py,reduction_ops.py}
 alwaysApply: false
 ---
 
@@ -9,10 +9,8 @@ alwaysApply: false
 When adding a new construct operation, follow the existing ops (e.g. `plane_from_line_point`) exactly. Every new op requires ALL of the following:
 
 ## 1. Mappings & Registration
-- `_RD_GUI_TO_RECIPE_OP` entry
-- `rd_op_combo` label+key tuple
+- `cloudet/reduction_ops.py` entry (`REDUCTION_OPS`)
 - `rd_stack` page with correct index (update all subsequent indices)
-- Page index in `_reduction_current_op()` mapping
 
 ## 2. Combo Refresh
 - `keep` dict entry in `_reduction_refresh_operand_combos()`
