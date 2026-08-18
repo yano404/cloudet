@@ -40,9 +40,12 @@ from cloudet.plane import Plane
 from cloudet.project import FittedPlane, load_fitted_plane, load_group_doc
 
 __all__ = [
+    "ConstructPreview",
     "ReductionResult",
     "ReductionSession",
+    "export_reduction_result",
     "load_recipe",
+    "preview_construct_step",
     "run_reduction",
     "write_geometry_json",
     "write_recipe_json",
@@ -646,16 +649,82 @@ def run_reduction(project_dir: str | Path, recipe: dict) -> ReductionResult:
     sess = ReductionSession()
     sess.apply_recipe(recipe, project_dir=project_dir)
     export_ids = recipe.get("export")
-    result = sess.to_result(
+    return export_reduction_result(
+        sess,
         source_project=str(project_dir.resolve()),
         export=None if export_ids is None else [str(x) for x in export_ids],
+        aligned_frame=sess.rigid_frame(),
     )
-    frame = sess.rigid_frame()
-    if frame is not None:
+
+
+def export_reduction_result(
+    session: ReductionSession,
+    *,
+    source_project: str = "",
+    export: list[str] | None = None,
+    aligned_frame=None,
+) -> ReductionResult:
+    """Build ``ReductionResult`` for CLI/GUI export with optional Align Z copy."""
+    result = session.to_result(source_project=source_project, export=export)
+    if aligned_frame is not None:
         from cloudet.frame import with_aligned_copy
 
-        result = with_aligned_copy(result, frame)
+        result = with_aligned_copy(result, aligned_frame)
     return result
+
+
+@dataclass(frozen=True)
+class ConstructPreview:
+    """Dry-run result of one construct step (for GUI preview / tests)."""
+
+    entity_id: str
+    kind: str
+    plane: Plane | None = None
+    line: Line | None = None
+    point: np.ndarray | None = None
+    anchor: np.ndarray | None = None
+    overlay_mm: float = 200.0
+    overlay_width_mm: float = 1.0
+
+
+def preview_construct_step(session: ReductionSession, step: dict) -> ConstructPreview:
+    """Execute ``step`` on a session copy; return geometry without mutating ``session``."""
+    step = dict(step)
+    entity_id = str(step.get("id") or "")
+    if not entity_id:
+        raise ValueError("construct step needs id")
+    trial = copy.deepcopy(session)
+    if entity_id in trial._store:
+        raise ValueError(f"preview id {entity_id!r} already exists")
+    trial.apply_step(step)
+    kind = trial.kind_of(entity_id)
+    anchor = trial.anchors.get(entity_id)
+    anchor_arr = None if anchor is None else np.asarray(anchor, dtype=np.float64)
+    if kind == "plane":
+        return ConstructPreview(
+            entity_id=entity_id,
+            kind=kind,
+            plane=trial.plane(entity_id),
+            anchor=anchor_arr,
+            overlay_mm=trial.overlay_mm(entity_id),
+        )
+    if kind == "line":
+        return ConstructPreview(
+            entity_id=entity_id,
+            kind=kind,
+            line=trial.line(entity_id),
+            anchor=anchor_arr,
+            overlay_mm=trial.overlay_mm(entity_id),
+            overlay_width_mm=trial.overlay_width_mm(entity_id),
+        )
+    if kind == "point":
+        return ConstructPreview(
+            entity_id=entity_id,
+            kind=kind,
+            point=trial.point(entity_id),
+            anchor=anchor_arr if anchor_arr is not None else trial.point(entity_id),
+        )
+    raise ValueError(f"unknown preview kind {kind!r}")
 
 
 def write_geometry_json(path: str | Path, result: ReductionResult) -> Path:
@@ -827,6 +896,8 @@ class ReductionSession:
         self.visible[alias] = True
         if anchor is not None:
             self.anchors[alias] = np.asarray(anchor, dtype=np.float64).reshape(3)
+        if self._construct:
+            self._replay_construct()
 
     def apply_step(self, step: dict) -> str:
         """Append and execute one construct step. Returns the new entity id."""

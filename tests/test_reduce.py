@@ -367,6 +367,36 @@ def test_overlay_mm_survives_rename_and_drops_on_remove():
     assert "beam" not in sess.display_width_mm
 
 
+def test_bind_scanned_replay_updates_downstream():
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession()
+    wall = Plane(np.array([1.0, 0.0, 0.0]), 0.0)
+    sess.bind_scanned("wall", wall, group_name="G0", group_id=0)
+    sess.offset("wall_in", "wall", 50.0)
+    assert abs(sess.plane("wall_in").d - (-50.0)) < 1e-6
+
+    wall2 = Plane(np.array([1.0, 0.0, 0.0]), 10.0)
+    sess.bind_scanned("wall", wall2, group_name="G0", group_id=0)
+    assert abs(sess.plane("wall_in").d - (-40.0)) < 1e-6
+
+
+def test_preview_construct_step_does_not_mutate_session():
+    from cloudet.reduce import ReductionSession, preview_construct_step
+
+    sess = ReductionSession()
+    wall = Plane(np.array([1.0, 0.0, 0.0]), 0.0)
+    sess.bind_scanned("wall", wall, group_name="G0", group_id=0)
+    preview = preview_construct_step(
+        sess,
+        {"id": "tmp_off", "op": "offset", "of": "wall", "distance_mm": 12.0},
+    )
+    assert preview.kind == "plane"
+    assert preview.plane is not None
+    assert abs(preview.plane.d - (-12.0)) < 1e-6
+    assert "tmp_off" not in sess.ids()
+
+
 def _beam_recipe():
     return {
         "version": 1,

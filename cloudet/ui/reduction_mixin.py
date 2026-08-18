@@ -45,7 +45,8 @@ from cloudet.geometry import (
 )
 from cloudet.plane import Plane
 from cloudet.reduce import load_recipe, write_geometry_json, write_recipe_json
-from cloudet.reduction_ops import GUI_APPLY_LABELS, GUI_MENU_ITEMS, GUI_PAGE_INDEX
+from cloudet.reduce import export_reduction_result, preview_construct_step
+from cloudet.reduction_ops import GUI_APPLY_LABELS, GUI_ID_PREFIX, GUI_MENU_ITEMS, GUI_PAGE_INDEX
 from cloudet.ui.constants import (
     RD_AXIS,
     RD_GUI_TO_RECIPE_OP,
@@ -1230,9 +1231,9 @@ class ReductionMixin:
             plane = self._reduction_combo_id(getattr(self, "rd_pp_plane", None))
             point = self._reduction_combo_id(getattr(self, "rd_pp_point", None))
             if not plane or not point:
-                return None
+                raise ValueError("plane + point → plane needs a plane and a point")
             return {
-                "id": eid,
+                "id": entity_id,
                 "op": "plane_from_plane_point",
                 "plane": plane,
                 "point": point,
@@ -1390,44 +1391,41 @@ class ReductionMixin:
         ):
             self.plotter.remove_actor(name, render=False)
 
+    def _reduction_preview_step(self):
+        op = self._reduction_current_op()
+        if op not in GUI_ID_PREFIX:
+            return None
+        try:
+            return preview_construct_step(
+                self._reduction,
+                self._reduction_step_from_form("__preview__"),
+            )
+        except (ValueError, KeyError):
+            return None
+
     def _reduction_update_live_preview(self):
+        self._clear_reduction_preview()
         op = self._reduction_current_op()
-        if op == "offset":
-            self._reduction_update_offset_preview()
-        elif op in ("line_from_point_normal", "line_from_two_points"):
-            self._reduction_update_axis_preview()
-        elif op in (
-            "plane_from_plane_point",
-            "plane_from_line_point",
-            "plane_from_two_lines",
-            "rotate_plane_about_line",
-        ):
-            self._reduction_update_plane_preview()
-        elif op == "midpoint_line_planes":
+        if op == "midpoint_line_planes":
             self._reduction_update_midpoint_preview()
-        else:
-            self._clear_reduction_preview()
-            self.plotter.render()
-
-    def _reduction_update_offset_preview(self):
-        """Live-preview an offset plane without committing to the session."""
-        self._clear_reduction_preview()
-        if self._reduction_current_op() != "offset":
-            self.plotter.render()
             return
-        ids = self._reduction_selected_ids()
-        if len(ids) != 1 or self._reduction.kind_of(ids[0]) != "plane":
+        preview = self._reduction_preview_step()
+        if preview is None:
             self.plotter.render()
             return
         try:
-            from cloudet.geometry import offset_plane
+            self._reduction_draw_preview(preview)
+        except Exception:
+            traceback.print_exc()
+        self.plotter.render()
 
-            src = self._reduction.plane(ids[0])
-            dist = float(self.rd_offset_spin.value())
-            plane = offset_plane(src, dist)
-            anchor = self._reduction.anchors.get(ids[0])
-            patch = self._reduction.overlay_mm(ids[0])
-            corners = plane_patch_corners(plane, center=anchor, size_mm=patch)
+    def _reduction_draw_preview(self, preview) -> None:
+        if preview.kind == "plane" and preview.plane is not None:
+            corners = plane_patch_corners(
+                preview.plane,
+                center=preview.anchor,
+                size_mm=preview.overlay_mm,
+            )
             corners = self._to_view_points(corners)
             faces = np.array([3, 0, 1, 2, 3, 0, 2, 3], dtype=np.int64)
             mesh = pv.PolyData(corners, faces=faces)
@@ -1450,154 +1448,34 @@ class ReductionMixin:
                 pickable=False,
                 render=False,
             )
-        except Exception:
-            traceback.print_exc()
-        self.plotter.render()
-
-    def _reduction_update_plane_preview(self):
-        """Live-preview a constructed plane without committing."""
-        self._clear_reduction_preview()
-        op = self._reduction_current_op()
-        plane = None
-        anchor = None
-        patch = float(self._reduction.display_default_mm.get("plane", 200.0))
-        try:
-            if op == "plane_from_plane_point":
-                from cloudet.geometry import plane_from_plane_point
-
-                plane_id = self._reduction_combo_id(getattr(self, "rd_pp_plane", None))
-                point_id = self._reduction_combo_id(getattr(self, "rd_pp_point", None))
-                if not plane_id or not point_id:
-                    return
-                src_plane = self._reduction.plane(plane_id)
-                pt = self._reduction.point(point_id)
-                plane = plane_from_plane_point(src_plane, pt)
-                anchor = pt
-            elif op == "plane_from_line_point":
-                from cloudet.geometry import plane_from_line_point
-
-                line_id = self._reduction_combo_id(getattr(self, "rd_lpp_line", None))
-                point_id = self._reduction_combo_id(getattr(self, "rd_lpp_point", None))
-                if not line_id or not point_id:
-                    self.plotter.render()
-                    return
-                plane = plane_from_line_point(
-                    self._reduction.line(line_id),
-                    self._reduction.point(point_id),
-                )
-                anchor = self._reduction.point(point_id)
-            elif op == "plane_from_two_lines":
-                from cloudet.geometry import plane_from_two_lines
-
-                a = self._reduction_combo_id(getattr(self, "rd_l2p_a", None))
-                b = self._reduction_combo_id(getattr(self, "rd_l2p_b", None))
-                if not a or not b or a == b:
-                    self.plotter.render()
-                    return
-                la = self._reduction.line(a)
-                lb = self._reduction.line(b)
-                plane = plane_from_two_lines(la, lb)
-                anchor = 0.5 * (la.point + lb.point)
-            elif op == "rotate_plane_about_line":
-                from cloudet.geometry import rotate_plane_about_line
-
-                plane_id = self._reduction_combo_id(getattr(self, "rd_rot_plane", None))
-                line_id = self._reduction_combo_id(getattr(self, "rd_rot_line", None))
-                if not plane_id or not line_id:
-                    self.plotter.render()
-                    return
-                plane = rotate_plane_about_line(
-                    self._reduction.plane(plane_id),
-                    self._reduction.line(line_id),
-                    float(self.rd_rot_angle.value()),
-                )
-                anchor = self._reduction.anchors.get(plane_id)
-                patch = self._reduction.overlay_mm(plane_id)
-            else:
-                self.plotter.render()
-                return
-            corners = plane_patch_corners(plane, center=anchor, size_mm=patch)
-            corners = self._to_view_points(corners)
-            faces = np.array([3, 0, 1, 2, 3, 0, 2, 3], dtype=np.int64)
-            mesh = pv.PolyData(corners, faces=faces)
-            self.plotter.add_mesh(
-                mesh,
-                name="rd_preview_offset",
-                color="#2ecc71",
-                opacity=0.45,
-                reset_camera=False,
-                pickable=False,
-                render=False,
+            return
+        if preview.kind == "line" and preview.line is not None:
+            center = preview.anchor if preview.anchor is not None else preview.line.point
+            seg = line_segment_points(
+                preview.line,
+                half_length_mm=float(preview.overlay_mm),
+                center=center,
             )
-            self.plotter.add_mesh(
-                mesh,
-                name="rd_preview_offset_e",
-                style="wireframe",
-                color="#27ae60",
-                line_width=2,
-                reset_camera=False,
-                pickable=False,
-                render=False,
-            )
-        except Exception:
-            traceback.print_exc()
-        self.plotter.render()
-
-    def _reduction_update_axis_preview(self):
-        """Live-preview an axis construct without committing."""
-        self._clear_reduction_preview()
-        op = self._reduction_current_op()
-        line = None
-        center = None
-        extra_half = 0.0
-        try:
-            if op == "line_from_point_normal":
-                from cloudet.geometry import line_from_point_normal
-
-                point_id = self._reduction_combo_id(getattr(self, "rd_pn_point", None))
-                plane_id = self._reduction_combo_id(getattr(self, "rd_pn_plane", None))
-                if not point_id or not plane_id:
-                    self.plotter.render()
-                    return
-                line = line_from_point_normal(
-                    self._reduction.point(point_id),
-                    self._reduction.plane(plane_id),
-                )
-                center = line.point
-            elif op == "line_from_two_points":
-                from cloudet.geometry import line_from_two_points
-
-                a = self._reduction_combo_id(getattr(self, "rd_pp_a", None))
-                b = self._reduction_combo_id(getattr(self, "rd_pp_b", None))
-                if not a or not b or a == b:
-                    self.plotter.render()
-                    return
-                pa = self._reduction.point(a)
-                pb = self._reduction.point(b)
-                line = line_from_two_points(pa, pb)
-                center = 0.5 * (pa + pb)
-                extra_half = 0.5 * float(np.linalg.norm(pb - pa))
-            else:
-                self.plotter.render()
-                return
-            half = max(
-                float(self._reduction.display_default_mm.get("line", 300.0)),
-                extra_half,
-            )
-            diam = float(self._reduction.display_default_mm.get("line_diameter", 1.0))
-            seg = line_segment_points(line, half_length_mm=half, center=center)
             seg = self._to_view_points(seg)
             self.plotter.add_mesh(
-                _line_tube_mesh(seg[0], seg[1], diam),
+                _line_tube_mesh(seg[0], seg[1], preview.overlay_width_mm),
                 name="rd_preview_axis",
                 color="#2ecc71",
                 reset_camera=False,
                 pickable=False,
                 render=False,
             )
-        except Exception:
-            traceback.print_exc()
-        self.plotter.render()
+            return
+        if preview.kind == "point" and preview.point is not None:
+            r = max(float(self._reduction.display_default_mm.get("point", 4.0)), 0.5)
+            self.plotter.add_mesh(
+                pv.Sphere(radius=r * 1.4, center=self._to_view_point(preview.point).tolist()),
+                name="rd_preview_point",
+                color="#2ecc71",
+                reset_camera=False,
+                pickable=False,
+                render=False,
+            )
 
     def _reduction_update_midpoint_preview(self):
         """Live-preview the clipped segment and its midpoint."""
@@ -1659,30 +1537,21 @@ class ReductionMixin:
             return
         if op == "bind":
             self._reduction_bind_active()
-        elif op == "offset":
-            self._reduction_offset()
-        elif op == "intersect_planes":
-            self._reduction_intersect_planes()
-        elif op == "intersect_line_plane":
-            self._reduction_intersect_line_plane()
-        elif op == "intersect_three":
-            self._reduction_intersect_three()
-        elif op == "line_from_point_normal":
-            self._reduction_line_from_point_normal()
-        elif op == "line_from_two_points":
-            self._reduction_line_from_two_points()
-        elif op == "midpoint_line_planes":
-            self._reduction_midpoint_line_planes()
-        elif op == "plane_from_plane_point":
-            self._reduction_plane_from_plane_point()
-        elif op == "plane_from_line_point":
-            self._reduction_plane_from_line_point()
-        elif op == "plane_from_two_lines":
-            self._reduction_plane_from_two_lines()
-        elif op == "rotate_plane_about_line":
-            self._reduction_rotate_plane_about_line()
-        else:
-            raise ValueError(f"unknown operation {op!r}")
+            return
+        prefix = GUI_ID_PREFIX.get(op, "entity")
+        entity_id = self._reduction_new_id(prefix)
+        step = self._reduction_step_from_form(entity_id)
+        self._reduction.apply_step(step)
+        self._reduction_after_create(step)
+
+    def _reduction_after_create(self, step: dict) -> None:
+        entity_id = str(step["id"])
+        self.rd_id_edit.clear()
+        self._clear_reduction_preview()
+        self._refresh_reduction_tree()
+        self._reduction_refresh_operand_combos()
+        self._refresh_reduction_actors()
+        self._status(f"created {entity_id}")
 
     def _reduction_update_step(self, entity_id: str) -> None:
         step = self._reduction_step_from_form(entity_id)
@@ -1736,201 +1605,6 @@ class ReductionMixin:
         self._reduction_refresh_operand_combos()
         self._refresh_reduction_actors()
         self._status(f"imported {alias!r} ← {g['name']} / p{pi}")
-
-    def _reduction_offset(self):
-        ids = self._reduction_selected_ids()
-        if len(ids) != 1:
-            raise ValueError("Offset needs exactly 1 selected plane")
-        of = ids[0]
-        if self._reduction.kind_of(of) != "plane":
-            raise ValueError(f"{of!r} is not a plane")
-        eid = self._reduction_new_id("offset")
-        dist = float(self.rd_offset_spin.value())
-        self._reduction.offset(eid, of, dist)
-        self.rd_id_edit.clear()
-        self._clear_reduction_preview()
-        self._refresh_reduction_tree()
-        self._reduction_refresh_operand_combos()
-        self._refresh_reduction_actors()
-        self._status(f"offset {eid}: {of} by {dist:g} mm")
-
-    def _reduction_intersect_planes(self):
-        ids = self._reduction_selected_ids()
-        if len(ids) != 2:
-            raise ValueError("Intersect planes needs exactly 2 selected planes")
-        for i in ids:
-            if self._reduction.kind_of(i) != "plane":
-                raise ValueError(f"{i!r} is not a plane")
-        eid = self._reduction_new_id("axis")
-        self._reduction.intersect_planes(eid, ids[0], ids[1])
-        self.rd_id_edit.clear()
-        self._refresh_reduction_tree()
-        self._reduction_refresh_operand_combos()
-        self._refresh_reduction_actors()
-        self._status(f"axis {eid}: {ids[0]} ∩ {ids[1]}")
-
-    def _reduction_intersect_line_plane(self):
-        ids = self._reduction_selected_ids()
-        if len(ids) != 2:
-            raise ValueError("Line ∩ plane needs 1 line + 1 plane selected")
-        kinds = {i: self._reduction.kind_of(i) for i in ids}
-        lines = [i for i, k in kinds.items() if k == "line"]
-        planes = [i for i, k in kinds.items() if k == "plane"]
-        if len(lines) != 1 or len(planes) != 1:
-            raise ValueError("select exactly one line and one plane")
-        eid = self._reduction_new_id("point")
-        self._reduction.intersect_line_plane(eid, lines[0], planes[0])
-        self.rd_id_edit.clear()
-        self._refresh_reduction_tree()
-        self._reduction_refresh_operand_combos()
-        self._refresh_reduction_actors()
-        self._status(f"point {eid}: {lines[0]} ∩ {planes[0]}")
-
-    def _reduction_intersect_three(self):
-        ids = self._reduction_selected_ids()
-        if len(ids) != 3:
-            raise ValueError("3 planes → point needs exactly 3 selected planes")
-        for i in ids:
-            if self._reduction.kind_of(i) != "plane":
-                raise ValueError(f"{i!r} is not a plane")
-        eid = self._reduction_new_id("corner")
-        self._reduction.intersect_three_planes(eid, ids[0], ids[1], ids[2])
-        self.rd_id_edit.clear()
-        self._refresh_reduction_tree()
-        self._reduction_refresh_operand_combos()
-        self._refresh_reduction_actors()
-        self._status(f"corner {eid}: {ids[0]} ∩ {ids[1]} ∩ {ids[2]}")
-
-    def _reduction_line_from_point_normal(self):
-        point_id = self._reduction_combo_id(getattr(self, "rd_pn_point", None))
-        plane_id = self._reduction_combo_id(getattr(self, "rd_pn_plane", None))
-        if not point_id or not plane_id:
-            raise ValueError("Point + normal needs a point and a plane")
-        if self._reduction.kind_of(point_id) != "point":
-            raise ValueError(f"{point_id!r} is not a point")
-        if self._reduction.kind_of(plane_id) != "plane":
-            raise ValueError(f"{plane_id!r} is not a plane")
-        eid = self._reduction_new_id("axis")
-        self._reduction.line_from_point_normal(eid, point_id, plane_id)
-        self.rd_id_edit.clear()
-        self._clear_reduction_preview()
-        self._refresh_reduction_tree()
-        self._reduction_refresh_operand_combos()
-        self._refresh_reduction_actors()
-        self._status(f"axis {eid}: through {point_id}, dir = normal({plane_id})")
-
-    def _reduction_line_from_two_points(self):
-        a = self._reduction_combo_id(getattr(self, "rd_pp_a", None))
-        b = self._reduction_combo_id(getattr(self, "rd_pp_b", None))
-        if not a or not b:
-            raise ValueError("2 points → axis needs two points")
-        if a == b:
-            raise ValueError("choose two different points")
-        if self._reduction.kind_of(a) != "point":
-            raise ValueError(f"{a!r} is not a point")
-        if self._reduction.kind_of(b) != "point":
-            raise ValueError(f"{b!r} is not a point")
-        eid = self._reduction_new_id("axis")
-        self._reduction.line_from_two_points(eid, a, b)
-        self.rd_id_edit.clear()
-        self._clear_reduction_preview()
-        self._refresh_reduction_tree()
-        self._reduction_refresh_operand_combos()
-        self._refresh_reduction_actors()
-        self._status(f"axis {eid}: {a} → {b}")
-
-    def _reduction_midpoint_line_planes(self):
-        line_id = self._reduction_combo_id(getattr(self, "rd_mp_line", None))
-        a = self._reduction_combo_id(getattr(self, "rd_mp_a", None))
-        b = self._reduction_combo_id(getattr(self, "rd_mp_b", None))
-        if not line_id or not a or not b:
-            raise ValueError("midpoint needs 1 axis and 2 planes")
-        if a == b:
-            raise ValueError("choose two different planes")
-        if self._reduction.kind_of(line_id) != "line":
-            raise ValueError(f"{line_id!r} is not an axis")
-        if self._reduction.kind_of(a) != "plane":
-            raise ValueError(f"{a!r} is not a plane")
-        if self._reduction.kind_of(b) != "plane":
-            raise ValueError(f"{b!r} is not a plane")
-        eid = self._reduction_new_id("mid")
-        self._reduction.midpoint_line_planes(eid, line_id, a, b)
-        self.rd_id_edit.clear()
-        self._clear_reduction_preview()
-        self._refresh_reduction_tree()
-        self._reduction_refresh_operand_combos()
-        self._refresh_reduction_actors()
-        self._status(f"midpoint {eid}: {line_id} ∩ {a} / {b}")
-
-    def _reduction_plane_from_plane_point(self):
-        plane_id = self._reduction_combo_id(getattr(self, "rd_pp_plane", None))
-        point_id = self._reduction_combo_id(getattr(self, "rd_pp_point", None))
-        if not plane_id or not point_id:
-            raise ValueError("plane + point → plane needs a plane and a point")
-        eid = self._reduction_new_id("plane")
-        self._reduction.plane_from_plane_point(eid, plane_id, point_id)
-        self.rd_id_edit.clear()
-        self._clear_reduction_preview()
-        self._refresh_reduction_tree()
-        self._reduction_refresh_operand_combos()
-        self._refresh_reduction_actors()
-        self._status(f"plane {eid}: parallel to {plane_id} through {point_id}")
-
-    def _reduction_plane_from_line_point(self):
-        line_id = self._reduction_combo_id(getattr(self, "rd_lpp_line", None))
-        point_id = self._reduction_combo_id(getattr(self, "rd_lpp_point", None))
-        if not line_id or not point_id:
-            raise ValueError("line + point → plane needs an axis and a point")
-        if self._reduction.kind_of(line_id) != "line":
-            raise ValueError(f"{line_id!r} is not an axis")
-        if self._reduction.kind_of(point_id) != "point":
-            raise ValueError(f"{point_id!r} is not a point")
-        eid = self._reduction_new_id("plane")
-        self._reduction.plane_from_line_point(eid, line_id, point_id)
-        self.rd_id_edit.clear()
-        self._clear_reduction_preview()
-        self._refresh_reduction_tree()
-        self._reduction_refresh_operand_combos()
-        self._refresh_reduction_actors()
-        self._status(f"plane {eid}: normal = {line_id}, through {point_id}")
-
-    def _reduction_plane_from_two_lines(self):
-        a = self._reduction_combo_id(getattr(self, "rd_l2p_a", None))
-        b = self._reduction_combo_id(getattr(self, "rd_l2p_b", None))
-        if not a or not b:
-            raise ValueError("2 lines → plane needs two axes")
-        if a == b:
-            raise ValueError("choose two different axes")
-        for eid in (a, b):
-            if self._reduction.kind_of(eid) != "line":
-                raise ValueError(f"{eid!r} is not an axis")
-        eid = self._reduction_new_id("plane")
-        self._reduction.plane_from_two_lines(eid, a, b)
-        self.rd_id_edit.clear()
-        self._clear_reduction_preview()
-        self._refresh_reduction_tree()
-        self._reduction_refresh_operand_combos()
-        self._refresh_reduction_actors()
-        self._status(f"plane {eid}: through {a} and {b}")
-
-    def _reduction_rotate_plane_about_line(self):
-        plane_id = self._reduction_combo_id(getattr(self, "rd_rot_plane", None))
-        line_id = self._reduction_combo_id(getattr(self, "rd_rot_line", None))
-        if not plane_id or not line_id:
-            raise ValueError("rotate plane needs a plane and an axis")
-        if self._reduction.kind_of(plane_id) != "plane":
-            raise ValueError(f"{plane_id!r} is not a plane")
-        if self._reduction.kind_of(line_id) != "line":
-            raise ValueError(f"{line_id!r} is not an axis")
-        angle = float(self.rd_rot_angle.value())
-        eid = self._reduction_new_id("plane")
-        self._reduction.rotate_plane_about_line(eid, plane_id, line_id, angle)
-        self.rd_id_edit.clear()
-        self._clear_reduction_preview()
-        self._refresh_reduction_tree()
-        self._reduction_refresh_operand_combos()
-        self._refresh_reduction_actors()
-        self._status(f"plane {eid}: {plane_id} rotated {angle:g}° about {line_id}")
 
     def _reduction_clear(self):
         self._reduction.clear()
@@ -2265,15 +1939,16 @@ class ReductionMixin:
         self._status(f"saved recipe → {path}")
 
     def _reduction_export_geometry(self):
-        result = self._reduction.to_result(
-            source_project=str(self.project_dir.resolve())
-        )
         include_aligned = (
             bool(getattr(self, "rd_export_frame_cb", None) and self.rd_export_frame_cb.isChecked())
             and self._view_frame is not None
         )
-        if include_aligned:
-            result = with_aligned_copy(result, self._view_frame)
+        self._reduction_capture_frame_spec()
+        result = export_reduction_result(
+            self._reduction,
+            source_project=str(self.project_dir.resolve()),
+            aligned_frame=self._view_frame if include_aligned else None,
+        )
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Export geometry.json",
