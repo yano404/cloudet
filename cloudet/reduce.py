@@ -1255,7 +1255,7 @@ class ReductionSession:
         for step in steps:
             self.apply_step(step)
         for eid, shown in vis.items():
-            if eid in self._store:
+            if eid in self._store or is_aligned_axis_id(eid):
                 self.visible[eid] = shown
         self.display_mm = {k: v for k, v in display_mm.items() if k in self._store}
         self.display_width_mm = {

@@ -61,6 +61,9 @@ class FrameMixin:
         self._reduction_capture_frame_spec()
         if hasattr(self, "rd_rot_line"):
             self._reduction_refresh_operand_combos(include_frame=False)
+        if hasattr(self, "rd_tree"):
+            self._refresh_reduction_tree()
+            self._refresh_reduction_actors()
 
     def _reduction_capture_frame_spec(self) -> None:
         axis = self._reduction_combo_id(getattr(self, "rd_frame_axis", None))

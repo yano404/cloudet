@@ -273,3 +273,60 @@ def test_update_mode_locks_op_combo(gui):
     gui.rd_mode_new.setChecked(True)
     gui._reduction_sync_apply_button()
     assert gui.rd_op_combo.isEnabled()
+
+
+def _tree_ids(gui) -> list[str]:
+    return [
+        str(gui.rd_tree.topLevelItem(i).data(0, Qt.UserRole))
+        for i in range(gui.rd_tree.topLevelItemCount())
+    ]
+
+
+def test_aligned_axes_absent_from_tree_without_frame(gui):
+    gui._refresh_reduction_tree()
+    ids = _tree_ids(gui)
+    assert "aligned.x" not in ids
+    assert gui._reduction_aligned_axis_ids() == []
+
+
+def test_aligned_axes_appear_at_tree_bottom_when_frame_set(gui):
+    gui._reduction.frame_spec = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    gui._refresh_reduction_tree()
+    ids = _tree_ids(gui)
+    assert ids[-3:] == ["aligned.x", "aligned.y", "aligned.z"]
+    item = gui.rd_tree.topLevelItem(gui.rd_tree.topLevelItemCount() - 3)
+    assert item.text(0) == "aligned X"
+    assert item.text(1) == "axis"
+    assert item.text(2) == "—"
+    assert item.checkState(0) == Qt.Checked
+    assert not (item.flags() & Qt.ItemIsEditable)
+    assert item.flags() & Qt.ItemIsUserCheckable
+
+
+def test_selecting_aligned_axis_does_not_enter_update_mode(gui):
+    gui._reduction.frame_spec = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    gui._select_tree_entity("aligned.x")
+    assert gui._reduction_editing_id() is None
+    gui._reduction_sync_operation_from_selection()
+    assert gui.rd_mode_new.isChecked()
+    assert gui.rd_apply_btn.text() != "Update"
+
+
+def test_aligned_axis_cannot_be_deleted(gui):
+    gui._reduction.frame_spec = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    gui._select_tree_entity("aligned.x")
+    with pytest.raises(ValueError, match="cannot be renamed or deleted"):
+        gui._reduction_delete_selected()
+    assert "aligned.x" in gui._reduction.available_aligned_axis_ids()
