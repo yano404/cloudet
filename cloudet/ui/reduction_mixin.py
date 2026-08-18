@@ -1455,12 +1455,18 @@ class ReductionMixin:
         self._refresh_reduction_actors()
         self._status(f"created {entity_id}")
 
+    def _reduction_status_with_replay(self, message: str) -> None:
+        warnings = list(self._reduction.replay_warnings)
+        if warnings:
+            message = f"{message}  ({'; '.join(warnings)})"
+        self._status(message)
+
     def _reduction_update_step(self, entity_id: str) -> None:
         step = self._reduction_step_from_form(entity_id)
         self._reduction.replace_construct_step(entity_id, step)
         self._rd_form_entity_id = entity_id
         self._reduction_refresh_view()
-        self._status(f"updated {entity_id}")
+        self._reduction_status_with_replay(f"updated {entity_id}")
 
     def _reduction_anchor_for_group(self, g: dict) -> np.ndarray:
         if g.get("clicked") is not None:
@@ -1506,7 +1512,7 @@ class ReductionMixin:
         self._refresh_reduction_tree()
         self._reduction_refresh_operand_combos()
         self._refresh_reduction_actors()
-        self._status(f"imported {alias!r} ← {g['name']} / p{pi}")
+        self._reduction_status_with_replay(f"imported {alias!r} ← {g['name']} / p{pi}")
 
     def _reduction_clear(self):
         self._reduction.clear()

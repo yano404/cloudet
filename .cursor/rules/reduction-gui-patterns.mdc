@@ -25,6 +25,8 @@ When adding a new construct operation, follow the existing ops (e.g. `plane_from
 - `_reduction_update_live_preview()` uses `preview_construct_step()` for all construct ops
 - `_reduction_draw_preview()` draws planes/lines/points; point previews may include
   `preview.segment_ends` (e.g. midpoint between two planes)
+- After bind/update replay, check `session.replay_warnings` and surface via
+  `_reduction_status_with_replay()`
 - Access data via `self._reduction.plane(id)`, `.line(id)`, `.point(id)` — NEVER `self._reduction.store` or `self._reduction._store`
 
 ## 5. Apply Method
