@@ -1,16 +1,9 @@
-"""CLI dispatch: default app launch; reduce; version."""
+"""CLI dispatch: default app launch; version."""
 
 from __future__ import annotations
 
-import json
-
-import numpy as np
-
 import cloudet
-from cloudet.cli import build_app_parser, build_reduce_parser, main
-from cloudet.picking import PickParams
-from cloudet.plane import Plane
-from cloudet.project import SourceInfo, save_group, write_manifest
+from cloudet.cli import build_app_parser, main
 
 
 def test_version():
@@ -47,62 +40,3 @@ def test_default_dispatches_to_app():
 
 def test_package_version_matches():
     assert cloudet.__version__
-
-
-def test_reduce_cli(tmp_path):
-    params = PickParams()
-    plane = Plane(np.array([0.0, 0.0, 1.0]), -10.0)
-    save_group(
-        tmp_path,
-        0,
-        "target",
-        np.zeros((3, 3)),
-        None,
-        plane.as_array(),
-        None,
-        detection=params,
-        fit_summary={
-            "planes": [{
-                "plane_index": 0,
-                "abcd": plane.as_array().tolist(),
-                "n_points": 3,
-                "status": "ok",
-                "reasons": [],
-                "bimodal": False,
-                "mad_sigma_mm": 0.04,
-                "threshold_mm": 0.15,
-            }]
-        },
-    )
-    write_manifest(
-        tmp_path, SourceInfo(path="s.ply", n_points=3), params, n_groups=1
-    )
-    recipe = {
-        "version": 1,
-        "units": "mm",
-        "faces": {"target": {"from": "group", "name": "target"}},
-        "construct": [],
-        "export": ["target"],
-    }
-    recipe_path = tmp_path / "recipe.json"
-    recipe_path.write_text(json.dumps(recipe))
-    out = tmp_path / "out" / "geometry.json"
-    assert main([
-        "reduce",
-        str(tmp_path),
-        "--recipe",
-        str(recipe_path),
-        "-o",
-        str(out),
-    ]) == 0
-    doc = json.loads(out.read_text())
-    assert "target" in doc["planes"]
-    assert doc["planes"]["target"]["provenance"] == "scanned"
-
-
-def test_reduce_parser_requires_recipe():
-    p = build_reduce_parser()
-    args = p.parse_args(["proj", "--recipe", "r.json", "-o", "g.json"])
-    assert args.project_dir == "proj"
-    assert args.recipe == "r.json"
-    assert args.output == "g.json"

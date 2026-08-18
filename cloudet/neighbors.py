@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import numpy as np
 
-from cloudet.array_backend import cupy_available, get_context
-
 __all__ = [
     "VoxelHashGrid",
     "voxel_downsample_indices",
@@ -20,86 +18,6 @@ __all__ = [
     "resolve_display_backend",
     "depth_layers_along_ray",
 ]
-
-_INDEX_CHUNK = 1_000_000
-# Above this many grid cells the Python cell walk loses to one vectorized pass.
-_MAX_QUERY_CELLS = 8_000
-# Display voxel/Open3D must not see the full survey cloud: Vector3dVector /
-# (N,3) int64 keys would duplicate tens of millions of points in RAM.
-_DISPLAY_WORK_CAP = 8_000_000
-
-
-def _as_xyz(points: np.ndarray) -> np.ndarray:
-    points = np.asarray(points, dtype=np.float64)
-    if points.ndim != 2 or points.shape[1] != 3:
-        raise ValueError("points must have shape (N, 3)")
-    return points
-
-
-def _compact_ids(n_points: int, *arrays: np.ndarray) -> tuple[np.ndarray, ...]:
-    """Use int32 indices when N fits, to cut RAM/disk of the spatial index."""
-    if n_points <= np.iinfo(np.int32).max:
-        return tuple(np.asarray(a, dtype=np.int32) for a in arrays)
-    return tuple(np.asarray(a, dtype=np.int64) for a in arrays)
-
-
-def _precap_points(points: np.ndarray, cap: int, seed: int) -> np.ndarray:
-    """Subset so display downsample never walks the full cloud.
-
-    Uses a strided sample rather than ``choice(..., replace=False)``, which
-    can permute all N indices in RAM.
-    """
-    n = len(points)
-    cap = int(cap)
-    if n <= cap:
-        return points
-    idx = np.linspace(0, n - 1, cap, dtype=np.int64)
-    return points[idx]
-
-
-def _keys_chunked(points: np.ndarray, origin: np.ndarray, cell_size: float):
-    """Linear voxel keys without an (N, 3) int64 index (that alone is 8 bytes × 3N)."""
-    n = len(points)
-    inv = 1.0 / float(cell_size)
-    mx = np.zeros(3, dtype=np.int64)
-    for i in range(0, n, _INDEX_CHUNK):
-        sl = points[i : i + _INDEX_CHUNK]
-        ijk = np.floor((sl - origin) * inv).astype(np.int64)
-        np.maximum(mx, ijk.max(axis=0), out=mx)
-    dims = mx + 1
-    keys = np.empty(n, dtype=np.int64)
-    for i in range(0, n, _INDEX_CHUNK):
-        sl = points[i : i + _INDEX_CHUNK]
-        ijk = np.floor((sl - origin) * inv).astype(np.int64)
-        keys[i : i + len(sl)] = (
-            (ijk[:, 0] * dims[1] + ijk[:, 1]) * dims[2] + ijk[:, 2]
-        )
-    return keys, dims
-
-
-def _unique_runs(keys: np.ndarray, order: np.ndarray):
-    """Cell keys / start offsets from argsort, without copying all keys."""
-    n = len(order)
-    if n == 0:
-        empty = np.empty(0, dtype=keys.dtype)
-        return empty, np.empty(0, dtype=np.int64)
-    mask = np.empty(n, dtype=np.bool_)
-    mask[0] = True
-    for i in range(0, n - 1, _INDEX_CHUNK):
-        j = min(i + _INDEX_CHUNK, n - 1)
-        mask[i + 1 : j + 1] = keys[order[i + 1 : j + 1]] != keys[order[i:j]]
-    starts = np.flatnonzero(mask)
-    return keys[order[starts]], starts
-
-
-def _build_voxel_index(points: np.ndarray, cell_size: float):
-    origin = points.min(axis=0)
-    keys, dims = _keys_chunked(points, origin, cell_size)
-    order = np.argsort(keys, kind="quicksort")
-    cell_keys, cell_starts = _unique_runs(keys, order)
-    del keys
-    order, cell_starts = _compact_ids(len(points), order, cell_starts)
-    return origin, dims, cell_keys, cell_starts, order
 
 
 class VoxelHashGrid:
@@ -110,113 +28,24 @@ class VoxelHashGrid:
     """
 
     def __init__(self, points: np.ndarray, cell_size: float):
-        points = _as_xyz(points)
+        points = np.asarray(points, dtype=np.float64)
+        if points.ndim != 2 or points.shape[1] != 3:
+            raise ValueError("points must have shape (N, 3)")
         if cell_size <= 0:
             raise ValueError("cell_size must be positive")
         self.points = points
         self.cell_size = float(cell_size)
-        (
-            self.origin,
-            self.dims,
-            self._cell_keys,
-            self._cell_starts,
-            self._order,
-        ) = _build_voxel_index(points, self.cell_size)
+        self.origin = points.min(axis=0)
 
-    @classmethod
-    def from_arrays(
-        cls,
-        points: np.ndarray,
-        *,
-        cell_size: float,
-        origin: np.ndarray,
-        dims: np.ndarray,
-        cell_keys: np.ndarray,
-        cell_starts: np.ndarray,
-        order: np.ndarray,
-        validate_range: bool = True,
-    ) -> "VoxelHashGrid":
-        """Rebuild from arrays produced by :meth:`index_arrays` (no re-index).
+        ijk = np.floor((points - self.origin) / self.cell_size).astype(np.int64)
+        self.dims = ijk.max(axis=0) + 1
+        keys = (ijk[:, 0] * self.dims[1] + ijk[:, 1]) * self.dims[2] + ijk[:, 2]
 
-        ``validate_range`` scans every index; skip it when loading a trusted
-        cache so a 60 M-point memmap is not read twice.
-        """
-        points = _as_xyz(points)
-        if cell_size <= 0:
-            raise ValueError("cell_size must be positive")
-        order = np.asarray(order).reshape(-1)
-        if order.dtype.kind not in "iu":
-            raise ValueError("order must be integer")
-        if len(order) != len(points):
-            raise ValueError("order length must match number of points")
-        origin = np.asarray(origin, dtype=np.float64).reshape(3)
-        dims = np.asarray(dims, dtype=np.int64).reshape(3)
-        cell_keys = np.asarray(cell_keys).reshape(-1)
-        cell_starts = np.asarray(cell_starts).reshape(-1)
-        if len(cell_keys) != len(cell_starts):
-            raise ValueError("cell_keys and cell_starts length mismatch")
-        if validate_range and order.size:
-            if int(order.min()) < 0 or int(order.max()) >= len(points):
-                raise ValueError("order contains out-of-range indices")
-            if not np.allclose(origin, points.min(axis=0)):
-                raise ValueError("cached origin does not match points")
-        obj = cls.__new__(cls)
-        obj.points = points
-        obj.cell_size = float(cell_size)
-        obj.origin = origin
-        obj.dims = dims
-        obj._cell_keys = cell_keys
-        obj._cell_starts = cell_starts
-        obj._order = order
-        return obj
-
-    def index_arrays(self) -> dict:
-        """Arrays needed to persist this index (points themselves are omitted)."""
-        return {
-            "cell_size": float(self.cell_size),
-            "origin": np.asarray(self.origin, dtype=np.float64),
-            "dims": np.asarray(self.dims, dtype=np.int64),
-            "cell_keys": np.asarray(self._cell_keys),
-            "cell_starts": np.asarray(self._cell_starts),
-            "order": np.asarray(self._order),
-        }
-
-    @classmethod
-    def cell_size_for_radius(cls, radius_mm: float) -> float:
-        """Grid resolution matched to the neighbour query radius."""
-        return max(float(radius_mm), 1.0)
-
-    def _bruteforce_radius_indices(self, center: np.ndarray, radius: float) -> np.ndarray:
-        d2 = np.einsum(
-            "ij,ij->i", self.points - center, self.points - center, optimize=True
-        )
-        return np.flatnonzero(d2 <= radius * radius)
-
-    def _collect_cell_candidates(
-        self, lo: np.ndarray, hi: np.ndarray
-    ) -> np.ndarray:
-        ii = np.arange(lo[0], hi[0] + 1, dtype=np.int64)
-        jj = np.arange(lo[1], hi[1] + 1, dtype=np.int64)
-        kk = np.arange(lo[2], hi[2] + 1, dtype=np.int64)
-        I, J, K = np.meshgrid(ii, jj, kk, indexing="ij")
-        keys = ((I * self.dims[1] + J) * self.dims[2] + K).ravel()
-        pos = np.searchsorted(self._cell_keys, keys)
-        in_range = pos < len(self._cell_keys)
-        pos = pos[in_range]
-        keys = keys[in_range]
-        match = self._cell_keys[pos] == keys
-        pos = pos[match]
-        if len(pos) == 0:
-            return np.empty(0, dtype=np.int64)
-        chunks = [
-            self._order[self._cell_starts[p] : (
-                self._cell_starts[p + 1]
-                if p + 1 < len(self._cell_starts)
-                else len(self._order)
-            )]
-            for p in pos
-        ]
-        return np.concatenate(chunks)
+        order = np.argsort(keys, kind="stable")
+        sorted_keys = keys[order]
+        # unique cells with start offsets into `order`
+        self._cell_keys, self._cell_starts = np.unique(sorted_keys, return_index=True)
+        self._order = order
 
     def _cell_indices(self, key: int) -> np.ndarray:
         pos = np.searchsorted(self._cell_keys, key)
@@ -233,7 +62,6 @@ class VoxelHashGrid:
     def radius_indices(self, center, radius: float) -> np.ndarray:
         """Indices of all points within ``radius`` of ``center``."""
         center = np.asarray(center, dtype=np.float64)
-        radius = float(radius)
         lo = np.floor((center - radius - self.origin) / self.cell_size).astype(np.int64)
         hi = np.floor((center + radius - self.origin) / self.cell_size).astype(np.int64)
         lo = np.maximum(lo, 0)
@@ -241,60 +69,32 @@ class VoxelHashGrid:
         if np.any(hi < lo):
             return np.empty(0, dtype=np.int64)
 
-        n_cells = int(np.prod(hi - lo + 1))
-        if n_cells > _MAX_QUERY_CELLS:
-            return self._bruteforce_radius_indices(center, radius)
-
-        cand = self._collect_cell_candidates(lo, hi)
-        if len(cand) == 0:
-            return cand
+        chunks = []
+        for i in range(lo[0], hi[0] + 1):
+            for j in range(lo[1], hi[1] + 1):
+                base = (i * self.dims[1] + j) * self.dims[2]
+                for k in range(lo[2], hi[2] + 1):
+                    idx = self._cell_indices(base + k)
+                    if len(idx):
+                        chunks.append(idx)
+        if not chunks:
+            return np.empty(0, dtype=np.int64)
+        cand = np.concatenate(chunks)
         d2 = np.einsum(
-            "ij,ij->i",
-            self.points[cand] - center,
-            self.points[cand] - center,
-            optimize=True,
+            "ij,ij->i", self.points[cand] - center, self.points[cand] - center
         )
         return cand[d2 <= radius * radius]
 
 
-def _voxel_downsample_indices_numpy(points: np.ndarray, voxel_size: float) -> np.ndarray:
+def voxel_downsample_indices(points: np.ndarray, voxel_size: float) -> np.ndarray:
+    """Indices of one representative point per occupied voxel (numpy)."""
+    points = np.asarray(points, dtype=np.float64)
+    if voxel_size <= 0:
+        return np.arange(len(points))
     ijk = np.floor((points - points.min(axis=0)) / voxel_size).astype(np.int64)
     dims = ijk.max(axis=0) + 1
     keys = (ijk[:, 0] * dims[1] + ijk[:, 1]) * dims[2] + ijk[:, 2]
     _, first = np.unique(keys, return_index=True)
-    return np.sort(first)
-
-
-def voxel_downsample_indices(
-    points: np.ndarray,
-    voxel_size: float,
-    *,
-    compute_backend: str = "auto",
-) -> np.ndarray:
-    """Indices of one representative point per occupied voxel."""
-    points = np.asarray(points, dtype=np.float64)
-    if voxel_size <= 0:
-        return np.arange(len(points))
-    ctx = get_context(compute_backend, n_points=len(points))
-    if ctx.name == "cupy":
-        try:
-            return _voxel_downsample_indices_cupy(points, voxel_size, ctx)
-        except RuntimeError:
-            return _voxel_downsample_indices_numpy(points, voxel_size)
-    return _voxel_downsample_indices_numpy(points, voxel_size)
-
-
-def _voxel_downsample_indices_cupy(
-    points: np.ndarray, voxel_size: float, ctx
-) -> np.ndarray:
-    xp = ctx.xp
-    pts = ctx.to_device(points)
-    origin = pts.min(axis=0)
-    ijk = xp.floor((pts - origin) / voxel_size).astype(xp.int64)
-    dims = ijk.max(axis=0) + 1
-    keys = (ijk[:, 0] * dims[1] + ijk[:, 1]) * dims[2] + ijk[:, 2]
-    keys_np = ctx.asnumpy(keys)
-    _, first = np.unique(keys_np, return_index=True)
     return np.sort(first)
 
 
@@ -303,13 +103,9 @@ def display_indices(
     voxel_size: float,
     max_points: int,
     seed: int = 0,
-    *,
-    compute_backend: str = "auto",
 ) -> np.ndarray:
-    """Indices for display: optional voxel filter then a hard random cap."""
-    idx = voxel_downsample_indices(
-        points, voxel_size, compute_backend=compute_backend
-    )
+    """Indices for display: optional voxel filter then a hard random cap (numpy)."""
+    idx = voxel_downsample_indices(points, voxel_size)
     if len(idx) > max_points:
         rng = np.random.default_rng(seed)
         idx = np.sort(rng.choice(idx, size=max_points, replace=False))
@@ -317,18 +113,10 @@ def display_indices(
 
 
 def resolve_display_backend(backend: str = "auto") -> str:
-    """Return ``'cupy'``, ``'open3d'``, or ``'numpy'``."""
+    """Return ``'open3d'`` or ``'numpy'``."""
     backend = (backend or "auto").lower()
     if backend == "numpy":
         return "numpy"
-    if backend == "cupy":
-        if not cupy_available():
-            raise ImportError(
-                "display downsample backend 'cupy' requested but CuPy/CUDA "
-                "is not available (pip install cupy-cuda12x, or use "
-                "backend='auto'/'numpy'/'open3d')"
-            )
-        return "cupy"
     if backend == "open3d":
         try:
             import open3d  # noqa: F401
@@ -339,8 +127,6 @@ def resolve_display_backend(backend: str = "auto") -> str:
             ) from e
         return "open3d"
     if backend == "auto":
-        if cupy_available():
-            return "cupy"
         try:
             import open3d  # noqa: F401
 
@@ -349,7 +135,7 @@ def resolve_display_backend(backend: str = "auto") -> str:
             return "numpy"
     raise ValueError(
         f"unknown display downsample backend {backend!r} "
-        "(choose from auto, numpy, open3d, cupy)"
+        "(choose from auto, numpy, open3d)"
     )
 
 
@@ -390,24 +176,15 @@ def display_xyz(
 ) -> np.ndarray:
     """Return ``(M, 3)`` points for display (voxel + hard cap).
 
-    ``backend``: ``auto`` (CuPy if available, else Open3D if installed,
-    else numpy), ``numpy``, ``open3d``, or ``cupy``.
+    ``backend``: ``auto`` (Open3D if installed, else numpy), ``numpy``,
+    or ``open3d``. Rendering backends (Qt/PyVista, Open3D GUI) can share
+    this; only the decimation implementation changes.
     """
     points = np.asarray(points, dtype=np.float64)
     resolved = resolve_display_backend(backend)
-    work_cap = min(_DISPLAY_WORK_CAP, max(int(max_points) * 4, int(max_points)))
-    if len(points) > work_cap:
-        points = _precap_points(points, work_cap, seed)
     if resolved == "open3d":
         return _display_xyz_open3d(points, voxel_size, max_points, seed)
-    compute = "cupy" if resolved == "cupy" else "numpy"
-    idx = display_indices(
-        points,
-        voxel_size,
-        max_points,
-        seed=seed,
-        compute_backend=compute,
-    )
+    idx = display_indices(points, voxel_size, max_points, seed=seed)
     return points[idx]
 
 

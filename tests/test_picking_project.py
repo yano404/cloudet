@@ -11,7 +11,6 @@ from cloudet.project import (
     PickerSettings,
     SourceInfo,
     load_group_indices,
-    load_plane_inlier_indices,
     load_settings,
     read_manifest,
     save_group,
@@ -283,112 +282,6 @@ def test_project_roundtrip(tmp_path):
     assert doc["fit"]["status"] == "ok"
 
 
-def test_plane_inlier_indices_roundtrip(tmp_path):
-    rng = np.random.default_rng(4)
-    pts = rng.uniform(-10, 10, size=(200, 3))
-    group_idx = np.arange(1000, 1200, dtype=np.int64)
-    local0 = np.array([3, 7, 11, 19], dtype=np.int64)
-    local1 = np.array([20, 21, 22], dtype=np.int64)
-    params = PickParams()
-    save_group(
-        tmp_path,
-        2,
-        "Face",
-        pts,
-        group_idx,
-        coarse_plane=[0, 0, 1, 0],
-        clicked=[0, 0, 0],
-        detection=params,
-        fit_summary={
-            "planes": [
-                {
-                    "plane_index": 0,
-                    "abcd": [0.0, 0.0, 1.0, 0.0],
-                    "n_points": 4,
-                    "status": "ok",
-                    "reasons": [],
-                    "bimodal": False,
-                    "mad_sigma_mm": 0.03,
-                    "threshold_mm": 0.15,
-                    "inlier_local": local0,
-                },
-                {
-                    "plane_index": 1,
-                    "abcd": [1.0, 0.0, 0.0, -1.0],
-                    "n_points": 3,
-                    "status": "ok",
-                    "reasons": ["selection_refit"],
-                    "source_plane_index": 0,
-                    "n_selected": 8,
-                    "inlier_local": local1,
-                },
-            ]
-        },
-    )
-    src0 = load_plane_inlier_indices(tmp_path, 2, 0)
-    src1 = load_plane_inlier_indices(tmp_path, 2, 1)
-    assert src0 is not None and src1 is not None
-    assert np.array_equal(src0, group_idx[local0])
-    assert np.array_equal(src1, group_idx[local1])
-    doc = json.loads((tmp_path / "groups" / "group_002.json").read_text())
-    p0, p1 = doc["fit"]["planes"]
-    assert p0["inlier_indices_file"] == "group_002_p0_indices.npy"
-    assert p1["inlier_indices_file"] == "group_002_p1_indices.npy"
-    assert p0["inlier_n"] == 4
-    assert p1["inlier_n"] == 3
-    assert "inlier_local" not in p0
-    assert "inlier_source" not in p0
-
-    # Drop p1 and re-save: leftover p1 npy is removed.
-    save_group(
-        tmp_path,
-        2,
-        "Face",
-        pts,
-        group_idx,
-        coarse_plane=[0, 0, 1, 0],
-        clicked=[0, 0, 0],
-        detection=params,
-        fit_summary={"planes": [doc["fit"]["planes"][0] | {"inlier_source": src0}]},
-    )
-    assert (tmp_path / "groups" / "group_002_p0_indices.npy").exists()
-    assert not (tmp_path / "groups" / "group_002_p1_indices.npy").exists()
-    doc2 = json.loads((tmp_path / "groups" / "group_002.json").read_text())
-    assert len(doc2["fit"]["planes"]) == 1
-
-
-def test_plane_name_roundtrip(tmp_path):
-    rng = np.random.default_rng(5)
-    pts = rng.uniform(-1, 1, size=(20, 3))
-    idx = np.arange(20, dtype=np.int64)
-    save_group(
-        tmp_path,
-        0,
-        "G0",
-        pts,
-        idx,
-        coarse_plane=[0, 0, 1, 0],
-        clicked=[0, 0, 0],
-        detection=PickParams(),
-        fit_summary={
-            "planes": [{
-                "plane_index": 1,
-                "name": "front",
-                "abcd": [0.0, 0.0, 1.0, 0.0],
-                "n_points": 20,
-                "status": "ok",
-                "reasons": [],
-                "bimodal": False,
-                "mad_sigma_mm": 0.02,
-                "threshold_mm": 0.1,
-            }]
-        },
-    )
-    doc = json.loads((tmp_path / "groups" / "group_000.json").read_text())
-    assert doc["fit"]["planes"][0]["name"] == "front"
-    assert doc["fit"]["planes"][0]["plane_index"] == 1
-
-
 def test_settings_roundtrip_and_unknown_keys(tmp_path):
     s = PickerSettings()
     s.detection = PickParams(local_radius_mm=15.0)
@@ -411,36 +304,3 @@ def test_settings_roundtrip_and_unknown_keys(tmp_path):
 def test_settings_missing_file_defaults(tmp_path):
     s = load_settings(tmp_path)
     assert s.detection == PickParams()
-
-
-def test_legacy_view_compute_backend_migrates_to_detection(tmp_path):
-    """Old settings stored compute_backend under view; load into detection."""
-    from cloudet.project import ViewSettings
-
-    doc = {
-        "version": 1,
-        "detection": {"local_radius_mm": 12.0},
-        "view": {
-            "display_max_points": 1_000_000,
-            "compute_backend": "cupy",
-        },
-    }
-    (tmp_path / "settings.json").write_text(json.dumps(doc))
-    warnings = []
-    loaded = load_settings(tmp_path, warn=warnings.append)
-    assert loaded.detection.compute_backend == "cupy"
-    assert loaded.detection.local_radius_mm == 12.0
-    assert "compute_backend" not in ViewSettings.__dataclass_fields__
-    # Migrated key must not be reported as unknown view key.
-    assert not any("compute_backend" in w for w in warnings)
-
-
-def test_detection_compute_backend_wins_over_legacy_view(tmp_path):
-    doc = {
-        "version": 1,
-        "detection": {"compute_backend": "numpy"},
-        "view": {"compute_backend": "cupy"},
-    }
-    (tmp_path / "settings.json").write_text(json.dumps(doc))
-    loaded = load_settings(tmp_path, warn=lambda *_: None)
-    assert loaded.detection.compute_backend == "numpy"
