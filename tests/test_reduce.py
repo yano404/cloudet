@@ -287,6 +287,24 @@ def test_reduction_session_intersect_normal_plane():
         sess.intersect_normal_plane("bad", "src", "src")
 
 
+def test_intersect_normal_plane_uses_src_overlay_anchor():
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession()
+    src = Plane(np.array([1.0, 0.0, 0.0]), -1000.0)  # x = 1000
+    dst = Plane(np.array([1.0, 0.0, 0.0]), -1100.0)  # x = 1100
+    sess.bind_scanned(
+        "src",
+        src,
+        group_name="G0",
+        group_id=0,
+        anchor=np.array([1000.0, 5000.0, 3000.0]),
+    )
+    sess.bind_scanned("dst", dst, group_name="G1", group_id=1)
+    sess.intersect_normal_plane("hit", "src", "dst")
+    assert np.allclose(sess.point("hit"), [1100.0, 5000.0, 3000.0])
+
+
 def test_reduction_session_midpoint_line_planes():
     from cloudet.reduce import ReductionSession
 

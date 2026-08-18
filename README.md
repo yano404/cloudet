@@ -213,7 +213,7 @@ Open **Reduction** to construct geometry:
 1. Choose an **operation** — only that step’s inputs appear (plane / axis pickers, offset slider, …)
 2. For **Offset**: pick a plane, drag the distance slider for a green live preview, then Apply
 3. For intersections: pick the required planes/axes, then Apply.
-   **Normal ∩ plane → point** shoots the source plane's normal at another plane.
+   **Normal ∩ plane → point** shoots the source overlay's normal at another plane.
 4. Toggle visibility in Entities; **Save recipe…** / **Export geometry…** for analysis
 5. **FRAME** (display only): pick Axis (line) and Origin (point), then **Align Z**.
    The view uses the smallest rotation that maps the axis to `(0, 0, 1)` with
