@@ -232,7 +232,10 @@ def rotate_plane_about_line(plane: Plane, axis: Line, angle_deg: float) -> Plane
     """
     k = axis.direction
     if abs(float(plane.normal @ k)) > 1e-6:
-        raise ValueError("axis must lie in the plane (normal ⊥ axis)")
+        raise ValueError(
+            "rotation axis must be parallel to the plane "
+            "(axis direction ⊥ plane normal); a normal-direction axis cannot be used"
+        )
     theta = float(np.deg2rad(angle_deg))
     n_rot = _rotate_vector_about_axis(plane.normal, k, theta)
     return Plane(n_rot, -float(n_rot @ axis.point))

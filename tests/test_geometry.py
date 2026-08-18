@@ -281,5 +281,5 @@ def test_rotate_plane_about_line():
 def test_rotate_plane_about_line_axis_not_in_plane_raises():
     plane = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
     axis = Line(np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]))
-    with pytest.raises(ValueError, match="axis must lie"):
+    with pytest.raises(ValueError, match="parallel to the plane"):
         rotate_plane_about_line(plane, axis, 10.0)

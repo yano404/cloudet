@@ -303,8 +303,9 @@ class ReductionMixin:
         rot_form.addRow("Axis", self.rd_rot_line)
         rot_form.addRow("Angle", self.rd_rot_angle)
         self.rd_rot_hint = QLabel(
-            "Pivot the plane about an axis that lies in it. Positive angle "
-            "follows the right-hand rule around the axis direction."
+            "Rotate the plane about an axis whose direction is parallel to "
+            "the plane (perpendicular to the plane normal). A normal-direction "
+            "axis cannot be used. Positive angle follows the right-hand rule."
         )
         self.rd_rot_hint.setObjectName("muted")
         self.rd_rot_hint.setWordWrap(True)
@@ -1368,7 +1369,7 @@ class ReductionMixin:
         finally:
             self._rd_offset_sync = False
         if not self._rd_loading_step:
-            self._reduction_update_offset_preview()
+            self._reduction_update_live_preview()
 
     def _reduction_on_offset_slider(self, ticks: int):
         if self._rd_offset_sync:
@@ -1380,7 +1381,7 @@ class ReductionMixin:
                 self.rd_offset_spin.setValue(mm)
         finally:
             self._rd_offset_sync = False
-        self._reduction_update_offset_preview()
+        self._reduction_update_live_preview()
 
     def _clear_reduction_preview(self):
         for name in (
@@ -1397,26 +1398,25 @@ class ReductionMixin:
         op = self._reduction_current_op()
         if op not in GUI_ID_PREFIX:
             return None
-        try:
-            return preview_construct_step(
-                self._reduction,
-                self._reduction_step_from_form("__preview__"),
-            )
-        except (ValueError, KeyError):
-            return None
+        return preview_construct_step(
+            self._reduction,
+            self._reduction_step_from_form("__preview__"),
+        )
 
     def _reduction_update_live_preview(self):
         self._clear_reduction_preview()
         op = self._reduction_current_op()
-        if op == "midpoint_line_planes":
-            self._reduction_update_midpoint_preview()
-            return
-        preview = self._reduction_preview_step()
-        if preview is None:
-            self.plotter.render()
-            return
         try:
+            if op == "midpoint_line_planes":
+                self._reduction_update_midpoint_preview()
+                return
+            preview = self._reduction_preview_step()
+            if preview is None:
+                self.plotter.render()
+                return
             self._reduction_draw_preview(preview)
+        except (ValueError, KeyError, TypeError) as e:
+            self._status(f"preview: {e}")
         except Exception:
             traceback.print_exc()
         self.plotter.render()
