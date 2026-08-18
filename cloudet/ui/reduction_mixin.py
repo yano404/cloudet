@@ -341,9 +341,9 @@ class ReductionMixin:
         np_form.addRow("Normal from", self.rd_np_src)
         np_form.addRow("Hit plane", self.rd_np_dst)
         self.rd_np_hint = QLabel(
-            "Ray along the source plane's normal (from its closest point to "
-            "the origin) intersecting the destination plane. The two planes "
-            "must not be parallel."
+            "Ray along the source plane's normal from the source overlay "
+            "(the patch you see) intersecting the destination plane. "
+            "Nearly perpendicular planes send the hit far away."
         )
         self.rd_np_hint.setObjectName("muted")
         self.rd_np_hint.setWordWrap(True)

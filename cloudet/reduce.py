@@ -34,6 +34,7 @@ from cloudet.geometry import (
     plane_from_line_point,
     plane_from_plane_point,
     plane_from_two_lines,
+    project_point_to_plane,
     rotate_plane_about_line,
 )
 from cloudet.frame import (
@@ -232,6 +233,7 @@ def _run_construct_step(
     store: dict[str, _Entity],
     step: dict,
     extra_lines: dict[str, Line] | None = None,
+    anchors: dict[str, np.ndarray] | None = None,
 ) -> None:
     if not isinstance(step, dict):
         raise ValueError("construct step must be an object")
@@ -326,10 +328,16 @@ def _run_construct_step(
     if op == "intersect_normal_plane":
         src_id = step["src"]
         dst_id = step["dst"]
+        src_plane = _require_plane(store, src_id, where=where)
         through = step.get("through")
-        through_arr = None if through is None else np.asarray(through, dtype=np.float64)
+        if through is not None:
+            through_arr = np.asarray(through, dtype=np.float64)
+        elif anchors is not None and src_id in anchors:
+            through_arr = project_point_to_plane(anchors[src_id], src_plane)
+        else:
+            through_arr = None
         pt = intersect_normal_plane(
-            _require_plane(store, src_id, where=where),
+            src_plane,
             _require_plane(store, dst_id, where=where),
             through=through_arr,
         )
@@ -1127,7 +1135,12 @@ class ReductionSession:
         if entity_id in self._store:
             raise ValueError(f"duplicate id {entity_id!r}")
         _parse_construct_step(step, where=f"construct.{entity_id}")
-        _run_construct_step(self._store, step, extra_lines=self.aligned_axis_lines())
+        _run_construct_step(
+            self._store,
+            step,
+            extra_lines=self.aligned_axis_lines(),
+            anchors=self.anchors,
+        )
         self._construct.append(step)
         self.visible[entity_id] = True
         if step.get("op") == "line_from_two_points":

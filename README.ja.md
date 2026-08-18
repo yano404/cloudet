@@ -187,7 +187,7 @@ GUI は Load recipe / Load All でその選択を復元しますが、**Align Z 
 1. まず **操作を選択** — その操作の入力だけ出る（面 / 軸の選択、オフセットスライダーなど）
 2. **Offset**: 面を選び、スライダーで距離をプレビュー（緑）→ Apply で確定
 3. 交差系: 必要な面・軸を選んで Apply。
-   **Normal ∩ plane → point** は元の面の法線を別の面に当てた交点です。
+   **Normal ∩ plane → point** は元の面のオーバーレイ位置から法線を別の面に当てた交点です。
 4. Entities で表示切替後、**Save recipe…** / **Export geometry…**
 5. **FRAME**（表示専用）: Axis（直線）と Origin（点）を選び **Align Z**。
    軸を `(0, 0, 1)` に、原点を `(0, 0, 0)` に移す最小回転を使います。
