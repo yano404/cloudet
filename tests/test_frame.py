@@ -5,6 +5,7 @@ import pytest
 
 from cloudet.frame import (
     RigidFrame,
+    aligned_axis_line,
     result_in_frame,
     rotation_mapping_to_z,
     transform_record,
@@ -213,6 +214,31 @@ def test_with_aligned_copy_keeps_survey_and_adds_aligned():
     assert doc["frame"]["kind"] == "aligned"
     assert doc["frame"]["origin"] == "hit"
     assert "aligned" not in survey.to_dict()
+
+
+def test_aligned_axis_lines_match_view_triad():
+    origin = np.array([10.0, 20.0, 30.0])
+    frame = RigidFrame.align_z([0.0, 0.0, 1.0], origin)
+    x = aligned_axis_line(frame, "aligned.x")
+    y = aligned_axis_line(frame, "aligned.y")
+    z = aligned_axis_line(frame, "aligned.z")
+    assert np.allclose(x.point, origin)
+    assert np.allclose(x.direction, [1.0, 0.0, 0.0])
+    assert np.allclose(y.direction, [0.0, 1.0, 0.0])
+    assert np.allclose(z.direction, [0.0, 0.0, 1.0])
+    assert np.allclose(frame.apply_direction(x.direction), [1.0, 0.0, 0.0])
+    assert np.allclose(frame.apply_direction(y.direction), [0.0, 1.0, 0.0])
+    assert np.allclose(frame.apply_direction(z.direction), [0.0, 0.0, 1.0])
+
+
+def test_aligned_axis_lines_keep_view_positive_after_rotation():
+    frame = RigidFrame.align_z([1.0, 0.0, 0.0], [0.0, 0.0, 0.0])
+    x = aligned_axis_line(frame, "aligned.x")
+    y = aligned_axis_line(frame, "aligned.y")
+    z = aligned_axis_line(frame, "aligned.z")
+    assert np.allclose(frame.apply_direction(x.direction), [1.0, 0.0, 0.0], atol=1e-12)
+    assert np.allclose(frame.apply_direction(y.direction), [0.0, 1.0, 0.0], atol=1e-12)
+    assert np.allclose(frame.apply_direction(z.direction), [0.0, 0.0, 1.0], atol=1e-12)
 
 
 def test_transform_record_rewrites_segment_ends():

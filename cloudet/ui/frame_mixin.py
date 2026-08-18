@@ -43,7 +43,12 @@ class FrameMixin:
         if not hasattr(self, "rd_frame_yaw_ref"):
             return
         kind = self._frame_yaw_kind()
-        self._reduction_fill_combo(self.rd_frame_yaw_ref, kind=kind, keep=keep)
+        self._reduction_fill_combo(
+            self.rd_frame_yaw_ref,
+            kind=kind,
+            keep=keep,
+            include_aligned_axes=False,
+        )
 
     def _on_frame_yaw_kind_changed(self, *_args) -> None:
         keep = self._reduction_combo_id(getattr(self, "rd_frame_yaw_ref", None))
@@ -53,6 +58,8 @@ class FrameMixin:
     def _on_frame_combo_changed(self, *_args) -> None:
         self._sync_frame_align_enabled()
         self._reduction_capture_frame_spec()
+        if hasattr(self, "rd_rot_line"):
+            self._reduction_refresh_operand_combos(include_frame=False)
 
     def _reduction_capture_frame_spec(self) -> None:
         axis = self._reduction_combo_id(getattr(self, "rd_frame_axis", None))

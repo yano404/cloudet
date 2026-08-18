@@ -18,8 +18,12 @@ from cloudet.geometry import Line
 from cloudet.plane import Plane
 
 __all__ = [
+    "ALIGNED_AXIS_IDS",
+    "ALIGNED_AXIS_LABELS",
     "RigidFrame",
     "YAW_TO",
+    "aligned_axis_line",
+    "is_aligned_axis_id",
     "result_in_frame",
     "rotation_mapping_to_z",
     "rotation_yaw_about_z",
@@ -29,6 +33,30 @@ __all__ = [
 
 _ALIGN_EPS = 1e-12
 YAW_TO = ("x", "-x", "y", "-y")
+ALIGNED_AXIS_IDS = ("aligned.x", "aligned.y", "aligned.z")
+ALIGNED_AXIS_LABELS = {
+    "aligned.x": "aligned X",
+    "aligned.y": "aligned Y",
+    "aligned.z": "aligned Z",
+}
+_ALIGNED_AXIS_INDEX = {"aligned.x": 0, "aligned.y": 1, "aligned.z": 2}
+
+
+def is_aligned_axis_id(entity_id: str) -> bool:
+    return str(entity_id) in _ALIGNED_AXIS_INDEX
+
+
+def aligned_axis_line(frame: "RigidFrame", axis_id: str) -> Line:
+    """Survey-frame line along an aligned axis, through the frame origin.
+
+    Direction matches the view triad (+X/+Y/+Z), not ``Line``'s usual
+    largest-component sign convention.
+    """
+    key = str(axis_id)
+    if key not in _ALIGNED_AXIS_INDEX:
+        raise KeyError(f"unknown aligned axis {axis_id!r}")
+    direction = np.asarray(frame.rotation[_ALIGNED_AXIS_INDEX[key]], dtype=np.float64)
+    return Line.from_point_direction(frame.origin, direction, fix_sign=False)
 _YAW_XY = {
     "x": np.array([1.0, 0.0], dtype=np.float64),
     "-x": np.array([-1.0, 0.0], dtype=np.float64),

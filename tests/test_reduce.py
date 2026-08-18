@@ -968,3 +968,70 @@ def test_construct_rotate_plane_about_line(tmp_path):
     step = next(s for s in out["construct"] if s["id"] == "tilted")
     assert step["op"] == "rotate_plane_about_line"
     assert step["angle_deg"] == pytest.approx(90.0)
+
+
+def test_construct_rotate_about_aligned_axis(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    project = _make_project(tmp_path)
+    sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
+    sess.frame_spec = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    assert "aligned.x" in sess.available_aligned_axis_ids()
+    axis = sess.line("aligned.x")
+    assert np.allclose(axis.point, sess.point("beam_on_target"))
+    assert np.allclose(axis.direction, [1.0, 0.0, 0.0])
+    sess.rotate_plane_about_line("tilted", "target", "aligned.x", 90.0)
+    plane = sess.plane("tilted")
+    assert np.allclose(np.abs(plane.normal), [0.0, 1.0, 0.0], atol=1e-9)
+    step = next(s for s in sess.to_recipe()["construct"] if s["id"] == "tilted")
+    assert step["line"] == "aligned.x"
+
+
+def test_apply_recipe_construct_can_use_aligned_axis(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["frame"] = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    recipe["construct"].append(
+        {
+            "id": "tilted",
+            "op": "rotate_plane_about_line",
+            "plane": "target",
+            "line": "aligned.x",
+            "angle_deg": 90.0,
+        }
+    )
+    sess = ReductionSession.from_recipe(recipe, project_dir=_make_project(tmp_path))
+    assert np.allclose(np.abs(sess.plane("tilted").normal), [0.0, 1.0, 0.0], atol=1e-9)
+
+
+def test_reserved_aligned_axis_id_rejected(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=_make_project(tmp_path))
+    with pytest.raises(ValueError, match="reserved"):
+        sess.offset("aligned.x", "target", 1.0)
+
+
+def test_remove_frame_axis_drops_aligned_axis_dependents(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=_make_project(tmp_path))
+    sess.frame_spec = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    sess.rotate_plane_about_line("tilted", "target", "aligned.x", 90.0)
+    removed = sess.remove("beam_axis")
+    assert "tilted" in removed
+    assert "tilted" not in sess.ids()
+    assert sess.frame_spec is None

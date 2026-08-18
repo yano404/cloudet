@@ -38,7 +38,11 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
 )
 
-from cloudet.frame import RigidFrame, transform_record
+from cloudet.frame import (
+    ALIGNED_AXIS_LABELS,
+    RigidFrame,
+    transform_record,
+)
 from cloudet.geometry import (
     line_segment_points,
     plane_patch_corners,
@@ -303,9 +307,11 @@ class ReductionMixin:
         rot_form.addRow("Axis", self.rd_rot_line)
         rot_form.addRow("Angle", self.rd_rot_angle)
         self.rd_rot_hint = QLabel(
-            "Rotate the plane about an axis whose direction is parallel to "
-            "the plane (perpendicular to the plane normal). A normal-direction "
-            "axis cannot be used. Positive angle follows the right-hand rule."
+            "Rotate the plane rigidly about the axis. The axis does not have "
+            "to lie in the plane. When FRAME axis and origin are set, aligned "
+            "X/Y/Z appear in the Axis list. Positive angle follows the "
+            "right-hand rule. Rotation about a normal-direction axis leaves "
+            "an infinite plane unchanged."
         )
         self.rd_rot_hint.setObjectName("muted")
         self.rd_rot_hint.setWordWrap(True)
@@ -764,6 +770,7 @@ class ReductionMixin:
         keep: str | None = None,
         placeholder: str = "(choose)",
         allowed: set[str] | None = None,
+        include_aligned_axes: bool = True,
     ) -> None:
         ids = self._reduction.ids(kind=kind) if kind else self._reduction.ids()
         if allowed is not None:
@@ -771,6 +778,13 @@ class ReductionMixin:
         combo.blockSignals(True)
         _reset_combo(combo)
         combo.addItem(placeholder, None)
+        if include_aligned_axes and kind == "line":
+            extras = self._reduction.available_aligned_axis_ids(
+                before=None if allowed is None else allowed
+            )
+            for eid in extras:
+                label = ALIGNED_AXIS_LABELS.get(eid, eid)
+                combo.addItem(f"{label}  (axis)", eid)
         for eid in ids:
             tag = RD_KIND_LABEL.get(self._reduction.kind_of(eid), "")
             combo.addItem(f"{eid}  ({tag})" if tag else eid, eid)
@@ -802,7 +816,10 @@ class ReductionMixin:
         combo.blockSignals(False)
 
     def _reduction_refresh_operand_combos(
-        self, *, rename: tuple[str, str] | None = None
+        self,
+        *,
+        rename: tuple[str, str] | None = None,
+        include_frame: bool = True,
     ) -> None:
         self._reduction_fill_bind_combo()
         keep = {
@@ -921,9 +938,12 @@ class ReductionMixin:
                 self._reduction_fill_combo(
                     self.rd_rot_line, kind="line", keep=keep["rot_line"], **fill_kw
                 )
-            if hasattr(self, "rd_frame_axis"):
+            if include_frame and hasattr(self, "rd_frame_axis"):
                 self._reduction_fill_combo(
-                    self.rd_frame_axis, kind="line", keep=keep.get("frame_axis")
+                    self.rd_frame_axis,
+                    kind="line",
+                    keep=keep.get("frame_axis"),
+                    include_aligned_axes=False,
                 )
                 self._reduction_fill_combo(
                     self.rd_frame_origin, kind="point", keep=keep.get("frame_origin")
@@ -1045,7 +1065,9 @@ class ReductionMixin:
         eid = self._reduction_editing_id()
         if eid is None:
             return None
-        return self._reduction.operand_ids_before(eid)
+        allowed = self._reduction.operand_ids_before(eid)
+        allowed.update(self._reduction.available_aligned_axis_ids(before=allowed))
+        return allowed
 
     def _reduction_set_combo(self, combo: QComboBox | None, eid: str | None) -> None:
         if combo is None:
@@ -1338,8 +1360,9 @@ class ReductionMixin:
         parts = []
         for eid in ids:
             kind = self._reduction.kind_of(eid)
+            name = ALIGNED_AXIS_LABELS.get(eid, eid)
             tag = RD_KIND_LABEL.get(kind, kind)
-            parts.append(f"{eid} [{tag}]")
+            parts.append(f"{name} [{tag}]")
         self.rd_selection_label.setText("Operands: " + ", ".join(parts))
 
     def _reduction_entity_color(self, eid: str, *, selected: bool) -> str:
