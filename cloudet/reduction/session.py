@@ -35,7 +35,9 @@ from cloudet.reduction.geometry import (
     plane_from_plane_point,
     plane_from_two_lines,
     project_point_to_plane,
+    rotate_line_about_line,
     rotate_plane_about_line,
+    rotate_point_about_line,
 )
 from cloudet.reduction.frame import (
     ALIGNED_AXIS_IDS,
@@ -555,6 +557,55 @@ def _run_construct_step(
                 "provenance": "constructed",
                 "of": [plane_id, line_id],
                 "op": "rotate_plane_about_line",
+                "angle_deg": angle_deg,
+            },
+        )
+        return
+
+    if op == "rotate_point_about_line":
+        point_id = step["point"]
+        line_id = step["line"]
+        angle_deg = float(step["angle_deg"])
+        pt = rotate_point_about_line(
+            require_point(point_id),
+            require_line(line_id),
+            angle_deg,
+        )
+        _put(
+            store,
+            entity_id,
+            "point",
+            pt,
+            {
+                "xyz": pt.tolist(),
+                "provenance": "constructed",
+                "of": [point_id, line_id],
+                "op": "rotate_point_about_line",
+                "angle_deg": angle_deg,
+            },
+        )
+        return
+
+    if op == "rotate_line_about_line":
+        line_id = step["line"]
+        axis_id = step["axis"]
+        angle_deg = float(step["angle_deg"])
+        ln = rotate_line_about_line(
+            require_line(line_id),
+            require_line(axis_id),
+            angle_deg,
+        )
+        _put(
+            store,
+            entity_id,
+            "line",
+            ln,
+            {
+                "point": ln.point.tolist(),
+                "direction": ln.direction.tolist(),
+                "provenance": "constructed",
+                "of": [line_id, axis_id],
+                "op": "rotate_line_about_line",
                 "angle_deg": angle_deg,
             },
         )
@@ -1676,6 +1727,28 @@ class ReductionSession:
             "op": "rotate_plane_about_line",
             "plane": plane,
             "line": line,
+            "angle_deg": float(angle_deg),
+        })
+
+    def rotate_point_about_line(
+        self, entity_id: str, point: str, line: str, angle_deg: float
+    ) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "rotate_point_about_line",
+            "point": point,
+            "line": line,
+            "angle_deg": float(angle_deg),
+        })
+
+    def rotate_line_about_line(
+        self, entity_id: str, line: str, axis: str, angle_deg: float
+    ) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "rotate_line_about_line",
+            "line": line,
+            "axis": axis,
             "angle_deg": float(angle_deg),
         })
 

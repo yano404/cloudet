@@ -1330,3 +1330,41 @@ def test_build_frame_spec_yaw_exclusive():
     )
     assert roundtrip["yaw_line"] == "line1"
     assert "yaw_plane" not in roundtrip
+
+
+def test_session_rotate_point_about_line():
+    from cloudet.reduction import ReductionSession
+
+    sess = ReductionSession()
+    top = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
+    front = Plane(np.array([0.0, 1.0, 0.0]), 0.0)
+    sess.bind_scanned("top", top, group_name="top", group_id=0)
+    sess.bind_scanned("front", front, group_name="front", group_id=1)
+    side = Plane(np.array([1.0, 0.0, 0.0]), 0.0)
+    sess.bind_scanned("side", side, group_name="side", group_id=2)
+    sess.apply_step({"id": "p1", "op": "intersect_three_planes",
+                      "a": "top", "b": "front", "c": "side"})
+    sess.apply_step({"id": "ax", "op": "intersect_planes",
+                      "a": "top", "b": "front"})
+    sess.rotate_point_about_line("p2", "p1", "ax", 90.0)
+    assert sess.kind_of("p2") == "point"
+    pt = sess.point("p2")
+    assert pt.shape == (3,)
+
+
+def test_session_rotate_line_about_line():
+    from cloudet.reduction import ReductionSession
+
+    sess = ReductionSession()
+    top = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
+    front = Plane(np.array([0.0, 1.0, 0.0]), 0.0)
+    side = Plane(np.array([1.0, 0.0, 0.0]), 0.0)
+    sess.bind_scanned("top", top, group_name="top", group_id=0)
+    sess.bind_scanned("front", front, group_name="front", group_id=1)
+    sess.bind_scanned("side", side, group_name="side", group_id=2)
+    sess.apply_step({"id": "ax1", "op": "intersect_planes",
+                      "a": "top", "b": "front"})
+    sess.apply_step({"id": "ax2", "op": "intersect_planes",
+                      "a": "top", "b": "side"})
+    sess.rotate_line_about_line("ax3", "ax1", "ax2", 45.0)
+    assert sess.kind_of("ax3") == "line"
