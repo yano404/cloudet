@@ -14,10 +14,19 @@ GROUP_COLORS = [
 RD_PLANE_SCANNED = "#4a90d9"
 RD_PLANE_OFFSET = "#e07b39"
 RD_AXIS = "#c0392b"
-RD_ALIGNED_AXIS = {
+RD_ALIGNED = {
+    "aligned.origin": "#ecf0f1",
     "aligned.x": "#e74c3c",
     "aligned.y": "#27ae60",
     "aligned.z": "#2980d9",
+    "aligned.yz": "#e74c3c",
+    "aligned.zx": "#27ae60",
+    "aligned.xy": "#2980d9",
+}
+RD_ALIGNED_AXIS = {
+    "aligned.x": RD_ALIGNED["aligned.x"],
+    "aligned.y": RD_ALIGNED["aligned.y"],
+    "aligned.z": RD_ALIGNED["aligned.z"],
 }
 RD_POINT = "#f1c40f"
 RD_SELECTED_RING = "#ffffff"

@@ -24,6 +24,7 @@ _LOCAL_OK = frozenset(
         "sorted",
         "isinstance",
         "getattr",
+        "setattr",
         "hasattr",
         "print",
         "Path",

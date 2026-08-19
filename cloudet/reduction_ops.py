@@ -14,12 +14,20 @@ class OperandField:
     step_key: str
     kind: str  # plane | line | point
     widget: str
+    label: str
 
 
 @dataclass(frozen=True)
 class ScalarField:
     step_key: str
     widget: str
+    label: str
+    suffix: str = ""
+    minimum: float = -1.0e6
+    maximum: float = 1.0e6
+    decimals: int = 3
+    step: float = 0.1
+    default: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -28,13 +36,13 @@ class ReductionOpDef:
     recipe_op: str
     menu_label: str
     apply_label: str
-    page_index: int
     id_prefix: str
     result_kind: str  # plane | line | point
     operands: tuple[OperandField, ...] = ()
     scalars: tuple[ScalarField, ...] = ()
     missing_msg: str = ""
     operands_must_differ: bool = False
+    hint: str = ""
 
 
 @dataclass(frozen=True)
@@ -57,11 +65,19 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         "offset",
         "Offset plane",
         "Apply offset",
-        1,
         "offset",
         "plane",
-        operands=(OperandField("of", "plane", "rd_offset_plane"),),
-        scalars=(ScalarField("distance_mm", "rd_offset_spin"),),
+        operands=(OperandField("of", "plane", "rd_offset_plane", "Plane"),),
+        scalars=(
+            ScalarField(
+                "distance_mm",
+                "rd_offset_spin",
+                "Distance",
+                suffix=" mm",
+                step=0.1,
+                default=12.0,
+            ),
+        ),
         missing_msg="Offset needs a plane",
     ),
     ReductionOpDef(
@@ -69,12 +85,11 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         "intersect_planes",
         "Intersect 2 planes → axis",
         "Create axis",
-        2,
         "axis",
         "line",
         operands=(
-            OperandField("a", "plane", "rd_p2_a"),
-            OperandField("b", "plane", "rd_p2_b"),
+            OperandField("a", "plane", "rd_p2_a", "Plane A"),
+            OperandField("b", "plane", "rd_p2_b", "Plane B"),
         ),
         missing_msg="Intersect planes needs 2 planes",
         operands_must_differ=True,
@@ -84,12 +99,11 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         "intersect_line_plane",
         "Line ∩ plane → point",
         "Create point",
-        3,
         "point",
         "point",
         operands=(
-            OperandField("line", "line", "rd_lp_line"),
-            OperandField("plane", "plane", "rd_lp_plane"),
+            OperandField("line", "line", "rd_lp_line", "Axis"),
+            OperandField("plane", "plane", "rd_lp_plane", "Plane"),
         ),
         missing_msg="Line ∩ plane needs a line and a plane",
     ),
@@ -98,13 +112,12 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         "intersect_three_planes",
         "3 planes → corner",
         "Create corner",
-        4,
         "corner",
         "point",
         operands=(
-            OperandField("a", "plane", "rd_p3_a"),
-            OperandField("b", "plane", "rd_p3_b"),
-            OperandField("c", "plane", "rd_p3_c"),
+            OperandField("a", "plane", "rd_p3_a", "Plane A"),
+            OperandField("b", "plane", "rd_p3_b", "Plane B"),
+            OperandField("c", "plane", "rd_p3_c", "Plane C"),
         ),
         missing_msg="3 planes → point needs 3 planes",
     ),
@@ -113,118 +126,151 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         "line_from_point_normal",
         "Point + normal → axis",
         "Create axis",
-        5,
         "axis",
         "line",
         operands=(
-            OperandField("point", "point", "rd_pn_point"),
-            OperandField("plane", "plane", "rd_pn_plane"),
+            OperandField("point", "point", "rd_pn_point", "Point"),
+            OperandField("plane", "plane", "rd_pn_plane", "Normal from"),
         ),
         missing_msg="Point + normal needs a point and a plane",
+        hint=(
+            "Axis through the point, direction = that plane's normal. "
+            "The point does not have to lie on the plane."
+        ),
     ),
     ReductionOpDef(
         "line_from_two_points",
         "line_from_two_points",
         "2 points → axis",
         "Create axis",
-        6,
         "axis",
         "line",
         operands=(
-            OperandField("a", "point", "rd_pp_a"),
-            OperandField("b", "point", "rd_pp_b"),
+            OperandField("a", "point", "rd_pp_a", "Point A"),
+            OperandField("b", "point", "rd_pp_b", "Point B"),
         ),
         missing_msg="2 points → axis needs two points",
         operands_must_differ=True,
+        hint=(
+            "Axis through both points. Direction is B − A "
+            "(sign is fixed by the largest component)."
+        ),
     ),
     ReductionOpDef(
         "midpoint_line_planes",
         "midpoint_line_planes",
         "Line ∩ 2 planes → midpoint",
         "Create midpoint",
-        7,
         "mid",
         "point",
         operands=(
-            OperandField("line", "line", "rd_mp_line"),
-            OperandField("a", "plane", "rd_mp_a"),
-            OperandField("b", "plane", "rd_mp_b"),
+            OperandField("line", "line", "rd_mp_line", "Axis"),
+            OperandField("a", "plane", "rd_mp_a", "Plane A"),
+            OperandField("b", "plane", "rd_mp_b", "Plane B"),
         ),
         missing_msg="midpoint needs 1 axis and 2 planes",
         operands_must_differ=True,
+        hint=(
+            "Hits of the axis on the two planes form a segment. "
+            "The result is that segment's midpoint."
+        ),
     ),
     ReductionOpDef(
         "plane_from_plane_point",
         "plane_from_plane_point",
         "Plane + point → parallel plane",
         "Create plane",
-        8,
         "plane",
         "plane",
         operands=(
-            OperandField("plane", "plane", "rd_pp_plane"),
-            OperandField("point", "point", "rd_pp_point"),
+            OperandField("plane", "plane", "rd_pp_plane", "Plane"),
+            OperandField("point", "point", "rd_pp_point", "Point"),
         ),
         missing_msg="plane + point → plane needs a plane and a point",
+        hint="Plane parallel to the source, passing through the point.",
     ),
     ReductionOpDef(
         "plane_from_line_point",
         "plane_from_line_point",
         "Line + point → plane",
         "Create plane",
-        9,
         "plane",
         "plane",
         operands=(
-            OperandField("line", "line", "rd_lpp_line"),
-            OperandField("point", "point", "rd_lpp_point"),
+            OperandField("line", "line", "rd_lpp_line", "Axis"),
+            OperandField("point", "point", "rd_lpp_point", "Point"),
         ),
         missing_msg="line + point → plane needs an axis and a point",
+        hint="Plane through the point with normal = the axis direction.",
     ),
     ReductionOpDef(
         "plane_from_two_lines",
         "plane_from_two_lines",
         "2 lines → plane",
         "Create plane",
-        10,
         "plane",
         "plane",
         operands=(
-            OperandField("a", "line", "rd_l2p_a"),
-            OperandField("b", "line", "rd_l2p_b"),
+            OperandField("a", "line", "rd_l2p_a", "Axis A"),
+            OperandField("b", "line", "rd_l2p_b", "Axis B"),
         ),
         missing_msg="2 lines → plane needs two axes",
         operands_must_differ=True,
+        hint=(
+            "Plane containing both axes. They must be coplanar (intersect or "
+            "parallel in the same plane); skew lines are rejected."
+        ),
     ),
     ReductionOpDef(
         "rotate_plane_about_line",
         "rotate_plane_about_line",
         "Rotate plane about axis",
         "Rotate plane",
-        11,
         "plane",
         "plane",
         operands=(
-            OperandField("plane", "plane", "rd_rot_plane"),
-            OperandField("line", "line", "rd_rot_line"),
+            OperandField("plane", "plane", "rd_rot_plane", "Plane"),
+            OperandField("line", "line", "rd_rot_line", "Axis"),
         ),
-        scalars=(ScalarField("angle_deg", "rd_rot_angle"),),
+        scalars=(
+            ScalarField(
+                "angle_deg",
+                "rd_rot_angle",
+                "Angle",
+                suffix=" °",
+                minimum=-360.0,
+                maximum=360.0,
+                step=1.0,
+                default=0.0,
+            ),
+        ),
         missing_msg="rotate plane needs a plane and an axis",
+        hint=(
+            "Rotate the plane rigidly about the axis. The axis does not have "
+            "to lie in the plane. When FRAME axis and origin are set, aligned "
+            "X/Y/Z and origin/planes appear in the matching lists. Positive "
+            "angle follows the right-hand rule. Rotation about a "
+            "normal-direction axis leaves an infinite plane unchanged."
+        ),
     ),
     ReductionOpDef(
         "intersect_normal_plane",
         "intersect_normal_plane",
         "Normal ∩ plane → point",
         "Create point",
-        12,
         "point",
         "point",
         operands=(
-            OperandField("src", "plane", "rd_np_src"),
-            OperandField("dst", "plane", "rd_np_dst"),
+            OperandField("src", "plane", "rd_np_src", "Normal from"),
+            OperandField("dst", "plane", "rd_np_dst", "Hit plane"),
         ),
         missing_msg="Normal ∩ plane needs a source plane and a destination plane",
         operands_must_differ=True,
+        hint=(
+            "Ray along the source plane's normal from the source overlay "
+            "(the patch you see) intersecting the destination plane. "
+            "Nearly perpendicular planes send the hit far away."
+        ),
     ),
 )
 
@@ -294,7 +340,7 @@ GUI_APPLY_LABELS = {GUI_BIND_OP_KEY: GUI_BIND_APPLY_LABEL} | {
     op.gui_key: op.apply_label for op in REDUCTION_OPS
 }
 GUI_PAGE_INDEX = {GUI_BIND_OP_KEY: GUI_BIND_PAGE_INDEX} | {
-    op.gui_key: op.page_index for op in REDUCTION_OPS
+    op.gui_key: i + 1 for i, op in enumerate(REDUCTION_OPS)
 }
 GUI_ID_PREFIX = {op.gui_key: op.id_prefix for op in REDUCTION_OPS}
 GUI_RESULT_KIND = {op.gui_key: op.result_kind for op in REDUCTION_OPS}
