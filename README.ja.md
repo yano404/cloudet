@@ -21,19 +21,27 @@ FARO Quantum-S などで取得した三次元点群から、原子核実験用�
 
 ```
 cloudet/
-  plane.py      平面フィットコア（LSQ / RANSAC / robust 反復・残差統計）
-  mainplane.py  main plane component 抽出（連結成分 + QC ゲート）
-  picking.py    クリック駆動の領域抽出ロジック（GUI 非依存）
-  plyio.py      PLY 読み書き（double 精度、Open3D 非依存）
-  groups.py     group 読込
-  project.py    プロジェクトディレクトリ I/O（manifest / settings / group 保存）
+  plane.py          平面フィットコア（LSQ / RANSAC / robust 反復・残差統計）
+  plyio.py          PLY 読み書き（double 精度、Open3D 非依存）
+  neighbors.py      空間インデックス / 表示間引き
   array_backend.py  任意 CuPy GPU バックエンド（無ければ NumPy）
-  geometry.py   構築演算（オフセット平面・交差）
-  frame.py      表示専用 Align Z 姿勢（軸 → +Z、任意で直線 → XY）
-  reduce.py     レシピ駆動リダクション → 解析用 geometry.json
-  pipeline.py   残差 u–v マップ（GUI QC 用）
-  app_window.py Qtアプリの推奨エントリポイント
-  picker_qt.py  互換 re-export（新規は app_window または ui.main_window）
+  settings_apply.py 設定適用の分類（detection vs display）
+  app_window.py     Qt アプリのエントリポイント（→ ui.main_window）
+  cli.py            cloudet [project] [--cloud ...] | reduce | version
+  fit/              面抽出・フィット
+    picking.py      クリック駆動の領域抽出（GUI 非依存）
+    mainplane.py    main plane component 抽出（連結成分 + QC）
+    multiplane.py   任意の group 内多平面分離
+    pipeline.py     残差 u–v マップ（GUI QC 用）
+  project/          保存プロジェクト
+    store.py        manifest / settings / group 保存
+    groups.py       group 読込
+    spatial_cache.py  VoxelHashGrid / 表示キャッシュ
+  reduction/        構築型リダクション
+    session.py      レシピ駆動セッション → geometry.json
+    ops.py          操作メタデータ（GUI ↔ recipe）
+    geometry.py     オフセット平面・交差・回転
+    frame.py        表示専用 Align Z 姿勢（軸 → +Z、任意 yaw）
   ui/
     main_window.py    CloudetAppWindow + run_picker_qt
     groups_mixin.py   Groups / Settings ドック、ピック、フィット、ツリー
@@ -42,9 +50,7 @@ cloudet/
     render_mixin.py   3D アクター描画
     frame_mixin.py    Align Z 表示フレーム
     widgets.py        共通 Qt スタイル・ヘルパー
-  reduction_ops.py  Reduction 操作メタデータ（GUI ↔ recipe）
-  cli.py        cloudet [project] [--cloud ...] | reduce | version
-tests/          合成データによる検証（σ=0.03mm の FARO 条件を模擬）
+tests/              合成データによる検証（σ=0.03mm の FARO 条件を模擬）
 ```
 
 ## 使い方

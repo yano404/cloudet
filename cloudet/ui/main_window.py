@@ -35,11 +35,11 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 
 from pyvistaqt import QtInteractor
 
-from cloudet.array_backend import set_default_backend
-from cloudet.frame import RigidFrame
-from cloudet.neighbors import VoxelHashGrid
+from cloudet.core.array_backend import set_default_backend
+from cloudet.reduction.frame import RigidFrame
+from cloudet.core.neighbors import VoxelHashGrid
 from cloudet.project import load_settings, read_manifest
-from cloudet.reduce import ReductionSession
+from cloudet.reduction import ReductionSession
 from cloudet.ui.app_common import AppCommonMixin
 from cloudet.ui.frame_mixin import FrameMixin
 from cloudet.ui.groups_mixin import GroupsMixin

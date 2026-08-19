@@ -31,9 +31,9 @@ from pathlib import Path
 import numpy as np
 
 import cloudet
-from cloudet.picking import PickParams
-from cloudet.plane import Plane
-from cloudet.plyio import write_ply_xyz
+from cloudet.fit.picking import PickParams
+from cloudet.core.plane import Plane
+from cloudet.core.plyio import write_ply_xyz
 
 __all__ = [
     "SourceInfo",

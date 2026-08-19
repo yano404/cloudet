@@ -3,16 +3,16 @@
 import numpy as np
 import pytest
 
-from cloudet.array_backend import (
+from cloudet.core.array_backend import (
     GPU_MIN_POINTS,
     cupy_available,
     cupy_unavailable_reason,
     get_context,
     resolve_compute_backend,
 )
-from cloudet.neighbors import display_indices, resolve_display_backend, voxel_downsample_indices
-from cloudet.pipeline import residual_uv_map
-from cloudet.plane import Plane, robust_fit_plane, run_ransac
+from cloudet.core.neighbors import display_indices, resolve_display_backend, voxel_downsample_indices
+from cloudet.fit.pipeline import residual_uv_map
+from cloudet.core.plane import Plane, robust_fit_plane, run_ransac
 
 try:
     import cupy as cp
@@ -148,7 +148,7 @@ def test_robust_fit_plane_adaptive_threshold_gpu():
 
 @pytest.mark.skipif(not HAS_CUPY, reason="cupy not available")
 def test_extract_main_plane_gpu_connectivity():
-    from cloudet.mainplane import MainPlaneParams, extract_main_plane
+    from cloudet.fit.mainplane import MainPlaneParams, extract_main_plane
 
     pts, _ = _synthetic_plane(n_pts=50_000)
     clicked = pts[len(pts) // 2]
@@ -173,7 +173,7 @@ def test_robust_fit_subsample_matches_full_on_plane():
 
 @pytest.mark.skipif(not HAS_CUPY, reason="cupy not available")
 def test_extract_main_plane_skips_ransac_with_coarse_plane():
-    from cloudet.mainplane import MainPlaneParams, extract_main_plane
+    from cloudet.fit.mainplane import MainPlaneParams, extract_main_plane
 
     pts, coarse = _synthetic_plane(n_pts=120_000)
     clicked = pts[len(pts) // 2]

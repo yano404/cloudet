@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cloudet.neighbors import VoxelHashGrid
+from cloudet.core.neighbors import VoxelHashGrid
 
 __all__ = [
     "CACHE_VERSION",

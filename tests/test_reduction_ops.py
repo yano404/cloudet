@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cloudet.reduction_ops import (
+from cloudet.reduction.ops import (
     GUI_BIND_PAGE_INDEX,
     GUI_PAGE_INDEX,
     REDUCTION_OP_BY_GUI,

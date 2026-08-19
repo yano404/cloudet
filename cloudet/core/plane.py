@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cloudet.array_backend import ArrayContext, DevicePoints, cupy_available, get_context
+from cloudet.core.array_backend import ArrayContext, DevicePoints, cupy_available, get_context
 
 __all__ = [
     "Plane",

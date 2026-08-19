@@ -9,7 +9,7 @@ alwaysApply: false
 When adding a new construct operation, follow the existing ops (e.g. `plane_from_line_point`) exactly. Every new op requires ALL of the following:
 
 ## 1. Mappings & Registration
-- `cloudet/reduction_ops.py` entry (`REDUCTION_OPS`) with operand `label`s, optional `hint`, and scalar range/suffix/default
+- `cloudet/reduction/ops.py` entry (`REDUCTION_OPS`) with operand `label`s, optional `hint`, and scalar range/suffix/default
 - GUI pages and combo refresh are generated from that tuple (bind stays page 0; construct pages follow tuple order). Do **not** add a hand-written `rd_stack` page or `keep` dict entry.
 
 ## 2. Combo Refresh
@@ -36,7 +36,7 @@ Construct Apply uses `_reduction_step_from_form` + `session.apply_step`. Offset 
 - `_reduction_selected_ids()` reads operand widgets from `REDUCTION_OPS` metadata
   (no per-op branch)
 
-## 7. reduce.py
+## 7. reduction/session.py
 - Import new geometry function
 - `_run_construct_step()` handler
 - Public session method (e.g. `ReductionSession.plane_from_plane_point()`)

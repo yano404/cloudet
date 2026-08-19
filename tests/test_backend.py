@@ -9,7 +9,7 @@ agree at the micrometre level.
 import numpy as np
 import pytest
 
-from cloudet.plane import normalize_ransac_backend, robust_fit_plane, run_ransac
+from cloudet.core.plane import normalize_ransac_backend, robust_fit_plane, run_ransac
 
 try:
     import open3d  # noqa: F401

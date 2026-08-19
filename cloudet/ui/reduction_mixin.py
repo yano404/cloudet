@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
 )
 
-from cloudet.frame import (
+from cloudet.reduction.frame import (
     ALIGNED_ENTITY_IDS,
     ALIGNED_LABELS,
     ALIGNED_ORIGIN_ID,
@@ -48,15 +48,15 @@ from cloudet.frame import (
     is_aligned_plane_id,
     transform_record,
 )
-from cloudet.geometry import (
+from cloudet.reduction.geometry import (
     axis_arrow_points,
     line_segment_points,
     plane_patch_corners,
     project_point_to_line,
     project_point_to_plane,
 )
-from cloudet.plane import Plane
-from cloudet.reduce import (
+from cloudet.core.plane import Plane
+from cloudet.reduction import (
     export_reduction_result,
     load_recipe,
     preview_construct_step,
@@ -64,7 +64,7 @@ from cloudet.reduce import (
     write_geometry_json,
     write_recipe_json,
 )
-from cloudet.reduction_ops import (
+from cloudet.reduction.ops import (
     GUI_APPLY_LABELS,
     GUI_ID_PREFIX,
     GUI_MENU_ITEMS,

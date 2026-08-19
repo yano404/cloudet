@@ -41,24 +41,24 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from cloudet.array_backend import (
+from cloudet.core.array_backend import (
     cupy_unavailable_reason,
     device_name,
     resolve_compute_backend,
     set_default_backend,
 )
-from cloudet.groups import load_groups
-from cloudet.mainplane import MainPlaneParams, extract_main_plane
-from cloudet.multiplane import MultiPlaneParams, _bimodality_flag, extract_planes
-from cloudet.neighbors import (
+from cloudet.project.groups import load_groups
+from cloudet.fit.mainplane import MainPlaneParams, extract_main_plane
+from cloudet.fit.multiplane import MultiPlaneParams, _bimodality_flag, extract_planes
+from cloudet.core.neighbors import (
     VoxelHashGrid,
     depth_layers_along_ray,
     display_xyz,
     resolve_display_backend,
 )
-from cloudet.picking import PickParams, pick_plane_region
-from cloudet.plane import Plane, mad_sigma
-from cloudet.plyio import read_ply_xyz
+from cloudet.fit.picking import PickParams, pick_plane_region
+from cloudet.core.plane import Plane, mad_sigma
+from cloudet.core.plyio import read_ply_xyz
 from cloudet.project import (
     SourceInfo,
     ViewSettings,
@@ -71,8 +71,8 @@ from cloudet.project import (
     save_settings,
     write_manifest,
 )
-from cloudet.spatial_cache import load_display_xyz, load_voxel_grid, save_display_xyz, save_voxel_grid
-from cloudet.settings_apply import classify_settings_apply
+from cloudet.project.spatial_cache import load_display_xyz, load_voxel_grid, save_display_xyz, save_voxel_grid
+from cloudet.project.settings_apply import classify_settings_apply
 from cloudet.ui.constants import (
     DEPTH_TIP,
     FIT_MAX_THRESHOLD_MM,

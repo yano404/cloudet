@@ -101,7 +101,7 @@ def _run_app(args: argparse.Namespace) -> int:
 
 
 def _run_reduce(argv: list[str]) -> int:
-    from cloudet.reduce import load_recipe, run_reduction, write_geometry_json
+    from cloudet.reduction import load_recipe, run_reduction, write_geometry_json
 
     args = build_reduce_parser().parse_args(argv)
     project = Path(args.project_dir)

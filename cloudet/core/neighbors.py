@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from cloudet.array_backend import cupy_available, get_context
+from cloudet.core.array_backend import cupy_available, get_context
 
 __all__ = [
     "VoxelHashGrid",

@@ -15,7 +15,7 @@ from typing import Any
 
 import numpy as np
 
-from cloudet.geometry import (
+from cloudet.reduction.geometry import (
     Line,
     angle_lines_deg,
     angle_line_plane_deg,
@@ -37,7 +37,7 @@ from cloudet.geometry import (
     project_point_to_plane,
     rotate_plane_about_line,
 )
-from cloudet.frame import (
+from cloudet.reduction.frame import (
     ALIGNED_AXIS_IDS,
     ALIGNED_ENTITY_IDS,
     ALIGNED_KIND,
@@ -51,9 +51,9 @@ from cloudet.frame import (
     is_aligned_origin_id,
     is_aligned_plane_id,
 )
-from cloudet.plane import Plane
+from cloudet.core.plane import Plane
 from cloudet.project import FittedPlane, load_fitted_plane, load_group_doc
-from cloudet.reduction_ops import MEASURE_OPERAND_FIELDS, REDUCTION_OP_BY_RECIPE
+from cloudet.reduction.ops import MEASURE_OPERAND_FIELDS, REDUCTION_OP_BY_RECIPE
 
 __all__ = [
     "ConstructPreview",
@@ -928,7 +928,7 @@ def export_reduction_result(
     """Build ``ReductionResult`` for CLI/GUI export with optional Align Z copy."""
     result = session.to_result(source_project=source_project, export=export)
     if aligned_frame is not None:
-        from cloudet.frame import with_aligned_copy
+        from cloudet.reduction.frame import with_aligned_copy
 
         result = with_aligned_copy(result, aligned_frame)
     return result
@@ -1836,7 +1836,7 @@ class ReductionSession:
         spec = self.frame_spec
         if not spec:
             return None
-        from cloudet.frame import RigidFrame
+        from cloudet.reduction.frame import RigidFrame
 
         line = self.line(spec["axis"])
         origin = self.point(spec["origin"])

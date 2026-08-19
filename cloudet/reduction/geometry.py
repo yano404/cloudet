@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cloudet.plane import Plane
+from cloudet.core.plane import Plane
 
 __all__ = [
     "Line",

@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pyvista as pv
 
-from cloudet.neighbors import display_xyz
-from cloudet.plane import Plane
+from cloudet.core.neighbors import display_xyz
+from cloudet.core.plane import Plane
 
 
 class RenderMixin:

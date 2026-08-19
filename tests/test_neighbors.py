@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from cloudet.neighbors import VoxelHashGrid, display_indices, voxel_downsample_indices
+from cloudet.core.neighbors import VoxelHashGrid, display_indices, voxel_downsample_indices
 
 
 def test_radius_matches_bruteforce():
@@ -49,7 +49,7 @@ def test_display_indices_cap():
 
 
 def test_depth_layers_along_ray_separates_overlapping_surfaces():
-    from cloudet.neighbors import depth_layers_along_ray
+    from cloudet.core.neighbors import depth_layers_along_ray
 
     rng = np.random.default_rng(0)
     # Three parallel planes along z, viewed from -z.
@@ -91,7 +91,7 @@ def test_front_layer_wins_even_when_sparser_than_the_back():
     Point clouds render as isolated dots, so the VTK hit often slips through
     the gaps onto a back face; layer 0 must still be the near surface.
     """
-    from cloudet.neighbors import depth_layers_along_ray
+    from cloudet.core.neighbors import depth_layers_along_ray
 
     rng = np.random.default_rng(1)
     sparse_front = np.column_stack([
@@ -119,7 +119,7 @@ def test_front_layer_wins_even_when_sparser_than_the_back():
 
 
 def test_points_behind_the_camera_are_ignored():
-    from cloudet.neighbors import depth_layers_along_ray
+    from cloudet.core.neighbors import depth_layers_along_ray
 
     rng = np.random.default_rng(2)
     behind = np.column_stack([
@@ -156,7 +156,7 @@ def _oblique_surface(t_start, t_end, step, rng):
 
 def test_adaptive_gap_keeps_one_oblique_surface_whole():
     """A fixed gap shatters a coarsely sampled surface into phantom layers."""
-    from cloudet.neighbors import depth_layers_along_ray
+    from cloudet.core.neighbors import depth_layers_along_ray
 
     rng = np.random.default_rng(7)
     pts = _oblique_surface(100.0, 400.0, 12.0, rng)
@@ -173,7 +173,7 @@ def test_adaptive_gap_keeps_one_oblique_surface_whole():
 
 
 def test_adaptive_gap_still_splits_genuinely_separated_surfaces():
-    from cloudet.neighbors import depth_layers_along_ray
+    from cloudet.core.neighbors import depth_layers_along_ray
 
     rng = np.random.default_rng(8)
     pts = np.vstack([
@@ -192,7 +192,7 @@ def test_adaptive_gap_still_splits_genuinely_separated_surfaces():
 
 
 def test_display_xyz_numpy_matches_indices():
-    from cloudet.neighbors import display_xyz
+    from cloudet.core.neighbors import display_xyz
 
     rng = np.random.default_rng(4)
     pts = rng.uniform(0, 50, size=(20_000, 3))
@@ -203,7 +203,7 @@ def test_display_xyz_numpy_matches_indices():
 
 
 def test_resolve_display_backend_auto():
-    from cloudet.neighbors import resolve_display_backend
+    from cloudet.core.neighbors import resolve_display_backend
 
     resolved = resolve_display_backend("auto")
     assert resolved in ("numpy", "open3d", "cupy")
@@ -212,7 +212,7 @@ def test_resolve_display_backend_auto():
 
 def test_display_xyz_open3d():
     o3d = pytest.importorskip("open3d")
-    from cloudet.neighbors import display_xyz, resolve_display_backend
+    from cloudet.core.neighbors import display_xyz, resolve_display_backend
 
     assert resolve_display_backend("open3d") == "open3d"
     rng = np.random.default_rng(5)

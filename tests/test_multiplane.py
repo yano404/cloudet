@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from cloudet.multiplane import MultiPlaneParams, extract_planes
-from cloudet.plane import Plane
+from cloudet.fit.multiplane import MultiPlaneParams, extract_planes
+from cloudet.core.plane import Plane
 
 SIGMA = 0.03
 
