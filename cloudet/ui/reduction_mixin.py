@@ -39,11 +39,14 @@ from PySide6.QtWidgets import (
 )
 
 from cloudet.frame import (
+    ALIGNED_AXIS_IDS,
     ALIGNED_AXIS_LABELS,
     RigidFrame,
+    is_aligned_axis_id,
     transform_record,
 )
 from cloudet.geometry import (
+    axis_arrow_points,
     line_segment_points,
     plane_patch_corners,
     project_point_to_line,
@@ -70,6 +73,7 @@ from cloudet.reduction_ops import (
     form_values_from_step,
 )
 from cloudet.ui.constants import (
+    RD_ALIGNED_AXIS,
     RD_AXIS,
     RD_GUI_TO_RECIPE_OP,
     RD_KIND_LABEL,
@@ -810,7 +814,7 @@ class ReductionMixin:
             )
             for eid in extras:
                 label = ALIGNED_AXIS_LABELS.get(eid, eid)
-                combo.addItem(f"{label}  (axis)", eid)
+                combo.addItem(label, eid)
         for eid in ids:
             tag = RD_KIND_LABEL.get(self._reduction.kind_of(eid), "")
             combo.addItem(f"{eid}  ({tag})" if tag else eid, eid)
@@ -1900,6 +1904,32 @@ class ReductionMixin:
             self.rd_tree.addTopLevelItem(item)
             if eid in prev_tree:
                 item.setSelected(True)
+        muted = QColor("#8b919a")
+        italic = QFont()
+        italic.setItalic(True)
+        for eid in self._reduction_aligned_axis_ids():
+            label = ALIGNED_AXIS_LABELS.get(eid, eid)
+            item = QTreeWidgetItem([label, "axis", "—", "FRAME triad"])
+            item.setData(0, Qt.UserRole, eid)
+            item.setFlags(
+                Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable
+            )
+            item.setCheckState(
+                0,
+                Qt.Checked if self._reduction.visible.get(eid, True) else Qt.Unchecked,
+            )
+            item.setForeground(0, muted)
+            item.setForeground(1, QColor(RD_ALIGNED_AXIS.get(eid, RD_AXIS)))
+            item.setForeground(2, muted)
+            item.setForeground(3, muted)
+            for col in range(4):
+                item.setFont(col, italic)
+            if eid in prev_sel:
+                for col in range(4):
+                    item.setBackground(col, QColor("#e8f0fe"))
+            self.rd_tree.addTopLevelItem(item)
+            if eid in prev_tree:
+                item.setSelected(True)
         self.rd_tree.blockSignals(False)
         self.rd_tree.resizeColumnToContents(0)
         self.rd_tree.resizeColumnToContents(1)
@@ -1934,7 +1964,10 @@ class ReductionMixin:
             return
         if column in (1, 3):
             self.rd_tree.blockSignals(True)
-            if eid in self._reduction.ids():
+            if is_aligned_axis_id(eid):
+                item.setText(1, "axis")
+                item.setText(3, "FRAME triad")
+            elif eid in self._reduction.ids():
                 kind = self._reduction.kind_of(eid)
                 if column == 1:
                     item.setText(1, RD_KIND_LABEL.get(kind, kind))
@@ -1946,6 +1979,11 @@ class ReductionMixin:
             return
         vis = item.checkState(0) == Qt.Checked
         was_vis = self._reduction.visible.get(eid, True)
+        if is_aligned_axis_id(eid):
+            self._reduction.visible[eid] = vis
+            if vis != was_vis:
+                self._apply_reduction_entity_visibility(eid, vis)
+            return
         if eid in self._reduction.ids():
             self._reduction.visible[eid] = vis
         new_id = item.text(0).strip()
@@ -1969,8 +2007,12 @@ class ReductionMixin:
     def _sync_reduction_entity_actions(self):
         if not hasattr(self, "rd_delete_btn"):
             return
-        n = len(self._reduction_tree_selected_ids()) if hasattr(self, "rd_tree") else 0
-        self.rd_delete_btn.setEnabled(n > 0)
+        real = [
+            eid
+            for eid in self._reduction_tree_selected_ids()
+            if eid in self._reduction.ids()
+        ]
+        self.rd_delete_btn.setEnabled(bool(real))
         if hasattr(self, "rd_reset_size_btn"):
             has_size = bool(
                 self._reduction_size_targets("plane")
@@ -1980,6 +2022,7 @@ class ReductionMixin:
             self.rd_reset_size_btn.setEnabled(has_size)
         self._reduction_sync_size_controls_from_selection()
         self._reduction_sync_operation_from_selection()
+        self._refresh_reduction_entity_overlays(self._reduction_overlay_ids())
 
     def _reduction_size_spin(self, kind: str) -> QDoubleSpinBox | None:
         return {
@@ -2124,14 +2167,31 @@ class ReductionMixin:
                 ids.append(str(eid))
         return ids
 
+    def _reduction_aligned_axis_ids(self) -> list[str]:
+        """FRAME triad ids shown as virtual ENTITIES rows."""
+        available = self._reduction.available_aligned_axis_ids()
+        return [eid for eid in ALIGNED_AXIS_IDS if eid in available]
+
+    def _reduction_overlay_ids(self) -> list[str]:
+        return list(self._reduction.ids()) + self._reduction_aligned_axis_ids()
+
+    def _reduction_has_overlay(self, eid: str) -> bool:
+        return eid in self._reduction.ids() or eid in self._reduction_aligned_axis_ids()
+
+    def _reduction_overlay_selected_ids(self) -> set[str]:
+        return set(self._reduction_selected_ids()) | set(
+            self._reduction_tree_selected_ids()
+        )
+
     def _reduction_delete_selected(self):
         ids = self._reduction_tree_selected_ids()
         if not ids:
             raise ValueError("select an entity in the list to delete")
+        real = [eid for eid in ids if eid in self._reduction.ids()]
+        if not real:
+            raise ValueError("aligned axes cannot be renamed or deleted")
         removed: list[str] = []
-        for eid in ids:
-            if eid not in self._reduction.ids():
-                continue
+        for eid in real:
             removed.extend(self._reduction.remove(eid))
         # Unique, keep order
         seen: set[str] = set()
@@ -2172,6 +2232,9 @@ class ReductionMixin:
         self._reduction_actor_names = []
 
     def _reduction_label_position(self, eid: str) -> np.ndarray:
+        if is_aligned_axis_id(eid):
+            line = self._reduction.line(eid)
+            return axis_arrow_points(line, self._reduction.overlay_mm(eid))[1]
         kind = self._reduction.kind_of(eid)
         anchor = self._reduction.anchors.get(eid)
         size = self._reduction.overlay_mm(eid)
@@ -2193,7 +2256,15 @@ class ReductionMixin:
 
     def _reduction_entity_actor_names(self, eid: str) -> list[str]:
         name = self._reduction_actor_name(eid)
-        want = {name, f"{name}_e", f"{name}_n", f"{name}_ring", f"{name}_cap0", f"{name}_cap1"}
+        want = {
+            name,
+            f"{name}_e",
+            f"{name}_n",
+            f"{name}_ring",
+            f"{name}_cap0",
+            f"{name}_cap1",
+            f"{name}_tip",
+        }
         return [n for n in self._reduction_actor_names if n in want]
 
     def _remove_reduction_entity_overlay(self, eid: str) -> None:
@@ -2202,6 +2273,69 @@ class ReductionMixin:
             self.plotter.remove_actor(n, render=False)
         drop = set(names)
         self._reduction_actor_names = [n for n in self._reduction_actor_names if n not in drop]
+
+    def _add_aligned_axis_overlay(self, eid: str, *, selected: bool) -> None:
+        """RGB arrow from FRAME origin along the view +X/+Y/+Z direction."""
+        line = self._reduction.line(eid)
+        length = max(self._reduction.overlay_mm(eid), 1.0)
+        origin, tip = axis_arrow_points(line, length)
+        origin_v = self._to_view_point(origin)
+        tip_v = self._to_view_point(tip)
+        d = tip_v - origin_v
+        n = float(np.linalg.norm(d))
+        if n < 1e-9:
+            return
+        d = d / n
+        tip_len = max(0.16 * n, 8.0)
+        if tip_len > 0.4 * n:
+            tip_len = 0.4 * n
+        shaft_end = tip_v - tip_len * d
+        diam = self._reduction.overlay_width_mm(eid)
+        if selected:
+            diam *= 1.35
+        color = RD_ALIGNED_AXIS.get(eid, RD_AXIS)
+        name = self._reduction_actor_name(eid)
+        self.plotter.add_mesh(
+            _line_tube_mesh(origin_v, shaft_end, diam),
+            name=name,
+            color=color,
+            reset_camera=False,
+            pickable=False,
+            render=False,
+        )
+        self._reduction_actor_names.append(name)
+        cone = pv.Cone(
+            center=(tip_v - 0.5 * tip_len * d).tolist(),
+            direction=d.tolist(),
+            height=float(tip_len),
+            radius=max(1.1 * diam, 0.4),
+            resolution=16,
+        )
+        tname = name + "_tip"
+        self.plotter.add_mesh(
+            cone,
+            name=tname,
+            color=color,
+            reset_camera=False,
+            pickable=False,
+            render=False,
+        )
+        self._reduction_actor_names.append(tname)
+        if selected:
+            cap = pv.Sphere(
+                radius=max(0.7 * diam, 0.5),
+                center=tip_v.tolist(),
+            )
+            cname = name + "_cap0"
+            self.plotter.add_mesh(
+                cap,
+                name=cname,
+                color=RD_SELECTED_RING,
+                reset_camera=False,
+                pickable=False,
+                render=False,
+            )
+            self._reduction_actor_names.append(cname)
 
     def _add_reduction_entity_overlay(self, eid: str, *, selected: bool) -> None:
         kind = self._reduction.kind_of(eid)
@@ -2264,6 +2398,9 @@ class ReductionMixin:
                 )
                 self._reduction_actor_names.append(nname)
             elif kind == "line":
+                if is_aligned_axis_id(eid):
+                    self._add_aligned_axis_overlay(eid, selected=selected)
+                    return
                 line = self._reduction.line(eid)
                 seg = line_segment_points(
                     line, half_length_mm=size, center=anchor
@@ -2336,10 +2473,10 @@ class ReductionMixin:
             if render:
                 self.plotter.render()
             return
-        selected = set(self._reduction_selected_ids())
+        selected = set(self._reduction_overlay_selected_ids())
         for eid in eids:
             self._remove_reduction_entity_overlay(eid)
-            if eid in self._reduction.ids() and self._reduction.visible.get(eid, True):
+            if self._reduction_has_overlay(eid) and self._reduction.visible.get(eid, True):
                 self._add_reduction_entity_overlay(eid, selected=eid in selected)
         self._refresh_reduction_labels(render=False)
         if render:
@@ -2352,12 +2489,12 @@ class ReductionMixin:
         ]
         label_pts: list[np.ndarray] = []
         label_text: list[str] = []
-        for eid in self._reduction.ids():
+        for eid in self._reduction_overlay_ids():
             if not self._reduction.visible.get(eid, True):
                 continue
             try:
                 label_pts.append(self._reduction_label_position(eid))
-                label_text.append(eid)
+                label_text.append(ALIGNED_AXIS_LABELS.get(eid, eid))
             except Exception:
                 traceback.print_exc()
         if label_pts:
@@ -2383,7 +2520,7 @@ class ReductionMixin:
         names = self._reduction_entity_actor_names(eid)
         actors = getattr(self.plotter, "actors", None) or {}
         if visible and not names:
-            selected = eid in set(self._reduction_selected_ids())
+            selected = eid in self._reduction_overlay_selected_ids()
             self._add_reduction_entity_overlay(eid, selected=selected)
             self._refresh_reduction_labels(render=True)
             return
@@ -2395,8 +2532,8 @@ class ReductionMixin:
 
     def _refresh_reduction_actors(self, *, render: bool = True):
         self._clear_reduction_actors()
-        selected = set(self._reduction_selected_ids())
-        for eid in self._reduction.ids():
+        selected = self._reduction_overlay_selected_ids()
+        for eid in self._reduction_overlay_ids():
             if not self._reduction.visible.get(eid, True):
                 continue
             self._add_reduction_entity_overlay(eid, selected=eid in selected)

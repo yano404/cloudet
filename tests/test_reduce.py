@@ -1132,6 +1132,30 @@ def test_remove_frame_axis_drops_aligned_axis_dependents(tmp_path):
     assert sess.frame_spec is None
 
 
+def test_replay_keeps_aligned_axis_visibility(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession.from_recipe(
+        _beam_recipe(), project_dir=_make_project(tmp_path)
+    )
+    sess.frame_spec = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    sess.visible["aligned.x"] = False
+    sess.replace_construct_step(
+        "left_in",
+        {
+            "id": "left_in",
+            "op": "offset",
+            "of": "tracker_left",
+            "distance_mm": 51.0,
+        },
+    )
+    assert sess.visible.get("aligned.x") is False
+
+
 def test_replay_warns_when_frame_becomes_invalid():
     from cloudet.reduce import ReductionSession
 

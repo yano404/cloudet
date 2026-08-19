@@ -14,6 +14,11 @@ GROUP_COLORS = [
 RD_PLANE_SCANNED = "#4a90d9"
 RD_PLANE_OFFSET = "#e07b39"
 RD_AXIS = "#c0392b"
+RD_ALIGNED_AXIS = {
+    "aligned.x": "#e74c3c",
+    "aligned.y": "#27ae60",
+    "aligned.z": "#2980d9",
+}
 RD_POINT = "#f1c40f"
 RD_SELECTED_RING = "#ffffff"
 RD_NORMAL = "#2ecc71"

@@ -35,9 +35,9 @@ _ALIGN_EPS = 1e-12
 YAW_TO = ("x", "-x", "y", "-y")
 ALIGNED_AXIS_IDS = ("aligned.x", "aligned.y", "aligned.z")
 ALIGNED_AXIS_LABELS = {
-    "aligned.x": "aligned X",
-    "aligned.y": "aligned Y",
-    "aligned.z": "aligned Z",
+    "aligned.x": "aligned X axis",
+    "aligned.y": "aligned Y axis",
+    "aligned.z": "aligned Z axis",
 }
 _ALIGNED_AXIS_INDEX = {"aligned.x": 0, "aligned.y": 1, "aligned.z": 2}
 

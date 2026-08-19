@@ -63,9 +63,15 @@ Virtual line ids resolved from `frame_spec` (not stored in `_store`):
 - **GUI line combos:** `_reduction_fill_combo(..., kind="line")` prepends aligned entries
   when `include_aligned_axes=True` (default). Use `include_aligned_axes=False` for
   FRAME axis combo and frame yaw ref — aligned ids must not be frame axis/origin.
+- **ENTITIES tree:** virtual rows at the bottom when FRAME resolves
+  (`aligned X/Y/Z axis`, type `axis`). Checkbox toggles overlay; rename/delete/size
+  are disabled. Overlay is an RGB arrow from the FRAME origin (+X red, +Y green,
+  +Z blue), not a construct-line tube. Overlay uses `available_aligned_axis_ids()`
+  + `session.visible`.
 - **Refresh:** `_on_frame_combo_changed` calls `_reduction_refresh_operand_combos(include_frame=False)`
-  to update line combos without resetting FRAME widgets.
+  to update line combos without resetting FRAME widgets, then refreshes the tree
+  and overlays.
 - **Update mode allowlist:** `operand_ids_before()` + `available_aligned_axis_ids(before=...)`
 - **Reserved ids:** reject `aligned.*` as construct result ids in `apply_step` / `rename`
-- **Not in tree/export rows:** aligned axes are operands only; recipe may reference
+- **Not in export rows:** aligned axes are display/operand only; recipe may reference
   `"line": "aligned.x"` but geometry.json has no separate `lines.aligned.x` entry
