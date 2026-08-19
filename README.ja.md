@@ -32,7 +32,17 @@ cloudet/
   frame.py      表示専用 Align Z 姿勢（軸 → +Z、任意で直線 → XY）
   reduce.py     レシピ駆動リダクション → 解析用 geometry.json
   pipeline.py   残差 u–v マップ（GUI QC 用）
-  picker_qt.py  対話的アプリ（PySide6 + PyVista）
+  app_window.py Qtアプリの推奨エントリポイント
+  picker_qt.py  互換 re-export（新規は app_window または ui.main_window）
+  ui/
+    main_window.py    CloudetAppWindow + run_picker_qt
+    groups_mixin.py   Groups / Settings ドック、ピック、フィット、ツリー
+    reduction_mixin.py  Reduction + Measure ドック
+    uv_mixin.py       残差 u–v マップ ドック
+    render_mixin.py   3D アクター描画
+    frame_mixin.py    Align Z 表示フレーム
+    widgets.py        共通 Qt スタイル・ヘルパー
+  reduction_ops.py  Reduction 操作メタデータ（GUI ↔ recipe）
   cli.py        cloudet [project] [--cloud ...] | reduce | version
 tests/          合成データによる検証（σ=0.03mm の FARO 条件を模擬）
 ```
@@ -109,10 +119,56 @@ cloudet reduce <project> --recipe recipe.json -o geometry.json
 反対側（例: 外向き法線に対する「内側」）は負の距離を使います。
 
 対応する construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
-`intersect_line_plane`, `intersect_normal_plane`, `line_from_point_normal`
+`intersect_line_plane`, `intersect_normal_plane`（元の面の法線 ∩ 先の面）、`line_from_point_normal`
 （点を通り、面の法線方向の軸）、`line_from_two_points`（2点を通る軸）、
-`midpoint_line_planes`（直線を2平面で切った線分の中点）。出力 `geometry.json` は
-planes / lines / points と provenance（`scanned` | `offset` | `intersection`）を含みます。
+`midpoint_line_planes`（直線を2平面で切った線分の中点）、
+`plane_from_plane_point`, `plane_from_line_point`, `plane_from_two_lines`,
+`rotate_plane_about_line`（任意の軸まわりの剛体回転。角度は度）。
+
+#### `geometry.json`（エクスポート出力）
+
+`geometry.json` はレシピを**実行した結果**に、各 entity の record を載せたものです（点群本体ではありません）。
+トップレベルの `planes` / `lines` / `points` は常に**測量（survey）座標**です。
+各 record には provenance（`scanned` | `offset` | `intersection` | `constructed`）と
+パラメータ（`abcd`, `point`/`direction`, `xyz` など）が入ります。
+
+| キー | 内容 |
+|------|------|
+| `recipe` | `{ "sha256", "echo" }` — 再現用にレシピ全文 |
+| `export` | 解析対象 id のリスト（メタデータ。全 entity は別途列挙） |
+| `frame` | 任意。Align Z 姿勢（`axis`, `origin`, `flip_z`, 任意で `yaw_*`） |
+| `aligned` | 任意。aligned 座標系の `{ planes, lines, points }` |
+| `measures` | 任意。pin した測定（再計算済み `value` / `unit`） |
+
+**aligned の書き出し:** `cloudet reduce` はレシピに `frame` があれば `aligned` と
+`frame` を付けます。GUI では **Also write aligned-frame coordinates** にチェックし、
+FRAME の **Axis** と **Origin** を設定してください（Export に Align Z は不要）。
+GUI は同じフォルダに `geometry_recipe.json` も書きます。
+
+#### aligned 軸オペランド（`aligned.x` / `aligned.y` / `aligned.z`）
+
+`recipe.frame` で `axis` と `origin` を設定すると、construct の line 引数に
+仮想 id `aligned.x`, `aligned.y`, `aligned.z` が使えます。Align Z 後の
+ビュー triad（+X / +Y / +Z）方向の、原点を通る直線です。GUI では FRAME の
+Axis/Origin 選択後に line コンボに出ますが、独立 entity ではないため
+`geometry.json` には行として出ません。例:
+
+```json
+{
+  "frame": { "axis": "beam_axis", "origin": "beam_on_target", "flip_z": false },
+  "construct": [
+    {
+      "id": "tilted",
+      "op": "rotate_plane_about_line",
+      "plane": "target",
+      "line": "aligned.x",
+      "angle_deg": 90.0
+    }
+  ]
+}
+```
+
+出力 `geometry.json` は planes / lines / points と provenance を含みます。
 
 任意のトップレベル `frame` は Align Z のメタデータだけです（`axis` 直線 id、
 `origin` 点 id、`flip_z`、任意で `yaw_line` または `yaw_plane` と `yaw_to`
@@ -130,17 +186,22 @@ GUI は Load recipe / Load All でその選択を復元しますが、**Align Z 
 
 1. まず **操作を選択** — その操作の入力だけ出る（面 / 軸の選択、オフセットスライダーなど）
 2. **Offset**: 面を選び、スライダーで距離をプレビュー（緑）→ Apply で確定
-3. 交差系: 必要な面・軸を選んで Apply
+3. 交差系: 必要な面・軸を選んで Apply。
+   **Normal ∩ plane → point** は元の面のオーバーレイ位置から法線を別の面に当てた交点です。
 4. Entities で表示切替後、**Save recipe…** / **Export geometry…**
 5. **FRAME**（表示専用）: Axis（直線）と Origin（点）を選び **Align Z**。
    軸を `(0, 0, 1)` に、原点を `(0, 0, 0)` に移す最小回転を使います。
    任意の **XY** で、**直線**または**平面法線**（水平成分のみ）を ±X / ±Y に
    載せます。XY を空にすれば最小回転のままです。**Survey** で測量座標の表示に戻します。
    Groups・レシピの構築結果・Fit は測量のままです。pick も元の点群から行います。
-6. Align Z 中の **Export geometry…** は、測量の planes / lines / points に加えて
-   `aligned` コピーと姿勢 `frame` を書けます。`cloudet reduce` もレシピに
-   `frame` があれば同じです。Load recipe は `recipe.frame` から
-   FRAME の選択を戻しますが、表示は Align Z を押すまで測量のままです。
+   Axis/Origin 設定後は line オペランド（回転、line ∩ plane など）と
+   Entities 最下部に **aligned X/Y/Z axis** が出ます（表示切替のみ。rename/delete 不可）。
+   3D では FRAME 原点からの RGB 矢印（+X 赤 / +Y 緑 / +Z 青）です。
+6. **Also write aligned-frame coordinates** ON かつ FRAME の **Axis/Origin** 設定後、
+   **Export geometry…** で測量座標に加え `aligned` と `frame` を書けます（Export に
+   Align Z は不要）。`cloudet reduce` もレシピに `frame` があれば同じです。
+   Load recipe は `recipe.frame` から FRAME の選択を戻します。3D 表示を合わせる
+   ときだけ Align Z を押してください。
 
 **Measure** で、構築したエンティティの距離・角度を読みます:
 

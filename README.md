@@ -32,7 +32,17 @@ cloudet/
   frame.py      Display-only Align Z pose (axis → +Z, optional line → XY)
   reduce.py     Recipe-driven reduction → geometry.json for analysis
   pipeline.py   Residual u–v maps (for GUI QC)
-  picker_qt.py  Interactive app (PySide6 + PyVista)
+  app_window.py Preferred Qt app window entrypoint
+  picker_qt.py  Legacy re-exports (use app_window or ui.main_window)
+  ui/
+    main_window.py    CloudetAppWindow + run_picker_qt
+    groups_mixin.py   Groups / Settings dock, pick, fit, tree
+    reduction_mixin.py  Reduction + Measure docks
+    uv_mixin.py       Residual u–v map dock
+    render_mixin.py   3D actor rendering
+    frame_mixin.py    Align Z view frame
+    widgets.py        Shared Qt styling and helpers
+  reduction_ops.py  Shared reduction op metadata (GUI ↔ recipe)
   cli.py        cloudet [project] [--cloud ...] | reduce | version
 tests/          Synthetic validation (FARO-like σ ≈ 0.03 mm)
 ```
@@ -133,11 +143,57 @@ Example recipe (tracker walls → beam axis ∩ target):
 ```
 
 Supported construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
-`intersect_line_plane`, `intersect_normal_plane`, `line_from_point_normal`
+`intersect_line_plane`, `intersect_normal_plane` (source-plane normal ∩ dest plane), `line_from_point_normal`
 (axis through a point along a plane normal), `line_from_two_points`,
-`midpoint_line_planes` (midpoint of the segment cut by two planes).
-Output `geometry.json` lists
-planes / lines / points with provenance (`scanned` | `offset` | `intersection`).
+`midpoint_line_planes` (midpoint of the segment cut by two planes),
+`plane_from_plane_point`, `plane_from_line_point`, `plane_from_two_lines`,
+`rotate_plane_about_line` (rigid rotation about any axis; angle in degrees).
+
+#### `geometry.json` (export output)
+
+`geometry.json` is the **executed** recipe plus computed entity records (not the
+point cloud). Top-level `planes` / `lines` / `points` are always in **survey**
+coordinates. Each record includes provenance (`scanned` | `offset` | `intersection`
+| `constructed`) and parameters (`abcd`, `point`/`direction`, `xyz`, …).
+
+| Key | Contents |
+|-----|----------|
+| `recipe` | `{ "sha256", "echo" }` — full recipe copy for reproducibility |
+| `export` | ids marked for analysis (metadata; all entities are still listed) |
+| `frame` | optional Align Z pose (`axis`, `origin`, `flip_z`, optional `yaw_*`) |
+| `aligned` | optional `{ planes, lines, points }` in the aligned frame |
+| `measures` | optional pinned measurements with recomputed `value` / `unit` |
+
+**Aligned export:** `cloudet reduce` adds `aligned` + `frame` when the recipe
+has `frame`. In the GUI, check **Also write aligned-frame coordinates** and
+set FRAME **axis** and **origin** (Align Z is not required for export).
+The GUI also writes a sibling `geometry_recipe.json` for replay.
+
+#### Aligned axis operands (`aligned.x` / `aligned.y` / `aligned.z`)
+
+When `recipe.frame` sets `axis` and `origin`, construct steps may reference
+virtual line ids `aligned.x`, `aligned.y`, `aligned.z` as operands. They are
+lines through the frame origin along the view triad (+X / +Y / +Z in survey
+space after Align Z). They appear in GUI **line** combos once FRAME axis and
+origin are chosen; they are **not** stored as separate entities and do not
+appear in `geometry.json` as their own rows. Example:
+
+```json
+{
+  "frame": { "axis": "beam_axis", "origin": "beam_on_target", "flip_z": false },
+  "construct": [
+    {
+      "id": "tilted",
+      "op": "rotate_plane_about_line",
+      "plane": "target",
+      "line": "aligned.x",
+      "angle_deg": 90.0
+    }
+  ]
+}
+```
+
+Output `geometry.json` lists planes / lines / points with provenance.
 
 Optional top-level `frame` is Align Z metadata only (`axis` line id, `origin`
 point id, `flip_z`, and optionally `yaw_line` or `yaw_plane` with `yaw_to`
@@ -156,19 +212,24 @@ Open **Reduction** to construct geometry:
 
 1. Choose an **operation** — only that step’s inputs appear (plane / axis pickers, offset slider, …)
 2. For **Offset**: pick a plane, drag the distance slider for a green live preview, then Apply
-3. For intersections: pick the required planes/axes, then Apply
+3. For intersections: pick the required planes/axes, then Apply.
+   **Normal ∩ plane → point** shoots the source overlay's normal at another plane.
 4. Toggle visibility in Entities; **Save recipe…** / **Export geometry…** for analysis
 5. **FRAME** (display only): pick Axis (line) and Origin (point), then **Align Z**.
    The view uses the smallest rotation that maps the axis to `(0, 0, 1)` with
    the origin at `(0, 0, 0)`. Optional **XY**: map a **line** or **plane
    normal** (horizontal component only) onto ±X or ±Y. Omit XY for the smallest
    rotation only. **Survey** returns the view to survey coordinates. Groups, recipe constructs, and Fit stay in survey;
-   picking still uses the original cloud.
-6. With Align Z active, **Export geometry…** can also write an `aligned` copy
-   plus the frame pose. Top-level planes / lines / points remain survey.
-   `cloudet reduce` does the same when the recipe has `frame`.
-   Load recipe restores FRAME combos from `recipe.frame` but leaves the view
-   in survey until you press Align Z again.
+   picking still uses the original cloud. Once axis and origin are set, **aligned X/Y/Z**
+   appear in line operand combos (rotate, line ∩ plane, …) and as thin
+   **aligned X/Y/Z axis** rows at the bottom of Entities (visibility only;
+   rename/delete stay off). In 3D they are RGB arrows from the FRAME origin
+   (+X red, +Y green, +Z blue), not the red construct-line tubes.
+6. With **Also write aligned-frame coordinates** checked and FRAME **axis** and
+   **origin** set, **Export geometry…** adds an `aligned` copy plus `frame` under
+   survey numbers (Align Z is not required for export). `cloudet reduce` uses the
+   same rule when the recipe has `frame`. Load recipe restores FRAME combos from
+   `recipe.frame`; press Align Z when you want the 3D view aligned.
 
 Open **Measure** to read distances and angles from those entities:
 

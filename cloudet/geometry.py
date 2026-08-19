@@ -33,6 +33,7 @@ __all__ = [
     "rotate_plane_about_line",
     "plane_patch_corners",
     "line_segment_points",
+    "axis_arrow_points",
     "distance_points",
     "distance_point_plane",
     "distance_point_line",
@@ -46,6 +47,19 @@ __all__ = [
 _PARALLEL_EPS = 1e-12
 
 
+def _unit_direction(direction, *, fix_sign: bool) -> np.ndarray:
+    d = np.asarray(direction, dtype=np.float64).reshape(3)
+    n = float(np.linalg.norm(d))
+    if not np.isfinite(n) or n == 0.0:
+        raise ValueError("line direction must be finite and non-zero")
+    d = d / n
+    if fix_sign:
+        k = int(np.argmax(np.abs(d)))
+        if d[k] < 0:
+            d = -d
+    return d
+
+
 @dataclass(frozen=True)
 class Line:
     """Parametric line: ``x(t) = point + t * direction``, ``|direction| = 1``."""
@@ -55,17 +69,23 @@ class Line:
 
     def __post_init__(self):
         p = np.asarray(self.point, dtype=np.float64).reshape(3)
-        d = np.asarray(self.direction, dtype=np.float64).reshape(3)
-        n = np.linalg.norm(d)
-        if not np.isfinite(n) or n == 0.0:
-            raise ValueError("line direction must be finite and non-zero")
-        # Fix direction sign by largest-magnitude component (reproducible).
-        d = d / n
-        k = int(np.argmax(np.abs(d)))
-        if d[k] < 0:
-            d = -d
+        d = _unit_direction(self.direction, fix_sign=True)
         object.__setattr__(self, "point", p)
         object.__setattr__(self, "direction", d)
+
+    @classmethod
+    def from_point_direction(
+        cls, point, direction, *, fix_sign: bool = True
+    ) -> "Line":
+        """Build a line; ``fix_sign=False`` keeps the given direction hemisphere."""
+        obj = object.__new__(cls)
+        object.__setattr__(
+            obj, "point", np.asarray(point, dtype=np.float64).reshape(3).copy()
+        )
+        object.__setattr__(
+            obj, "direction", _unit_direction(direction, fix_sign=fix_sign)
+        )
+        return obj
 
     def point_at(self, t: float) -> np.ndarray:
         return self.point + float(t) * self.direction
@@ -225,17 +245,34 @@ def _rotate_vector_about_axis(vector: np.ndarray, axis: np.ndarray, angle_rad: f
     return v * c + np.cross(k, v) * s + k * float(k @ v) * (1.0 - c)
 
 
-def rotate_plane_about_line(plane: Plane, axis: Line, angle_deg: float) -> Plane:
-    """Rotate ``plane`` about ``axis`` (line in the plane) by ``angle_deg``.
+def _rotate_point_about_axis(
+    point: np.ndarray,
+    origin: np.ndarray,
+    direction: np.ndarray,
+    angle_rad: float,
+) -> np.ndarray:
+    rel = np.asarray(point, dtype=np.float64).reshape(3) - np.asarray(
+        origin, dtype=np.float64
+    ).reshape(3)
+    return np.asarray(origin, dtype=np.float64).reshape(3) + _rotate_vector_about_axis(
+        rel, direction, angle_rad
+    )
 
-    Positive angle follows the right-hand rule around ``axis.direction``.
+
+def rotate_plane_about_line(plane: Plane, axis: Line, angle_deg: float) -> Plane:
+    """Rotate ``plane`` as a rigid object about ``axis`` by ``angle_deg``.
+
+    The axis need not lie in the plane. Positive angle follows the
+    right-hand rule around ``axis.direction``. Rotation about an axis
+    parallel to the plane normal leaves the plane equation unchanged.
     """
     k = axis.direction
-    if abs(float(plane.normal @ k)) > 1e-6:
-        raise ValueError("axis must lie in the plane (normal ⊥ axis)")
+    a = np.asarray(axis.point, dtype=np.float64).reshape(3)
     theta = float(np.deg2rad(angle_deg))
     n_rot = _rotate_vector_about_axis(plane.normal, k, theta)
-    return Plane(n_rot, -float(n_rot @ axis.point))
+    p0 = a - plane.signed_distances(a.reshape(1, 3))[0] * plane.normal
+    p_rot = _rotate_point_about_axis(p0, a, k, theta)
+    return Plane(n_rot, -float(n_rot @ p_rot))
 
 
 def _plane_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -287,6 +324,13 @@ def line_segment_points(
         c = line.point + t * line.direction
     h = float(half_length_mm)
     return np.stack([c - h * line.direction, c + h * line.direction])
+
+
+def axis_arrow_points(line: Line, length_mm: float) -> np.ndarray:
+    """Return (2, 3) origin → ``+direction * length_mm`` (FRAME triad style)."""
+    origin = np.asarray(line.point, dtype=np.float64).reshape(3)
+    d = np.asarray(line.direction, dtype=np.float64).reshape(3)
+    return np.stack([origin, origin + float(length_mm) * d])
 
 
 def distance_points(a, b) -> float:

@@ -8,6 +8,7 @@ from cloudet.geometry import (
     angle_line_plane_deg,
     angle_lines_deg,
     angle_planes_deg,
+    axis_arrow_points,
     distance_point_line,
     distance_point_plane,
     distance_points,
@@ -278,8 +279,32 @@ def test_rotate_plane_about_line():
     assert rotated.signed_distances(np.array([[0.0, 0.0, 0.0]]))[0] == pytest.approx(0.0)
 
 
-def test_rotate_plane_about_line_axis_not_in_plane_raises():
+def test_rotate_plane_about_offset_axis():
+    """Axis parallel to the plane but not lying in it (z = 10 hinge)."""
+    plane = Plane(np.array([0.0, 0.0, 1.0]), 0.0)  # z = 0
+    axis = Line(np.array([0.0, 0.0, 10.0]), np.array([1.0, 0.0, 0.0]))
+    rotated = rotate_plane_about_line(plane, axis, 90.0)
+    assert np.allclose(np.abs(rotated.normal), [0.0, 1.0, 0.0], atol=1e-12)
+    # Point (0,0,0) on the original plane rotates 90° about x through (0,0,10)
+    # to (0, 10, 10) and must remain on the rotated plane.
+    pt = np.array([[0.0, 10.0, 10.0]])
+    assert abs(rotated.signed_distances(pt)[0]) < 1e-9
+
+
+def test_rotate_plane_about_normal_axis_is_identity():
     plane = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
     axis = Line(np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]))
-    with pytest.raises(ValueError, match="axis must lie"):
-        rotate_plane_about_line(plane, axis, 10.0)
+    rotated = rotate_plane_about_line(plane, axis, 35.0)
+    assert np.allclose(rotated.normal, plane.normal, atol=1e-12)
+    assert rotated.d == pytest.approx(plane.d, abs=1e-12)
+
+
+def test_axis_arrow_points_from_origin_along_plus_direction():
+    line = Line.from_point_direction(
+        np.array([10.0, 20.0, 30.0]),
+        np.array([0.0, 0.0, 1.0]),
+        fix_sign=False,
+    )
+    pts = axis_arrow_points(line, 100.0)
+    assert np.allclose(pts[0], [10.0, 20.0, 30.0])
+    assert np.allclose(pts[1], [10.0, 20.0, 130.0])

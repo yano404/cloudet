@@ -1,6 +1,6 @@
 ---
-description: Patterns for adding new reduction operations in picker_qt.py
-globs: cloudet/picker_qt.py
+description: Patterns for adding new reduction operations in Qt UI modules
+globs: cloudet/{ui/reduction_mixin.py,reduction_ops.py}
 alwaysApply: false
 ---
 
@@ -9,23 +9,24 @@ alwaysApply: false
 When adding a new construct operation, follow the existing ops (e.g. `plane_from_line_point`) exactly. Every new op requires ALL of the following:
 
 ## 1. Mappings & Registration
-- `_RD_GUI_TO_RECIPE_OP` entry
-- `rd_op_combo` label+key tuple
+- `cloudet/reduction_ops.py` entry (`REDUCTION_OPS`)
 - `rd_stack` page with correct index (update all subsequent indices)
-- Page index in `_reduction_current_op()` mapping
 
 ## 2. Combo Refresh
 - `keep` dict entry in `_reduction_refresh_operand_combos()`
 - `_reduction_fill_combo()` calls with correct `kind=`
 
 ## 3. Form Load/Save
-- `_reduction_load_step_into_form()` branch
-- `_reduction_step_from_form()` branch
+- Prefer `build_construct_step()` / `form_values_from_step()` from `reduction_ops.py`
+- `_reduction_step_from_form()` / `_reduction_load_step_into_form()` delegate to those helpers
 - `_reduction_sync_apply_button()` label entry
 
 ## 4. Preview
-- `_reduction_update_live_preview()` dispatch must include the new op
-- `_reduction_update_plane_preview()` (or axis/point) branch
+- `_reduction_update_live_preview()` uses `preview_construct_step()` for all construct ops
+- `_reduction_draw_preview()` draws planes/lines/points; point previews may include
+  `preview.segment_ends` (e.g. midpoint between two planes)
+- After bind/update replay, check `session.replay_warnings` and surface via
+  `_reduction_status_with_replay()`
 - Access data via `self._reduction.plane(id)`, `.line(id)`, `.point(id)` — NEVER `self._reduction.store` or `self._reduction._store`
 
 ## 5. Apply Method
@@ -43,9 +44,34 @@ self._status(f"...")
 ```
 
 ## 6. Operand IDs
-- `_reduction_operand_ids()` branch for selection highlighting
+- `_reduction_selected_ids()` reads operand widgets from `REDUCTION_OPS` metadata
+  (no per-op branch)
 
 ## 7. reduce.py
 - Import new geometry function
 - `_run_construct_step()` handler
 - Public session method (e.g. `ReductionSession.plane_from_plane_point()`)
+
+## Aligned axis operands (`aligned.x` / `aligned.y` / `aligned.z`)
+
+Virtual line ids resolved from `frame_spec` (not stored in `_store`):
+
+- **Session:** `ReductionSession.aligned_axis_lines()` / `available_aligned_axis_ids()`
+  / `line("aligned.x")` via `cloudet.frame.aligned_axis_line`
+- **Construct:** pass `extra_lines=session.aligned_axis_lines()` into `_run_construct_step`
+- **Recipe load:** set `target.frame_spec` before running construct so aligned ops resolve
+- **GUI line combos:** `_reduction_fill_combo(..., kind="line")` prepends aligned entries
+  when `include_aligned_axes=True` (default). Use `include_aligned_axes=False` for
+  FRAME axis combo and frame yaw ref — aligned ids must not be frame axis/origin.
+- **ENTITIES tree:** virtual rows at the bottom when FRAME resolves
+  (`aligned X/Y/Z axis`, type `axis`). Checkbox toggles overlay; rename/delete/size
+  are disabled. Overlay is an RGB arrow from the FRAME origin (+X red, +Y green,
+  +Z blue), not a construct-line tube. Overlay uses `available_aligned_axis_ids()`
+  + `session.visible`.
+- **Refresh:** `_on_frame_combo_changed` calls `_reduction_refresh_operand_combos(include_frame=False)`
+  to update line combos without resetting FRAME widgets, then refreshes the tree
+  and overlays.
+- **Update mode allowlist:** `operand_ids_before()` + `available_aligned_axis_ids(before=...)`
+- **Reserved ids:** reject `aligned.*` as construct result ids in `apply_step` / `rename`
+- **Not in export rows:** aligned axes are display/operand only; recipe may reference
+  `"line": "aligned.x"` but geometry.json has no separate `lines.aligned.x` entry
