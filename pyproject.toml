@@ -23,6 +23,10 @@ open3d = ["open3d>=0.17"]
 # GPU compute for fit / residual QC / display voxel (CuPy + CUDA 12.x headers).
 gpu = ["cupy-cuda12x[ctk]>=13.0"]
 dev = ["pytest>=7"]
+docs = [
+    "mkdocs-material>=9",
+    "mkdocstrings[python]>=0.25",
+]
 
 [project.scripts]
 cloudet = "cloudet.cli:main"

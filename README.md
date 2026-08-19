@@ -21,13 +21,13 @@ Tool for reducing detector positions and relative geometry from 3D point clouds 
 
 ```
 cloudet/
-  plane.py          Plane fit core (LSQ / RANSAC / robust iteration / residual stats)
-  plyio.py          PLY I/O (double precision, Open3D-free)
-  neighbors.py      Spatial indexing / display downsampling
-  array_backend.py  Optional CuPy GPU backend (auto fallback to NumPy)
-  settings_apply.py Settings apply classification (detection vs display)
   app_window.py     Qt app entrypoint (→ ui.main_window)
   cli.py            cloudet [project] [--cloud ...] | reduce | version
+  core/             Shared types, I/O, and spatial indexing
+    plane.py        Plane fit core (LSQ / RANSAC / robust iteration / residual stats)
+    plyio.py        PLY I/O (double precision, Open3D-free)
+    neighbors.py    Spatial indexing / display downsampling
+    array_backend.py  Optional CuPy GPU backend (auto fallback to NumPy)
   fit/              Face extraction and fitting
     picking.py      Click-driven region extraction (GUI-independent)
     mainplane.py    Main plane component extraction (connected components + QC)
@@ -37,6 +37,7 @@ cloudet/
     store.py        manifest / settings / group save
     groups.py       Group loading
     spatial_cache.py  VoxelHashGrid / display cache on disk
+    settings_apply.py  Settings apply classification (detection vs display)
   reduction/        Constructive geometry reduction
     session.py      Recipe-driven session → geometry.json
     ops.py          Shared op metadata (GUI ↔ recipe)
@@ -153,7 +154,8 @@ Supported construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
 (axis through a point along a plane normal), `line_from_two_points`,
 `midpoint_line_planes` (midpoint of the segment cut by two planes),
 `plane_from_plane_point`, `plane_from_line_point`, `plane_from_two_lines`,
-`rotate_plane_about_line` (rigid rotation about any axis; angle in degrees).
+`rotate_plane_about_line`, `rotate_point_about_line`, `rotate_line_about_line`
+(rigid rotation about any axis; angle in degrees, right-hand rule).
 
 #### `geometry.json` (export output)
 

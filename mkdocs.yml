@@ -1,0 +1,54 @@
+site_name: cloudet
+site_description: Detector positioning from 3D point clouds
+repo_url: https://github.com/yano404/cloudet
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: false
+            show_root_heading: true
+            members_order: source
+            docstring_style: numpy
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - User Guide:
+      - GUI Workflow: guide/gui.md
+      - Geometry Reduction: guide/reduction.md
+      - CLI Reference: guide/cli.md
+  - API Reference:
+      - cloudet.core: api/core.md
+      - cloudet.fit: api/fit.md
+      - cloudet.reduction: api/reduction.md
+      - cloudet.project: api/project.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
