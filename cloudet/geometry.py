@@ -33,6 +33,7 @@ __all__ = [
     "rotate_plane_about_line",
     "plane_patch_corners",
     "line_segment_points",
+    "axis_arrow_points",
     "distance_points",
     "distance_point_plane",
     "distance_point_line",
@@ -323,6 +324,13 @@ def line_segment_points(
         c = line.point + t * line.direction
     h = float(half_length_mm)
     return np.stack([c - h * line.direction, c + h * line.direction])
+
+
+def axis_arrow_points(line: Line, length_mm: float) -> np.ndarray:
+    """Return (2, 3) origin → ``+direction * length_mm`` (FRAME triad style)."""
+    origin = np.asarray(line.point, dtype=np.float64).reshape(3)
+    d = np.asarray(line.direction, dtype=np.float64).reshape(3)
+    return np.stack([origin, origin + float(length_mm) * d])
 
 
 def distance_points(a, b) -> float:

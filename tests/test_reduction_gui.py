@@ -16,6 +16,7 @@ if "pyvista" not in sys.modules:
     sys.modules["pyvista"] = MagicMock()
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QComboBox, QMainWindow
 
 from cloudet.frame import ALIGNED_AXIS_IDS
@@ -24,6 +25,7 @@ from cloudet.reduce import ReductionSession, export_reduction_result
 from cloudet.reduction_ops import MEASURE_MENU_ITEMS
 from cloudet.ui.app_common import AppCommonMixin
 from cloudet.ui.frame_mixin import FrameMixin
+from cloudet.ui.constants import RD_ALIGNED_AXIS
 from cloudet.ui.reduction_mixin import ReductionMixin
 
 
@@ -305,6 +307,7 @@ def test_aligned_axes_appear_at_tree_bottom_when_frame_set(gui):
     assert item.checkState(0) == Qt.Checked
     assert not (item.flags() & Qt.ItemIsEditable)
     assert item.flags() & Qt.ItemIsUserCheckable
+    assert item.foreground(1).color().name() == QColor(RD_ALIGNED_AXIS["aligned.x"]).name()
 
 
 def test_selecting_aligned_axis_does_not_enter_update_mode(gui):

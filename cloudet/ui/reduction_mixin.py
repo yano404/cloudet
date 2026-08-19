@@ -46,6 +46,7 @@ from cloudet.frame import (
     transform_record,
 )
 from cloudet.geometry import (
+    axis_arrow_points,
     line_segment_points,
     plane_patch_corners,
     project_point_to_line,
@@ -72,6 +73,7 @@ from cloudet.reduction_ops import (
     form_values_from_step,
 )
 from cloudet.ui.constants import (
+    RD_ALIGNED_AXIS,
     RD_AXIS,
     RD_GUI_TO_RECIPE_OP,
     RD_KIND_LABEL,
@@ -1917,7 +1919,7 @@ class ReductionMixin:
                 Qt.Checked if self._reduction.visible.get(eid, True) else Qt.Unchecked,
             )
             item.setForeground(0, muted)
-            item.setForeground(1, QColor(RD_AXIS))
+            item.setForeground(1, QColor(RD_ALIGNED_AXIS.get(eid, RD_AXIS)))
             item.setForeground(2, muted)
             item.setForeground(3, muted)
             for col in range(4):
@@ -2230,6 +2232,9 @@ class ReductionMixin:
         self._reduction_actor_names = []
 
     def _reduction_label_position(self, eid: str) -> np.ndarray:
+        if is_aligned_axis_id(eid):
+            line = self._reduction.line(eid)
+            return axis_arrow_points(line, self._reduction.overlay_mm(eid))[1]
         kind = self._reduction.kind_of(eid)
         anchor = self._reduction.anchors.get(eid)
         size = self._reduction.overlay_mm(eid)
@@ -2251,7 +2256,15 @@ class ReductionMixin:
 
     def _reduction_entity_actor_names(self, eid: str) -> list[str]:
         name = self._reduction_actor_name(eid)
-        want = {name, f"{name}_e", f"{name}_n", f"{name}_ring", f"{name}_cap0", f"{name}_cap1"}
+        want = {
+            name,
+            f"{name}_e",
+            f"{name}_n",
+            f"{name}_ring",
+            f"{name}_cap0",
+            f"{name}_cap1",
+            f"{name}_tip",
+        }
         return [n for n in self._reduction_actor_names if n in want]
 
     def _remove_reduction_entity_overlay(self, eid: str) -> None:
@@ -2260,6 +2273,69 @@ class ReductionMixin:
             self.plotter.remove_actor(n, render=False)
         drop = set(names)
         self._reduction_actor_names = [n for n in self._reduction_actor_names if n not in drop]
+
+    def _add_aligned_axis_overlay(self, eid: str, *, selected: bool) -> None:
+        """RGB arrow from FRAME origin along the view +X/+Y/+Z direction."""
+        line = self._reduction.line(eid)
+        length = max(self._reduction.overlay_mm(eid), 1.0)
+        origin, tip = axis_arrow_points(line, length)
+        origin_v = self._to_view_point(origin)
+        tip_v = self._to_view_point(tip)
+        d = tip_v - origin_v
+        n = float(np.linalg.norm(d))
+        if n < 1e-9:
+            return
+        d = d / n
+        tip_len = max(0.16 * n, 8.0)
+        if tip_len > 0.4 * n:
+            tip_len = 0.4 * n
+        shaft_end = tip_v - tip_len * d
+        diam = self._reduction.overlay_width_mm(eid)
+        if selected:
+            diam *= 1.35
+        color = RD_ALIGNED_AXIS.get(eid, RD_AXIS)
+        name = self._reduction_actor_name(eid)
+        self.plotter.add_mesh(
+            _line_tube_mesh(origin_v, shaft_end, diam),
+            name=name,
+            color=color,
+            reset_camera=False,
+            pickable=False,
+            render=False,
+        )
+        self._reduction_actor_names.append(name)
+        cone = pv.Cone(
+            center=(tip_v - 0.5 * tip_len * d).tolist(),
+            direction=d.tolist(),
+            height=float(tip_len),
+            radius=max(1.1 * diam, 0.4),
+            resolution=16,
+        )
+        tname = name + "_tip"
+        self.plotter.add_mesh(
+            cone,
+            name=tname,
+            color=color,
+            reset_camera=False,
+            pickable=False,
+            render=False,
+        )
+        self._reduction_actor_names.append(tname)
+        if selected:
+            cap = pv.Sphere(
+                radius=max(0.7 * diam, 0.5),
+                center=tip_v.tolist(),
+            )
+            cname = name + "_cap0"
+            self.plotter.add_mesh(
+                cap,
+                name=cname,
+                color=RD_SELECTED_RING,
+                reset_camera=False,
+                pickable=False,
+                render=False,
+            )
+            self._reduction_actor_names.append(cname)
 
     def _add_reduction_entity_overlay(self, eid: str, *, selected: bool) -> None:
         kind = self._reduction.kind_of(eid)
@@ -2322,6 +2398,9 @@ class ReductionMixin:
                 )
                 self._reduction_actor_names.append(nname)
             elif kind == "line":
+                if is_aligned_axis_id(eid):
+                    self._add_aligned_axis_overlay(eid, selected=selected)
+                    return
                 line = self._reduction.line(eid)
                 seg = line_segment_points(
                     line, half_length_mm=size, center=anchor

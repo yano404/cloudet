@@ -223,7 +223,8 @@ Open **Reduction** to construct geometry:
    picking still uses the original cloud. Once axis and origin are set, **aligned X/Y/Z**
    appear in line operand combos (rotate, line ∩ plane, …) and as thin
    **aligned X/Y/Z axis** rows at the bottom of Entities (visibility only;
-   rename/delete stay off).
+   rename/delete stay off). In 3D they are RGB arrows from the FRAME origin
+   (+X red, +Y green, +Z blue), not the red construct-line tubes.
 6. With **Also write aligned-frame coordinates** checked and FRAME **axis** and
    **origin** set, **Export geometry…** adds an `aligned` copy plus `frame` under
    survey numbers (Align Z is not required for export). `cloudet reduce` uses the
