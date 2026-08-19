@@ -6,8 +6,8 @@ import numpy as np
 
 from PySide6.QtWidgets import QComboBox
 
-from cloudet.frame import RigidFrame, transform_record, with_aligned_copy
-from cloudet.reduce import build_frame_spec
+from cloudet.reduction.frame import RigidFrame, transform_record, with_aligned_copy
+from cloudet.reduction import build_frame_spec
 from cloudet.ui.widgets import _reset_combo
 
 

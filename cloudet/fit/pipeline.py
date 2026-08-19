@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from cloudet.array_backend import get_context
-from cloudet.plane import Plane
+from cloudet.core.array_backend import get_context
+from cloudet.core.plane import Plane
 
 __all__ = ["residual_uv_map"]
 

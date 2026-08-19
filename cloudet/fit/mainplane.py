@@ -25,8 +25,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from cloudet.array_backend import DevicePoints, get_context
-from cloudet.plane import FitResult, Plane, robust_fit_plane, run_ransac
+from cloudet.core.array_backend import DevicePoints, get_context
+from cloudet.core.plane import FitResult, Plane, robust_fit_plane, run_ransac
 
 __all__ = ["MainPlaneParams", "MainPlaneResult", "extract_main_plane"]
 

@@ -7,7 +7,7 @@ point noise sigma = 0.03 mm, patch sizes of order 100 mm.
 import numpy as np
 import pytest
 
-from cloudet.plane import (
+from cloudet.core.plane import (
     Plane,
     fit_plane_lsq,
     mad_sigma,

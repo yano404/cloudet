@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cloudet.reduction_ops import GUI_TO_RECIPE_OP, RECIPE_TO_GUI_OP
+from cloudet.reduction.ops import GUI_TO_RECIPE_OP, RECIPE_TO_GUI_OP
 
 GROUP_COLORS = [
     (0.90, 0.25, 0.25), (0.25, 0.55, 0.95), (0.20, 0.75, 0.35),

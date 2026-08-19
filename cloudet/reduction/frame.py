@@ -14,8 +14,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cloudet.geometry import Line
-from cloudet.plane import Plane
+from cloudet.reduction.geometry import Line
+from cloudet.core.plane import Plane
 
 __all__ = [
     "ALIGNED_AXIS_IDS",
@@ -338,7 +338,7 @@ def result_in_frame(result, frame: RigidFrame):
 
     Recipe echo stays in survey coordinates. ``result.frame`` describes the pose.
     """
-    from cloudet.reduce import ReductionResult
+    from cloudet.reduction.session import ReductionResult
 
     out = ReductionResult(
         recipe=copy.deepcopy(result.recipe),
@@ -358,7 +358,7 @@ def result_in_frame(result, frame: RigidFrame):
 
 def with_aligned_copy(result, frame: RigidFrame):
     """Keep survey geometry and attach an ``aligned`` copy plus ``frame`` pose."""
-    from cloudet.reduce import ReductionResult
+    from cloudet.reduction.session import ReductionResult
 
     aligned = result_in_frame(result, frame)
     return ReductionResult(

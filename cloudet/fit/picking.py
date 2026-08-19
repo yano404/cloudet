@@ -25,9 +25,9 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from cloudet.array_backend import DevicePoints, get_context
-from cloudet.mainplane import _inplane_basis, _label_components
-from cloudet.plane import Plane, fit_plane_lsq, run_ransac
+from cloudet.core.array_backend import DevicePoints, get_context
+from cloudet.fit.mainplane import _inplane_basis, _label_components
+from cloudet.core.plane import Plane, fit_plane_lsq, run_ransac
 
 __all__ = ["PickParams", "pick_plane_region"]
 

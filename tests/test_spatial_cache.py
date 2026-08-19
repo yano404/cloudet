@@ -5,8 +5,8 @@ from pathlib import Path
 
 import numpy as np
 
-from cloudet.plyio import write_ply_xyz
-from cloudet.spatial_cache import (
+from cloudet.core.plyio import write_ply_xyz
+from cloudet.project.spatial_cache import (
     display_cache_path,
     grid_cache_path,
     load_display_xyz,
@@ -15,7 +15,7 @@ from cloudet.spatial_cache import (
     save_voxel_grid,
     source_fingerprint,
 )
-from cloudet.neighbors import VoxelHashGrid, display_xyz
+from cloudet.core.neighbors import VoxelHashGrid, display_xyz
 
 
 def _write_cloud(tmp_path: Path, pts: np.ndarray) -> Path:

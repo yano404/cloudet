@@ -5,8 +5,8 @@ import json
 import numpy as np
 import pytest
 
-from cloudet.groups import load_groups
-from cloudet.picking import PickParams, pick_plane_region
+from cloudet.project.groups import load_groups
+from cloudet.fit.picking import PickParams, pick_plane_region
 from cloudet.project import (
     PickerSettings,
     SourceInfo,
@@ -106,8 +106,8 @@ def test_max_inplane_radius_limits_extent():
 
 def test_progressive_refine_recovers_from_tilted_seed():
     """A mildly tilted local neighbourhood should not diagonal-cut a large face."""
-    from cloudet.picking import _progressive_refine_plane
-    from cloudet.plane import Plane
+    from cloudet.fit.picking import _progressive_refine_plane
+    from cloudet.core.plane import Plane
 
     rng = np.random.default_rng(5)
     n = 60_000
@@ -199,8 +199,8 @@ def test_corner_click_covers_whole_face_without_diagonal_cut():
 @pytest.mark.parametrize("tilt_deg", [2.0, 10.0, 20.0])
 def test_accumulate_refit_recovers_whole_face_from_tilted_seed(tilt_deg):
     """One pass with a tilted seed yields a band; refitting recovers the face."""
-    from cloudet.picking import _accumulate_with_refit, _select_candidates
-    from cloudet.plane import Plane
+    from cloudet.fit.picking import _accumulate_with_refit, _select_candidates
+    from cloudet.core.plane import Plane
 
     rng = np.random.default_rng(7)
     n_face = 300_000

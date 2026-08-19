@@ -19,9 +19,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QComboBox, QDoubleSpinBox, QMainWindow
 
-from cloudet.plane import Plane
-from cloudet.reduce import ReductionSession, export_reduction_result
-from cloudet.reduction_ops import GUI_PAGE_INDEX, MEASURE_MENU_ITEMS, REDUCTION_OPS
+from cloudet.core.plane import Plane
+from cloudet.reduction import ReductionSession, export_reduction_result
+from cloudet.reduction.ops import GUI_PAGE_INDEX, MEASURE_MENU_ITEMS, REDUCTION_OPS
 from cloudet.ui.app_common import AppCommonMixin
 from cloudet.ui.frame_mixin import FrameMixin
 from cloudet.ui.constants import RD_ALIGNED

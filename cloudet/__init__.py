@@ -3,7 +3,7 @@
 Units are millimetres throughout (FARO export convention).
 """
 
-from cloudet.plane import (
+from cloudet.core.plane import (
     Plane,
     FitResult,
     fit_plane_lsq,
@@ -12,7 +12,7 @@ from cloudet.plane import (
     residual_stats,
     mad_sigma,
 )
-from cloudet.plyio import read_ply_xyz, write_ply_xyz
+from cloudet.core.plyio import read_ply_xyz, write_ply_xyz
 
 __all__ = [
     "Plane",

@@ -10,7 +10,7 @@ import math
 from dataclasses import dataclass, fields
 from typing import Any
 
-from cloudet.picking import PickParams
+from cloudet.fit.picking import PickParams
 from cloudet.project import ViewSettings
 
 __all__ = ["ApplySideEffects", "classify_settings_apply", "values_equal"]

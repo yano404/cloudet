@@ -2,9 +2,9 @@
 
 from dataclasses import replace
 
-from cloudet.picking import PickParams
+from cloudet.fit.picking import PickParams
 from cloudet.project import ViewSettings
-from cloudet.settings_apply import classify_settings_apply
+from cloudet.project.settings_apply import classify_settings_apply
 
 
 def test_float_noise_does_not_count_as_view_change():

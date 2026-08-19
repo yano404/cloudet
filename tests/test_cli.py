@@ -8,8 +8,8 @@ import numpy as np
 
 import cloudet
 from cloudet.cli import build_app_parser, build_reduce_parser, main
-from cloudet.picking import PickParams
-from cloudet.plane import Plane
+from cloudet.fit.picking import PickParams
+from cloudet.core.plane import Plane
 from cloudet.project import SourceInfo, save_group, write_manifest
 
 

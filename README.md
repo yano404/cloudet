@@ -21,19 +21,27 @@ Tool for reducing detector positions and relative geometry from 3D point clouds 
 
 ```
 cloudet/
-  plane.py      Plane fit core (LSQ / RANSAC / robust iteration / residual stats)
-  mainplane.py  Main plane component extraction (connected components + QC gates)
-  picking.py    Click-driven region extraction (GUI-independent)
-  plyio.py      PLY I/O (double precision, Open3D-free)
-  groups.py     Group loading
-  project.py    Project directory I/O (manifest / settings / group save)
+  plane.py          Plane fit core (LSQ / RANSAC / robust iteration / residual stats)
+  plyio.py          PLY I/O (double precision, Open3D-free)
+  neighbors.py      Spatial indexing / display downsampling
   array_backend.py  Optional CuPy GPU backend (auto fallback to NumPy)
-  geometry.py   Constructive ops (offset plane, intersections)
-  frame.py      Display-only Align Z pose (axis → +Z, optional line → XY)
-  reduce.py     Recipe-driven reduction → geometry.json for analysis
-  pipeline.py   Residual u–v maps (for GUI QC)
-  app_window.py Preferred Qt app window entrypoint
-  picker_qt.py  Legacy re-exports (use app_window or ui.main_window)
+  settings_apply.py Settings apply classification (detection vs display)
+  app_window.py     Qt app entrypoint (→ ui.main_window)
+  cli.py            cloudet [project] [--cloud ...] | reduce | version
+  fit/              Face extraction and fitting
+    picking.py      Click-driven region extraction (GUI-independent)
+    mainplane.py    Main plane component extraction (connected components + QC)
+    multiplane.py   Optional multi-plane separation per group
+    pipeline.py     Residual u–v maps (for GUI QC)
+  project/          Saved project layout
+    store.py        manifest / settings / group save
+    groups.py       Group loading
+    spatial_cache.py  VoxelHashGrid / display cache on disk
+  reduction/        Constructive geometry reduction
+    session.py      Recipe-driven session → geometry.json
+    ops.py          Shared op metadata (GUI ↔ recipe)
+    geometry.py     Offset planes, intersections, rotations
+    frame.py        Display-only Align Z pose (axis → +Z, optional yaw)
   ui/
     main_window.py    CloudetAppWindow + run_picker_qt
     groups_mixin.py   Groups / Settings dock, pick, fit, tree
@@ -42,9 +50,7 @@ cloudet/
     render_mixin.py   3D actor rendering
     frame_mixin.py    Align Z view frame
     widgets.py        Shared Qt styling and helpers
-  reduction_ops.py  Shared reduction op metadata (GUI ↔ recipe)
-  cli.py        cloudet [project] [--cloud ...] | reduce | version
-tests/          Synthetic validation (FARO-like σ ≈ 0.03 mm)
+tests/              Synthetic validation (FARO-like σ ≈ 0.03 mm)
 ```
 
 ## Usage

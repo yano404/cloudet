@@ -22,11 +22,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from cloudet.array_backend import resolve_compute_backend
-from cloudet.mainplane import MainPlaneParams, extract_main_plane
-from cloudet.multiplane import _bimodality_flag
-from cloudet.pipeline import residual_uv_map
-from cloudet.plane import Plane, mad_sigma
+from cloudet.core.array_backend import resolve_compute_backend
+from cloudet.fit.mainplane import MainPlaneParams, extract_main_plane
+from cloudet.fit.multiplane import _bimodality_flag
+from cloudet.fit.pipeline import residual_uv_map
+from cloudet.core.plane import Plane, mad_sigma
 from cloudet.ui.constants import FIT_MAX_THRESHOLD_MM
 from cloudet.ui.plane_labels import _plane_id_token, _plane_label
 from cloudet.ui.uv_plot import _UVSelectViewBox, _rdbu_r_colormap

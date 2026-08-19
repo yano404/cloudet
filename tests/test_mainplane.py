@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from cloudet.mainplane import MainPlaneParams, _label_components, extract_main_plane
-from cloudet.plane import Plane
+from cloudet.fit.mainplane import MainPlaneParams, _label_components, extract_main_plane
+from cloudet.core.plane import Plane
 
 
 def _label_components_reference(occupied):

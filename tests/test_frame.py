@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from cloudet.frame import (
+from cloudet.reduction.frame import (
     RigidFrame,
     aligned_axis_line,
     aligned_origin_point,
@@ -13,9 +13,9 @@ from cloudet.frame import (
     transform_record,
     with_aligned_copy,
 )
-from cloudet.geometry import Line
-from cloudet.plane import Plane
-from cloudet.reduce import ReductionSession
+from cloudet.reduction.geometry import Line
+from cloudet.core.plane import Plane
+from cloudet.reduction import ReductionSession
 
 
 def test_rotation_x_axis_to_z():

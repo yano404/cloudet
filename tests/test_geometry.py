@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from cloudet.geometry import (
+from cloudet.reduction.geometry import (
     Line,
     angle_line_plane_deg,
     angle_lines_deg,
@@ -28,7 +28,7 @@ from cloudet.geometry import (
     project_point_to_plane,
     rotate_plane_about_line,
 )
-from cloudet.plane import Plane
+from cloudet.core.plane import Plane
 
 
 def test_offset_plane_moves_along_normal():
@@ -188,7 +188,7 @@ def test_midpoint_line_planes():
 
 
 def test_plane_patch_and_line_segment_helpers():
-    from cloudet.geometry import line_segment_points, plane_patch_corners
+    from cloudet.reduction.geometry import line_segment_points, plane_patch_corners
 
     p = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
     corners = plane_patch_corners(p, center=np.array([10.0, 20.0, 5.0]), size_mm=100.0)
