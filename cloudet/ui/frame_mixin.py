@@ -48,7 +48,7 @@ class FrameMixin:
             self.rd_frame_yaw_ref,
             kind=kind,
             keep=keep,
-            include_aligned_axes=False,
+            include_aligned=False,
         )
 
     def _on_frame_yaw_kind_changed(self, *_args) -> None:

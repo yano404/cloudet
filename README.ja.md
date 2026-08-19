@@ -145,13 +145,19 @@ cloudet reduce <project> --recipe recipe.json -o geometry.json
 FRAME の **Axis** と **Origin** を設定してください（Export に Align Z は不要）。
 GUI は同じフォルダに `geometry_recipe.json` も書きます。
 
-#### aligned 軸オペランド（`aligned.x` / `aligned.y` / `aligned.z`）
+#### aligned triad オペランド（原点 / 軸 / 平面）
 
-`recipe.frame` で `axis` と `origin` を設定すると、construct の line 引数に
-仮想 id `aligned.x`, `aligned.y`, `aligned.z` が使えます。Align Z 後の
-ビュー triad（+X / +Y / +Z）方向の、原点を通る直線です。GUI では FRAME の
-Axis/Origin 選択後に line コンボに出ますが、独立 entity ではないため
-`geometry.json` には行として出ません。例:
+`recipe.frame` で `axis` と `origin` を設定すると、construct から次の仮想 id が
+使えます（`_store` には入らず、`geometry.json` にも行として出ません）:
+
+| id | 種類 | 幾何 |
+|----|------|------|
+| `aligned.origin` | 点 | FRAME 原点 |
+| `aligned.x` / `aligned.y` / `aligned.z` | 直線 | 原点を通る +X / +Y / +Z |
+| `aligned.yz` / `aligned.zx` / `aligned.xy` | 平面 | 原点を通り、法線が +X / +Y / +Z |
+
+GUI では FRAME の Axis/Origin 選択後に、種類に合うコンボへ出ます。FRAME の
+axis / origin / yaw には使えません。例:
 
 ```json
 {
@@ -163,6 +169,12 @@ Axis/Origin 選択後に line コンボに出ますが、独立 entity ではな
       "plane": "target",
       "line": "aligned.x",
       "angle_deg": 90.0
+    },
+    {
+      "id": "above_xy",
+      "op": "offset",
+      "of": "aligned.xy",
+      "distance_mm": 10.0
     }
   ]
 }
@@ -194,9 +206,10 @@ GUI は Load recipe / Load All でその選択を復元しますが、**Align Z 
    任意の **XY** で、**直線**または**平面法線**（水平成分のみ）を ±X / ±Y に
    載せます。XY を空にすれば最小回転のままです。**Survey** で測量座標の表示に戻します。
    Groups・レシピの構築結果・Fit は測量のままです。pick も元の点群から行います。
-   Axis/Origin 設定後は line オペランド（回転、line ∩ plane など）と
-   Entities 最下部に **aligned X/Y/Z axis** が出ます（表示切替のみ。rename/delete 不可）。
-   3D では FRAME 原点からの RGB 矢印（+X 赤 / +Y 緑 / +Z 青）です。
+   Axis/Origin 設定後は、対応するオペランドと Entities 最下部に
+   **aligned origin** / **X/Y/Z axis** / **YZ/ZX/XY plane** が出ます
+   （表示切替のみ。rename/delete 不可）。3D では原点が球、軸が RGB 矢印
+   （+X 赤 / +Y 緑 / +Z 青）、平面が同色のパッチです。
 6. **Also write aligned-frame coordinates** ON かつ FRAME の **Axis/Origin** 設定後、
    **Export geometry…** で測量座標に加え `aligned` と `frame` を書けます（Export に
    Align Z は不要）。`cloudet reduce` もレシピに `frame` があれば同じです。

@@ -5,7 +5,10 @@ from __future__ import annotations
 import pytest
 
 from cloudet.reduction_ops import (
+    GUI_BIND_PAGE_INDEX,
+    GUI_PAGE_INDEX,
     REDUCTION_OP_BY_GUI,
+    REDUCTION_OPS,
     build_construct_step,
     form_values_from_step,
 )
@@ -88,3 +91,13 @@ def test_build_construct_step_intersect_normal_plane():
     assert gui_key == "intersect_normal_plane"
     assert operands == {"rd_np_src": "wall", "rd_np_dst": "target"}
     assert scalars == {}
+
+
+def test_page_index_follows_tuple_order():
+    assert GUI_PAGE_INDEX["bind"] == GUI_BIND_PAGE_INDEX == 0
+    for i, op in enumerate(REDUCTION_OPS, start=1):
+        assert GUI_PAGE_INDEX[op.gui_key] == i
+        assert op.operands
+        for field in op.operands:
+            assert field.label
+            assert field.widget.startswith("rd_")

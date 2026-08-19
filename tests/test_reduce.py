@@ -1108,12 +1108,82 @@ def test_apply_recipe_construct_can_use_aligned_axis(tmp_path):
     assert np.allclose(np.abs(sess.plane("tilted").normal), [0.0, 1.0, 0.0], atol=1e-9)
 
 
-def test_reserved_aligned_axis_id_rejected(tmp_path):
+def test_reserved_aligned_ids_rejected(tmp_path):
     from cloudet.reduce import ReductionSession
 
     sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=_make_project(tmp_path))
-    with pytest.raises(ValueError, match="reserved"):
-        sess.offset("aligned.x", "target", 1.0)
+    for eid in ("aligned.x", "aligned.origin", "aligned.xy"):
+        with pytest.raises(ValueError, match="reserved"):
+            sess.offset(eid, "target", 1.0)
+
+
+def test_construct_uses_aligned_origin_and_planes(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    project = _make_project(tmp_path)
+    sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
+    sess.frame_spec = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    origin = sess.point("aligned.origin")
+    assert np.allclose(origin, sess.point("beam_on_target"))
+    xy = sess.plane("aligned.xy")
+    yz = sess.plane("aligned.yz")
+    zx = sess.plane("aligned.zx")
+    assert np.allclose(xy.normal, [0.0, 0.0, 1.0])
+    assert np.allclose(yz.normal, [1.0, 0.0, 0.0])
+    assert np.allclose(zx.normal, [0.0, 1.0, 0.0])
+    assert abs(xy.signed_distances(origin.reshape(1, 3))[0]) < 1e-12
+    sess.offset("above_xy", "aligned.xy", 10.0)
+    assert np.allclose(sess.plane("above_xy").normal, [0.0, 0.0, 1.0])
+    sess.line_from_point_normal("from_origin", "aligned.origin", "target")
+    line = sess.line("from_origin")
+    assert np.allclose(line.point, origin)
+    assert np.allclose(np.abs(line.direction), [0.0, 0.0, 1.0])
+    sess.intersect_line_plane("on_xy", "beam_axis", "aligned.xy")
+    assert np.allclose(sess.point("on_xy"), origin)
+
+
+def test_apply_recipe_construct_can_use_aligned_plane(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["frame"] = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    recipe["construct"].append(
+        {
+            "id": "above_xy",
+            "op": "offset",
+            "of": "aligned.xy",
+            "distance_mm": 10.0,
+        }
+    )
+    sess = ReductionSession.from_recipe(recipe, project_dir=_make_project(tmp_path))
+    assert np.allclose(sess.plane("above_xy").normal, [0.0, 0.0, 1.0])
+    origin = sess.point("aligned.origin")
+    d = abs(sess.plane("above_xy").signed_distances(origin.reshape(1, 3))[0])
+    assert d == pytest.approx(10.0)
+
+
+def test_remove_frame_axis_drops_aligned_plane_dependents(tmp_path):
+    from cloudet.reduce import ReductionSession
+
+    sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=_make_project(tmp_path))
+    sess.frame_spec = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    sess.offset("above_xy", "aligned.xy", 10.0)
+    removed = sess.remove("beam_axis")
+    assert "above_xy" in removed
+    assert "above_xy" not in sess.ids()
+    assert sess.frame_spec is None
 
 
 def test_remove_frame_axis_drops_aligned_axis_dependents(tmp_path):
