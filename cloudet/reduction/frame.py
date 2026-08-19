@@ -14,16 +14,26 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cloudet.geometry import Line
-from cloudet.plane import Plane
+from cloudet.reduction.geometry import Line
+from cloudet.core.plane import Plane
 
 __all__ = [
     "ALIGNED_AXIS_IDS",
     "ALIGNED_AXIS_LABELS",
+    "ALIGNED_ENTITY_IDS",
+    "ALIGNED_KIND",
+    "ALIGNED_LABELS",
+    "ALIGNED_ORIGIN_ID",
+    "ALIGNED_PLANE_IDS",
     "RigidFrame",
     "YAW_TO",
     "aligned_axis_line",
+    "aligned_origin_point",
+    "aligned_plane",
     "is_aligned_axis_id",
+    "is_aligned_id",
+    "is_aligned_origin_id",
+    "is_aligned_plane_id",
     "result_in_frame",
     "rotation_mapping_to_z",
     "rotation_yaw_about_z",
@@ -33,17 +43,54 @@ __all__ = [
 
 _ALIGN_EPS = 1e-12
 YAW_TO = ("x", "-x", "y", "-y")
+ALIGNED_ORIGIN_ID = "aligned.origin"
 ALIGNED_AXIS_IDS = ("aligned.x", "aligned.y", "aligned.z")
+ALIGNED_PLANE_IDS = ("aligned.yz", "aligned.zx", "aligned.xy")
+ALIGNED_ENTITY_IDS = (ALIGNED_ORIGIN_ID,) + ALIGNED_AXIS_IDS + ALIGNED_PLANE_IDS
 ALIGNED_AXIS_LABELS = {
     "aligned.x": "aligned X axis",
     "aligned.y": "aligned Y axis",
     "aligned.z": "aligned Z axis",
 }
+ALIGNED_LABELS = {
+    ALIGNED_ORIGIN_ID: "aligned origin",
+    **ALIGNED_AXIS_LABELS,
+    "aligned.yz": "aligned YZ plane",
+    "aligned.zx": "aligned ZX plane",
+    "aligned.xy": "aligned XY plane",
+}
+ALIGNED_KIND = {
+    ALIGNED_ORIGIN_ID: "point",
+    "aligned.x": "line",
+    "aligned.y": "line",
+    "aligned.z": "line",
+    "aligned.yz": "plane",
+    "aligned.zx": "plane",
+    "aligned.xy": "plane",
+}
 _ALIGNED_AXIS_INDEX = {"aligned.x": 0, "aligned.y": 1, "aligned.z": 2}
+_ALIGNED_PLANE_NORMAL_INDEX = {"aligned.yz": 0, "aligned.zx": 1, "aligned.xy": 2}
+
+
+def is_aligned_id(entity_id: str) -> bool:
+    return str(entity_id) in ALIGNED_KIND
 
 
 def is_aligned_axis_id(entity_id: str) -> bool:
     return str(entity_id) in _ALIGNED_AXIS_INDEX
+
+
+def is_aligned_plane_id(entity_id: str) -> bool:
+    return str(entity_id) in _ALIGNED_PLANE_NORMAL_INDEX
+
+
+def is_aligned_origin_id(entity_id: str) -> bool:
+    return str(entity_id) == ALIGNED_ORIGIN_ID
+
+
+def aligned_origin_point(frame: "RigidFrame") -> np.ndarray:
+    """FRAME origin in survey coordinates."""
+    return np.asarray(frame.origin, dtype=np.float64).reshape(3).copy()
 
 
 def aligned_axis_line(frame: "RigidFrame", axis_id: str) -> Line:
@@ -57,6 +104,24 @@ def aligned_axis_line(frame: "RigidFrame", axis_id: str) -> Line:
         raise KeyError(f"unknown aligned axis {axis_id!r}")
     direction = np.asarray(frame.rotation[_ALIGNED_AXIS_INDEX[key]], dtype=np.float64)
     return Line.from_point_direction(frame.origin, direction, fix_sign=False)
+
+
+def aligned_plane(frame: "RigidFrame", plane_id: str) -> Plane:
+    """Survey-frame coordinate plane through the FRAME origin.
+
+    ``aligned.xy`` has normal +Z, ``aligned.yz`` normal +X, ``aligned.zx``
+    normal +Y (view-triad signs).
+    """
+    key = str(plane_id)
+    if key not in _ALIGNED_PLANE_NORMAL_INDEX:
+        raise KeyError(f"unknown aligned plane {plane_id!r}")
+    normal = np.asarray(
+        frame.rotation[_ALIGNED_PLANE_NORMAL_INDEX[key]], dtype=np.float64
+    )
+    origin = np.asarray(frame.origin, dtype=np.float64).reshape(3)
+    return Plane(normal, -float(normal @ origin))
+
+
 _YAW_XY = {
     "x": np.array([1.0, 0.0], dtype=np.float64),
     "-x": np.array([-1.0, 0.0], dtype=np.float64),
@@ -273,7 +338,7 @@ def result_in_frame(result, frame: RigidFrame):
 
     Recipe echo stays in survey coordinates. ``result.frame`` describes the pose.
     """
-    from cloudet.reduce import ReductionResult
+    from cloudet.reduction.session import ReductionResult
 
     out = ReductionResult(
         recipe=copy.deepcopy(result.recipe),
@@ -293,7 +358,7 @@ def result_in_frame(result, frame: RigidFrame):
 
 def with_aligned_copy(result, frame: RigidFrame):
     """Keep survey geometry and attach an ``aligned`` copy plus ``frame`` pose."""
-    from cloudet.reduce import ReductionResult
+    from cloudet.reduction.session import ReductionResult
 
     aligned = result_in_frame(result, frame)
     return ReductionResult(

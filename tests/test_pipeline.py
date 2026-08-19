@@ -2,8 +2,8 @@
 
 import numpy as np
 
-from cloudet.pipeline import residual_uv_map
-from cloudet.plane import Plane
+from cloudet.fit.pipeline import residual_uv_map
+from cloudet.core.plane import Plane
 
 SIGMA = 0.03
 

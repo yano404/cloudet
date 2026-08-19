@@ -21,19 +21,27 @@ Tool for reducing detector positions and relative geometry from 3D point clouds 
 
 ```
 cloudet/
-  plane.py      Plane fit core (LSQ / RANSAC / robust iteration / residual stats)
-  mainplane.py  Main plane component extraction (connected components + QC gates)
-  picking.py    Click-driven region extraction (GUI-independent)
-  plyio.py      PLY I/O (double precision, Open3D-free)
-  groups.py     Group loading
-  project.py    Project directory I/O (manifest / settings / group save)
+  plane.py          Plane fit core (LSQ / RANSAC / robust iteration / residual stats)
+  plyio.py          PLY I/O (double precision, Open3D-free)
+  neighbors.py      Spatial indexing / display downsampling
   array_backend.py  Optional CuPy GPU backend (auto fallback to NumPy)
-  geometry.py   Constructive ops (offset plane, intersections)
-  frame.py      Display-only Align Z pose (axis → +Z, optional line → XY)
-  reduce.py     Recipe-driven reduction → geometry.json for analysis
-  pipeline.py   Residual u–v maps (for GUI QC)
-  app_window.py Preferred Qt app window entrypoint
-  picker_qt.py  Legacy re-exports (use app_window or ui.main_window)
+  settings_apply.py Settings apply classification (detection vs display)
+  app_window.py     Qt app entrypoint (→ ui.main_window)
+  cli.py            cloudet [project] [--cloud ...] | reduce | version
+  fit/              Face extraction and fitting
+    picking.py      Click-driven region extraction (GUI-independent)
+    mainplane.py    Main plane component extraction (connected components + QC)
+    multiplane.py   Optional multi-plane separation per group
+    pipeline.py     Residual u–v maps (for GUI QC)
+  project/          Saved project layout
+    store.py        manifest / settings / group save
+    groups.py       Group loading
+    spatial_cache.py  VoxelHashGrid / display cache on disk
+  reduction/        Constructive geometry reduction
+    session.py      Recipe-driven session → geometry.json
+    ops.py          Shared op metadata (GUI ↔ recipe)
+    geometry.py     Offset planes, intersections, rotations
+    frame.py        Display-only Align Z pose (axis → +Z, optional yaw)
   ui/
     main_window.py    CloudetAppWindow + run_picker_qt
     groups_mixin.py   Groups / Settings dock, pick, fit, tree
@@ -42,9 +50,7 @@ cloudet/
     render_mixin.py   3D actor rendering
     frame_mixin.py    Align Z view frame
     widgets.py        Shared Qt styling and helpers
-  reduction_ops.py  Shared reduction op metadata (GUI ↔ recipe)
-  cli.py        cloudet [project] [--cloud ...] | reduce | version
-tests/          Synthetic validation (FARO-like σ ≈ 0.03 mm)
+tests/              Synthetic validation (FARO-like σ ≈ 0.03 mm)
 ```
 
 ## Usage
@@ -169,14 +175,20 @@ has `frame`. In the GUI, check **Also write aligned-frame coordinates** and
 set FRAME **axis** and **origin** (Align Z is not required for export).
 The GUI also writes a sibling `geometry_recipe.json` for replay.
 
-#### Aligned axis operands (`aligned.x` / `aligned.y` / `aligned.z`)
+#### Aligned triad operands (`aligned.origin` / axes / planes)
 
 When `recipe.frame` sets `axis` and `origin`, construct steps may reference
-virtual line ids `aligned.x`, `aligned.y`, `aligned.z` as operands. They are
-lines through the frame origin along the view triad (+X / +Y / +Z in survey
-space after Align Z). They appear in GUI **line** combos once FRAME axis and
-origin are chosen; they are **not** stored as separate entities and do not
-appear in `geometry.json` as their own rows. Example:
+virtual ids that follow the view triad (not stored in `_store`, not exported as
+their own `geometry.json` rows):
+
+| id | kind | geometry |
+|----|------|----------|
+| `aligned.origin` | point | FRAME origin |
+| `aligned.x` / `aligned.y` / `aligned.z` | line | through the origin along +X / +Y / +Z |
+| `aligned.yz` / `aligned.zx` / `aligned.xy` | plane | through the origin, normals +X / +Y / +Z |
+
+They appear in GUI combos of the matching kind once FRAME axis and origin are
+chosen. They must **not** be used as FRAME axis / origin / yaw. Example:
 
 ```json
 {
@@ -188,6 +200,12 @@ appear in `geometry.json` as their own rows. Example:
       "plane": "target",
       "line": "aligned.x",
       "angle_deg": 90.0
+    },
+    {
+      "id": "above_xy",
+      "op": "offset",
+      "of": "aligned.xy",
+      "distance_mm": 10.0
     }
   ]
 }
@@ -220,11 +238,12 @@ Open **Reduction** to construct geometry:
    the origin at `(0, 0, 0)`. Optional **XY**: map a **line** or **plane
    normal** (horizontal component only) onto ±X or ±Y. Omit XY for the smallest
    rotation only. **Survey** returns the view to survey coordinates. Groups, recipe constructs, and Fit stay in survey;
-   picking still uses the original cloud. Once axis and origin are set, **aligned X/Y/Z**
-   appear in line operand combos (rotate, line ∩ plane, …) and as thin
-   **aligned X/Y/Z axis** rows at the bottom of Entities (visibility only;
-   rename/delete stay off). In 3D they are RGB arrows from the FRAME origin
-   (+X red, +Y green, +Z blue), not the red construct-line tubes.
+   picking still uses the original cloud. Once axis and origin are set, the
+   **aligned origin**, **X/Y/Z axes**, and **YZ/ZX/XY planes** appear in the
+   matching operand combos and as italic rows at the bottom of Entities
+   (visibility only; rename/delete stay off). In 3D the axes are RGB arrows
+   from the FRAME origin (+X red, +Y green, +Z blue); the origin is a sphere;
+   the planes are RGB-tinted patches (YZ red, ZX green, XY blue).
 6. With **Also write aligned-frame coordinates** checked and FRAME **axis** and
    **origin** set, **Export geometry…** adds an `aligned` copy plus `frame` under
    survey numbers (Align Z is not required for export). `cloudet reduce` uses the

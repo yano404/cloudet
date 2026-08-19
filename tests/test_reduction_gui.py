@@ -17,15 +17,14 @@ if "pyvista" not in sys.modules:
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QComboBox, QMainWindow
+from PySide6.QtWidgets import QApplication, QComboBox, QDoubleSpinBox, QMainWindow
 
-from cloudet.frame import ALIGNED_AXIS_IDS
-from cloudet.plane import Plane
-from cloudet.reduce import ReductionSession, export_reduction_result
-from cloudet.reduction_ops import MEASURE_MENU_ITEMS
+from cloudet.core.plane import Plane
+from cloudet.reduction import ReductionSession, export_reduction_result
+from cloudet.reduction.ops import GUI_PAGE_INDEX, MEASURE_MENU_ITEMS, REDUCTION_OPS
 from cloudet.ui.app_common import AppCommonMixin
 from cloudet.ui.frame_mixin import FrameMixin
-from cloudet.ui.constants import RD_ALIGNED_AXIS
+from cloudet.ui.constants import RD_ALIGNED
 from cloudet.ui.reduction_mixin import ReductionMixin
 
 
@@ -154,6 +153,23 @@ def test_line_combo_includes_aligned_axes_when_frame_set(gui):
     assert "aligned.z" in ids
 
 
+def test_plane_and_point_combos_include_aligned_when_frame_set(gui):
+    gui._reduction.frame_spec = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    gui._reduction_fill_combo(gui.rd_rot_plane, kind="plane")
+    plane_ids = _combo_data_ids(gui.rd_rot_plane)
+    assert "aligned.xy" in plane_ids
+    assert "aligned.yz" in plane_ids
+    assert "aligned.zx" in plane_ids
+    combo = QComboBox()
+    gui._reduction_fill_combo(combo, kind="point")
+    point_ids = _combo_data_ids(combo)
+    assert "aligned.origin" in point_ids
+
+
 def test_frame_axis_combo_omits_aligned_axes(gui):
     gui._reduction.frame_spec = {
         "axis": "beam_axis",
@@ -161,10 +177,20 @@ def test_frame_axis_combo_omits_aligned_axes(gui):
         "flip_z": False,
     }
     gui._reduction_fill_combo(
-        gui.rd_frame_axis, kind="line", include_aligned_axes=False
+        gui.rd_frame_axis, kind="line", include_aligned=False
     )
     ids = {x for x in _combo_data_ids(gui.rd_frame_axis) if x}
-    assert not ids.intersection(set(ALIGNED_AXIS_IDS))
+    assert not ids.intersection({"aligned.x", "aligned.y", "aligned.z"})
+    gui._reduction_fill_combo(
+        gui.rd_frame_origin, kind="point", include_aligned=False
+    )
+    origin_ids = {x for x in _combo_data_ids(gui.rd_frame_origin) if x}
+    assert "aligned.origin" not in origin_ids
+    gui._reduction_fill_combo(
+        gui.rd_frame_yaw_ref, kind="plane", include_aligned=False
+    )
+    yaw_ids = {x for x in _combo_data_ids(gui.rd_frame_yaw_ref) if x}
+    assert not yaw_ids.intersection({"aligned.xy", "aligned.yz", "aligned.zx"})
 
 
 def test_update_mode_operand_allowlist(gui):
@@ -288,10 +314,11 @@ def test_aligned_axes_absent_from_tree_without_frame(gui):
     gui._refresh_reduction_tree()
     ids = _tree_ids(gui)
     assert "aligned.x" not in ids
-    assert gui._reduction_aligned_axis_ids() == []
+    assert "aligned.origin" not in ids
+    assert gui._reduction_aligned_entity_ids() == []
 
 
-def test_aligned_axes_appear_at_tree_bottom_when_frame_set(gui):
+def test_aligned_entities_appear_at_tree_bottom_when_frame_set(gui):
     gui._reduction.frame_spec = {
         "axis": "beam_axis",
         "origin": "beam_on_target",
@@ -299,15 +326,29 @@ def test_aligned_axes_appear_at_tree_bottom_when_frame_set(gui):
     }
     gui._refresh_reduction_tree()
     ids = _tree_ids(gui)
-    assert ids[-3:] == ["aligned.x", "aligned.y", "aligned.z"]
-    item = gui.rd_tree.topLevelItem(gui.rd_tree.topLevelItemCount() - 3)
+    assert ids[-7:] == [
+        "aligned.origin",
+        "aligned.x",
+        "aligned.y",
+        "aligned.z",
+        "aligned.yz",
+        "aligned.zx",
+        "aligned.xy",
+    ]
+    origin_item = gui.rd_tree.topLevelItem(gui.rd_tree.topLevelItemCount() - 7)
+    assert origin_item.text(0) == "aligned origin"
+    assert origin_item.text(1) == "origin"
+    item = gui.rd_tree.topLevelItem(gui.rd_tree.topLevelItemCount() - 6)
     assert item.text(0) == "aligned X axis"
     assert item.text(1) == "axis"
     assert item.text(2) == "—"
     assert item.checkState(0) == Qt.Checked
     assert not (item.flags() & Qt.ItemIsEditable)
     assert item.flags() & Qt.ItemIsUserCheckable
-    assert item.foreground(1).color().name() == QColor(RD_ALIGNED_AXIS["aligned.x"]).name()
+    assert item.foreground(1).color().name() == QColor(RD_ALIGNED["aligned.x"]).name()
+    plane_item = gui.rd_tree.topLevelItem(gui.rd_tree.topLevelItemCount() - 1)
+    assert plane_item.text(0) == "aligned XY plane"
+    assert plane_item.text(1) == "plane"
 
 
 def test_selecting_aligned_axis_does_not_enter_update_mode(gui):
@@ -323,13 +364,31 @@ def test_selecting_aligned_axis_does_not_enter_update_mode(gui):
     assert gui.rd_apply_btn.text() != "Update"
 
 
-def test_aligned_axis_cannot_be_deleted(gui):
+def test_aligned_entity_cannot_be_deleted(gui):
     gui._reduction.frame_spec = {
         "axis": "beam_axis",
         "origin": "beam_on_target",
         "flip_z": False,
     }
-    gui._select_tree_entity("aligned.x")
+    gui._select_tree_entity("aligned.origin")
     with pytest.raises(ValueError, match="cannot be renamed or deleted"):
         gui._reduction_delete_selected()
-    assert "aligned.x" in gui._reduction.available_aligned_axis_ids()
+    assert "aligned.origin" in gui._reduction.available_aligned_ids()
+
+
+def test_operation_pages_follow_reduction_ops(gui):
+    assert gui.rd_stack.count() == 1 + len(REDUCTION_OPS)
+    for op in REDUCTION_OPS:
+        page = getattr(gui, op.operands[0].widget).parentWidget()
+        assert gui.rd_stack.indexOf(page) == GUI_PAGE_INDEX[op.gui_key]
+        for field in op.operands:
+            widget = getattr(gui, field.widget)
+            assert isinstance(widget, QComboBox)
+        for field in op.scalars:
+            widget = getattr(gui, field.widget)
+            assert isinstance(widget, QDoubleSpinBox)
+            assert widget.suffix() == field.suffix
+            assert widget.value() == pytest.approx(field.default)
+    assert hasattr(gui, "rd_offset_slider")
+    gui.rd_op_combo.setCurrentIndex(gui.rd_op_combo.findData("rotate_plane_about_line"))
+    assert gui.rd_stack.currentIndex() == GUI_PAGE_INDEX["rotate_plane_about_line"]

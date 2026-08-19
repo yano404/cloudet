@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from cloudet.plyio import read_ply_xyz, write_ply_xyz
+from cloudet.core.plyio import read_ply_xyz, write_ply_xyz
 
 
 def test_roundtrip_binary(tmp_path):
@@ -74,7 +74,7 @@ def test_float32_xyz_only(tmp_path):
 
 def test_large_binary_uses_mmap_path(tmp_path):
     """Regression: large xyz+extra clouds still load correctly via mmap."""
-    import cloudet.plyio as plyio
+    import cloudet.core.plyio as plyio
 
     n = plyio._MMAP_MIN_VERTICES + 10
     rng = np.random.default_rng(0)

@@ -9,17 +9,17 @@ alwaysApply: false
 When adding a new construct operation, follow the existing ops (e.g. `plane_from_line_point`) exactly. Every new op requires ALL of the following:
 
 ## 1. Mappings & Registration
-- `cloudet/reduction_ops.py` entry (`REDUCTION_OPS`)
-- `rd_stack` page with correct index (update all subsequent indices)
+- `cloudet/reduction/ops.py` entry (`REDUCTION_OPS`) with operand `label`s, optional `hint`, and scalar range/suffix/default
+- GUI pages and combo refresh are generated from that tuple (bind stays page 0; construct pages follow tuple order). Do **not** add a hand-written `rd_stack` page or `keep` dict entry.
 
 ## 2. Combo Refresh
-- `keep` dict entry in `_reduction_refresh_operand_combos()`
-- `_reduction_fill_combo()` calls with correct `kind=`
+- `_reduction_refresh_operand_combos()` iterates `REDUCTION_OPS` operands
+- `_reduction_fill_combo()` uses each field's `kind`
 
 ## 3. Form Load/Save
 - Prefer `build_construct_step()` / `form_values_from_step()` from `reduction_ops.py`
 - `_reduction_step_from_form()` / `_reduction_load_step_into_form()` delegate to those helpers
-- `_reduction_sync_apply_button()` label entry
+- `_reduction_sync_apply_button()` uses `GUI_APPLY_LABELS`
 
 ## 4. Preview
 - `_reduction_update_live_preview()` uses `preview_construct_step()` for all construct ops
@@ -30,48 +30,39 @@ When adding a new construct operation, follow the existing ops (e.g. `plane_from
 - Access data via `self._reduction.plane(id)`, `.line(id)`, `.point(id)` — NEVER `self._reduction.store` or `self._reduction._store`
 
 ## 5. Apply Method
-The apply method MUST include all of these calls in order:
-
-```python
-eid = self._reduction_new_id("plane")  # prefix matches entity kind
-self._reduction.<op>(eid, ...)
-self.rd_id_edit.clear()
-self._clear_reduction_preview()
-self._refresh_reduction_tree()          # without this, entity won't appear in tree
-self._reduction_refresh_operand_combos()
-self._refresh_reduction_actors()
-self._status(f"...")
-```
+Construct Apply uses `_reduction_step_from_form` + `session.apply_step`. Offset keeps a special ±500 mm slider (`_reduction_attach_offset_slider`). New generic ops should not need a dedicated apply method.
 
 ## 6. Operand IDs
 - `_reduction_selected_ids()` reads operand widgets from `REDUCTION_OPS` metadata
   (no per-op branch)
 
-## 7. reduce.py
+## 7. reduction/session.py
 - Import new geometry function
 - `_run_construct_step()` handler
 - Public session method (e.g. `ReductionSession.plane_from_plane_point()`)
 
-## Aligned axis operands (`aligned.x` / `aligned.y` / `aligned.z`)
+## Aligned triad operands (`aligned.origin` / axes / planes)
 
-Virtual line ids resolved from `frame_spec` (not stored in `_store`):
+Virtual ids resolved from `frame_spec` (not stored in `_store`):
 
-- **Session:** `ReductionSession.aligned_axis_lines()` / `available_aligned_axis_ids()`
-  / `line("aligned.x")` via `cloudet.frame.aligned_axis_line`
-- **Construct:** pass `extra_lines=session.aligned_axis_lines()` into `_run_construct_step`
+- **Session:** `ReductionSession.aligned_axis_lines()` / `aligned_origin_points()`
+  / `aligned_planes()` / `available_aligned_ids(kind=...)`
+  / `point("aligned.origin")`, `line("aligned.x")`, `plane("aligned.xy")`
+- **Construct:** pass `extra_lines` / `extra_planes` / `extra_points` into `_run_construct_step`
 - **Recipe load:** set `target.frame_spec` before running construct so aligned ops resolve
-- **GUI line combos:** `_reduction_fill_combo(..., kind="line")` prepends aligned entries
-  when `include_aligned_axes=True` (default). Use `include_aligned_axes=False` for
-  FRAME axis combo and frame yaw ref — aligned ids must not be frame axis/origin.
-- **ENTITIES tree:** virtual rows at the bottom when FRAME resolves
-  (`aligned X/Y/Z axis`, type `axis`). Checkbox toggles overlay; rename/delete/size
-  are disabled. Overlay is an RGB arrow from the FRAME origin (+X red, +Y green,
-  +Z blue), not a construct-line tube. Overlay uses `available_aligned_axis_ids()`
+- **GUI combos:** `_reduction_fill_combo(..., kind=...)` prepends matching aligned
+  entries when `include_aligned=True` (default). Use `include_aligned=False` for
+  FRAME axis, origin, and yaw — aligned ids must not define the frame.
+- **ENTITIES tree:** virtual rows at the bottom when FRAME resolves, in order
+  origin, X/Y/Z axes, YZ/ZX/XY planes. Types `origin` / `axis` / `plane`.
+  Checkbox toggles overlay; rename/delete/size are disabled. Overlay: origin
+  sphere, RGB arrows from FRAME origin (+X red, +Y green, +Z blue), RGB-tinted
+  plane patches (YZ red, ZX green, XY blue). Overlay uses `available_aligned_ids()`
   + `session.visible`.
 - **Refresh:** `_on_frame_combo_changed` calls `_reduction_refresh_operand_combos(include_frame=False)`
-  to update line combos without resetting FRAME widgets, then refreshes the tree
+  to update combos without resetting FRAME widgets, then refreshes the tree
   and overlays.
-- **Update mode allowlist:** `operand_ids_before()` + `available_aligned_axis_ids(before=...)`
+- **Update mode allowlist:** `operand_ids_before()` + `available_aligned_ids(before=...)`
 - **Reserved ids:** reject `aligned.*` as construct result ids in `apply_step` / `rename`
-- **Not in export rows:** aligned axes are display/operand only; recipe may reference
-  `"line": "aligned.x"` but geometry.json has no separate `lines.aligned.x` entry
+- **Not in export rows:** aligned triad is display/operand only; recipe may reference
+  `"line": "aligned.x"` or `"of": "aligned.xy"` but geometry.json has no separate row

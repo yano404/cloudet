@@ -7,8 +7,8 @@ import json
 import numpy as np
 import pytest
 
-from cloudet.picking import PickParams
-from cloudet.plane import Plane
+from cloudet.fit.picking import PickParams
+from cloudet.core.plane import Plane
 from cloudet.project import (
     SourceInfo,
     load_fitted_plane,
@@ -16,7 +16,7 @@ from cloudet.project import (
     save_group,
     write_manifest,
 )
-from cloudet.reduce import load_recipe, run_reduction, write_geometry_json
+from cloudet.reduction import load_recipe, run_reduction, write_geometry_json
 
 
 def _fit_planes(*abcd_list, statuses=None):
@@ -192,7 +192,7 @@ def test_multiplane_index(tmp_path):
 
 
 def test_reduction_session_records_recipe():
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession()
     left = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
@@ -217,7 +217,7 @@ def test_reduction_session_records_recipe():
 
 
 def test_reduction_session_line_from_point_normal():
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession()
     wall = Plane(np.array([1.0, 0.0, 0.0]), 50.0)   # x = -50
@@ -239,7 +239,7 @@ def test_reduction_session_line_from_point_normal():
 
 
 def test_reduction_session_line_from_two_points():
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession()
     wall = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
@@ -269,7 +269,7 @@ def test_reduction_session_line_from_two_points():
 
 
 def test_reduction_session_intersect_normal_plane():
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession()
     src = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
@@ -288,7 +288,7 @@ def test_reduction_session_intersect_normal_plane():
 
 
 def test_intersect_normal_plane_uses_src_overlay_anchor():
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession()
     src = Plane(np.array([1.0, 0.0, 0.0]), -1000.0)  # x = 1000
@@ -306,7 +306,7 @@ def test_intersect_normal_plane_uses_src_overlay_anchor():
 
 
 def test_reduction_session_midpoint_line_planes():
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession()
     left = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
@@ -336,7 +336,7 @@ def test_reduction_session_midpoint_line_planes():
 
 
 def test_reduction_session_rename_and_remove():
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession()
     left = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
@@ -372,7 +372,7 @@ def test_reduction_session_rename_and_remove():
 
 
 def test_overlay_mm_survives_rename_and_drops_on_remove():
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession()
     left = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
@@ -405,7 +405,7 @@ def test_overlay_mm_survives_rename_and_drops_on_remove():
 
 
 def test_bind_scanned_replay_updates_downstream():
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession()
     wall = Plane(np.array([1.0, 0.0, 0.0]), 0.0)
@@ -419,7 +419,7 @@ def test_bind_scanned_replay_updates_downstream():
 
 
 def test_preview_construct_step_does_not_mutate_session():
-    from cloudet.reduce import ReductionSession, preview_construct_step
+    from cloudet.reduction import ReductionSession, preview_construct_step
 
     sess = ReductionSession()
     wall = Plane(np.array([1.0, 0.0, 0.0]), 0.0)
@@ -435,7 +435,7 @@ def test_preview_construct_step_does_not_mutate_session():
 
 
 def test_preview_construct_step_midpoint_segment_ends():
-    from cloudet.reduce import ReductionSession, preview_construct_step
+    from cloudet.reduction import ReductionSession, preview_construct_step
 
     sess = ReductionSession()
     left = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
@@ -490,7 +490,7 @@ def _beam_recipe():
 
 
 def test_session_apply_recipe_roundtrip(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     project = _make_project(tmp_path)
     recipe = _beam_recipe()
@@ -511,7 +511,7 @@ def test_session_apply_recipe_roundtrip(tmp_path):
 
 
 def test_session_apply_recipe_keeps_existing_on_failure(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     project = _make_project(tmp_path)
     sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
@@ -528,7 +528,7 @@ def test_session_apply_recipe_keeps_existing_on_failure(tmp_path):
 
 
 def test_replace_construct_step_rebuilds_dependents(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     project = _make_project(tmp_path)
     sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
@@ -569,7 +569,7 @@ def test_replace_construct_step_rebuilds_dependents(tmp_path):
 
 
 def test_replace_construct_step_rejects_later_operand(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession.from_recipe(
         _beam_recipe(), project_dir=_make_project(tmp_path)
@@ -595,7 +595,7 @@ def test_replace_construct_step_rejects_later_operand(tmp_path):
 
 
 def test_replace_construct_step_rejects_op_change(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession.from_recipe(
         _beam_recipe(), project_dir=_make_project(tmp_path)
@@ -614,7 +614,7 @@ def test_replace_construct_step_rejects_op_change(tmp_path):
 
 
 def test_replace_construct_step_rollback_on_failure(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession.from_recipe(
         _beam_recipe(), project_dir=_make_project(tmp_path)
@@ -642,7 +642,7 @@ def test_replace_construct_step_rollback_on_failure(tmp_path):
 
 
 def test_session_apply_recipe_missing_face(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     project = _make_project(tmp_path)
     recipe = {
@@ -655,7 +655,7 @@ def test_session_apply_recipe_missing_face(tmp_path):
 
 
 def test_apply_recipe_rejects_geometry_json():
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession()
     with pytest.raises(ValueError, match="geometry.json"):
@@ -666,7 +666,7 @@ def test_apply_recipe_rejects_geometry_json():
 
 
 def test_apply_recipe_bind_face_fallback(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     project = _make_project(tmp_path)
     seen: list[str] = []
@@ -683,7 +683,7 @@ def test_apply_recipe_bind_face_fallback(tmp_path):
 
 
 def test_recipe_frame_roundtrip(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     recipe = _beam_recipe()
     recipe["frame"] = {
@@ -708,7 +708,7 @@ def test_recipe_frame_roundtrip(tmp_path):
     survey = sess.to_result()
     assert survey.aligned is None
     assert sess.rigid_frame() is not None
-    from cloudet.reduce import export_reduction_result
+    from cloudet.reduction import export_reduction_result
 
     aligned = export_reduction_result(
         sess, source_project=str(tmp_path), aligned_frame=sess.rigid_frame()
@@ -719,7 +719,7 @@ def test_recipe_frame_roundtrip(tmp_path):
 
 
 def test_recipe_frame_yaw_roundtrip(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     recipe = _beam_recipe()
     recipe["construct"].append(
@@ -757,7 +757,7 @@ def test_recipe_frame_yaw_roundtrip(tmp_path):
 
 
 def test_recipe_frame_yaw_plane_roundtrip(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     recipe = _beam_recipe()
     recipe["frame"] = {
@@ -779,7 +779,7 @@ def test_recipe_frame_yaw_plane_roundtrip(tmp_path):
 
 
 def test_recipe_frame_yaw_line_and_plane_exclusive(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     recipe = _beam_recipe()
     recipe["frame"] = {
@@ -794,7 +794,7 @@ def test_recipe_frame_yaw_line_and_plane_exclusive(tmp_path):
 
 
 def test_recipe_frame_yaw_to_needs_reference(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     recipe = _beam_recipe()
     recipe["frame"] = {
@@ -807,7 +807,7 @@ def test_recipe_frame_yaw_to_needs_reference(tmp_path):
 
 
 def test_recipe_frame_yaw_wrong_kind(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     recipe = _beam_recipe()
     recipe["frame"] = {
@@ -821,7 +821,7 @@ def test_recipe_frame_yaw_wrong_kind(tmp_path):
 
 
 def test_recipe_frame_optional(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession.from_recipe(
         _beam_recipe(), project_dir=_make_project(tmp_path)
@@ -831,7 +831,7 @@ def test_recipe_frame_optional(tmp_path):
 
 
 def test_recipe_frame_invalid_object():
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     recipe = _beam_recipe()
     recipe["frame"] = "beam_axis"
@@ -840,7 +840,7 @@ def test_recipe_frame_invalid_object():
 
 
 def test_recipe_frame_incomplete():
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     recipe = _beam_recipe()
     recipe["frame"] = {"axis": "beam_axis"}
@@ -849,7 +849,7 @@ def test_recipe_frame_incomplete():
 
 
 def test_recipe_frame_unknown_id(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     recipe = _beam_recipe()
     recipe["frame"] = {"axis": "nope", "origin": "beam_on_target"}
@@ -858,7 +858,7 @@ def test_recipe_frame_unknown_id(tmp_path):
 
 
 def test_recipe_frame_wrong_kind(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     recipe = _beam_recipe()
     recipe["frame"] = {"axis": "target", "origin": "beam_on_target"}
@@ -867,7 +867,7 @@ def test_recipe_frame_wrong_kind(tmp_path):
 
 
 def test_recipe_frame_rename_and_remove():
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession()
     left = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
@@ -950,7 +950,7 @@ def test_reduce_cli_writes_aligned(tmp_path):
 
 
 def test_session_measures_roundtrip(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     recipe = _beam_recipe()
     recipe["measures"] = [
@@ -987,7 +987,7 @@ def test_session_measures_roundtrip(tmp_path):
 
 
 def test_add_measure_and_cli_export(tmp_path):
-    from cloudet.reduce import ReductionSession, run_reduction
+    from cloudet.reduction import ReductionSession, run_reduction
 
     project = _make_project(tmp_path)
     sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
@@ -1011,7 +1011,7 @@ def test_add_measure_and_cli_export(tmp_path):
 
 
 def test_construct_plane_from_plane_point(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     project = _make_project(tmp_path)
     sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
@@ -1023,7 +1023,7 @@ def test_construct_plane_from_plane_point(tmp_path):
 
 
 def test_construct_plane_from_line_point(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     project = _make_project(tmp_path)
     sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
@@ -1034,7 +1034,7 @@ def test_construct_plane_from_line_point(tmp_path):
 
 
 def test_construct_plane_from_two_lines(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     project = _make_project(tmp_path)
     recipe = _beam_recipe()
@@ -1051,7 +1051,7 @@ def test_construct_plane_from_two_lines(tmp_path):
 
 
 def test_construct_rotate_plane_about_line(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     project = _make_project(tmp_path)
     sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
@@ -1066,7 +1066,7 @@ def test_construct_rotate_plane_about_line(tmp_path):
 
 
 def test_construct_rotate_about_aligned_axis(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     project = _make_project(tmp_path)
     sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
@@ -1087,7 +1087,7 @@ def test_construct_rotate_about_aligned_axis(tmp_path):
 
 
 def test_apply_recipe_construct_can_use_aligned_axis(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     recipe = _beam_recipe()
     recipe["frame"] = {
@@ -1108,16 +1108,86 @@ def test_apply_recipe_construct_can_use_aligned_axis(tmp_path):
     assert np.allclose(np.abs(sess.plane("tilted").normal), [0.0, 1.0, 0.0], atol=1e-9)
 
 
-def test_reserved_aligned_axis_id_rejected(tmp_path):
-    from cloudet.reduce import ReductionSession
+def test_reserved_aligned_ids_rejected(tmp_path):
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=_make_project(tmp_path))
-    with pytest.raises(ValueError, match="reserved"):
-        sess.offset("aligned.x", "target", 1.0)
+    for eid in ("aligned.x", "aligned.origin", "aligned.xy"):
+        with pytest.raises(ValueError, match="reserved"):
+            sess.offset(eid, "target", 1.0)
+
+
+def test_construct_uses_aligned_origin_and_planes(tmp_path):
+    from cloudet.reduction import ReductionSession
+
+    project = _make_project(tmp_path)
+    sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=project)
+    sess.frame_spec = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    origin = sess.point("aligned.origin")
+    assert np.allclose(origin, sess.point("beam_on_target"))
+    xy = sess.plane("aligned.xy")
+    yz = sess.plane("aligned.yz")
+    zx = sess.plane("aligned.zx")
+    assert np.allclose(xy.normal, [0.0, 0.0, 1.0])
+    assert np.allclose(yz.normal, [1.0, 0.0, 0.0])
+    assert np.allclose(zx.normal, [0.0, 1.0, 0.0])
+    assert abs(xy.signed_distances(origin.reshape(1, 3))[0]) < 1e-12
+    sess.offset("above_xy", "aligned.xy", 10.0)
+    assert np.allclose(sess.plane("above_xy").normal, [0.0, 0.0, 1.0])
+    sess.line_from_point_normal("from_origin", "aligned.origin", "target")
+    line = sess.line("from_origin")
+    assert np.allclose(line.point, origin)
+    assert np.allclose(np.abs(line.direction), [0.0, 0.0, 1.0])
+    sess.intersect_line_plane("on_xy", "beam_axis", "aligned.xy")
+    assert np.allclose(sess.point("on_xy"), origin)
+
+
+def test_apply_recipe_construct_can_use_aligned_plane(tmp_path):
+    from cloudet.reduction import ReductionSession
+
+    recipe = _beam_recipe()
+    recipe["frame"] = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    recipe["construct"].append(
+        {
+            "id": "above_xy",
+            "op": "offset",
+            "of": "aligned.xy",
+            "distance_mm": 10.0,
+        }
+    )
+    sess = ReductionSession.from_recipe(recipe, project_dir=_make_project(tmp_path))
+    assert np.allclose(sess.plane("above_xy").normal, [0.0, 0.0, 1.0])
+    origin = sess.point("aligned.origin")
+    d = abs(sess.plane("above_xy").signed_distances(origin.reshape(1, 3))[0])
+    assert d == pytest.approx(10.0)
+
+
+def test_remove_frame_axis_drops_aligned_plane_dependents(tmp_path):
+    from cloudet.reduction import ReductionSession
+
+    sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=_make_project(tmp_path))
+    sess.frame_spec = {
+        "axis": "beam_axis",
+        "origin": "beam_on_target",
+        "flip_z": False,
+    }
+    sess.offset("above_xy", "aligned.xy", 10.0)
+    removed = sess.remove("beam_axis")
+    assert "above_xy" in removed
+    assert "above_xy" not in sess.ids()
+    assert sess.frame_spec is None
 
 
 def test_remove_frame_axis_drops_aligned_axis_dependents(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=_make_project(tmp_path))
     sess.frame_spec = {
@@ -1133,7 +1203,7 @@ def test_remove_frame_axis_drops_aligned_axis_dependents(tmp_path):
 
 
 def test_replay_keeps_aligned_axis_visibility(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession.from_recipe(
         _beam_recipe(), project_dir=_make_project(tmp_path)
@@ -1157,7 +1227,7 @@ def test_replay_keeps_aligned_axis_visibility(tmp_path):
 
 
 def test_replay_warns_when_frame_becomes_invalid():
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession()
     left = Plane(np.array([1.0, 0.0, 0.0]), 50.0)
@@ -1173,7 +1243,7 @@ def test_replay_warns_when_frame_becomes_invalid():
 
 
 def test_replay_warns_when_measure_becomes_invalid(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     sess = ReductionSession.from_recipe(_beam_recipe(), project_dir=_make_project(tmp_path))
     sess.measures.append(
@@ -1191,7 +1261,7 @@ def test_replay_warns_when_measure_becomes_invalid(tmp_path):
 
 
 def test_check_recipe_rejects_unknown_construct_op():
-    from cloudet.reduce import _check_recipe
+    from cloudet.reduction.session import _check_recipe
 
     recipe = {
         "version": 1,
@@ -1204,7 +1274,7 @@ def test_check_recipe_rejects_unknown_construct_op():
 
 
 def test_check_recipe_rejects_duplicate_construct_id():
-    from cloudet.reduce import _check_recipe
+    from cloudet.reduction.session import _check_recipe
 
     recipe = {
         "version": 1,
@@ -1220,7 +1290,7 @@ def test_check_recipe_rejects_duplicate_construct_id():
 
 
 def test_apply_recipe_validates_construct_operand_kind(tmp_path):
-    from cloudet.reduce import ReductionSession
+    from cloudet.reduction import ReductionSession
 
     recipe = _beam_recipe()
     recipe["construct"].append(
@@ -1231,7 +1301,7 @@ def test_apply_recipe_validates_construct_operand_kind(tmp_path):
 
 
 def test_build_frame_spec_yaw_exclusive():
-    from cloudet.reduce import build_frame_spec, normalize_frame_spec
+    from cloudet.reduction import build_frame_spec, normalize_frame_spec
 
     spec = build_frame_spec(
         axis="axis",
@@ -1260,3 +1330,41 @@ def test_build_frame_spec_yaw_exclusive():
     )
     assert roundtrip["yaw_line"] == "line1"
     assert "yaw_plane" not in roundtrip
+
+
+def test_session_rotate_point_about_line():
+    from cloudet.reduction import ReductionSession
+
+    sess = ReductionSession()
+    top = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
+    front = Plane(np.array([0.0, 1.0, 0.0]), 0.0)
+    sess.bind_scanned("top", top, group_name="top", group_id=0)
+    sess.bind_scanned("front", front, group_name="front", group_id=1)
+    side = Plane(np.array([1.0, 0.0, 0.0]), 0.0)
+    sess.bind_scanned("side", side, group_name="side", group_id=2)
+    sess.apply_step({"id": "p1", "op": "intersect_three_planes",
+                      "a": "top", "b": "front", "c": "side"})
+    sess.apply_step({"id": "ax", "op": "intersect_planes",
+                      "a": "top", "b": "front"})
+    sess.rotate_point_about_line("p2", "p1", "ax", 90.0)
+    assert sess.kind_of("p2") == "point"
+    pt = sess.point("p2")
+    assert pt.shape == (3,)
+
+
+def test_session_rotate_line_about_line():
+    from cloudet.reduction import ReductionSession
+
+    sess = ReductionSession()
+    top = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
+    front = Plane(np.array([0.0, 1.0, 0.0]), 0.0)
+    side = Plane(np.array([1.0, 0.0, 0.0]), 0.0)
+    sess.bind_scanned("top", top, group_name="top", group_id=0)
+    sess.bind_scanned("front", front, group_name="front", group_id=1)
+    sess.bind_scanned("side", side, group_name="side", group_id=2)
+    sess.apply_step({"id": "ax1", "op": "intersect_planes",
+                      "a": "top", "b": "front"})
+    sess.apply_step({"id": "ax2", "op": "intersect_planes",
+                      "a": "top", "b": "side"})
+    sess.rotate_line_about_line("ax3", "ax1", "ax2", 45.0)
+    assert sess.kind_of("ax3") == "line"

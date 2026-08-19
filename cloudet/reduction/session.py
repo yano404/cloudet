@@ -15,7 +15,7 @@ from typing import Any
 
 import numpy as np
 
-from cloudet.geometry import (
+from cloudet.reduction.geometry import (
     Line,
     angle_lines_deg,
     angle_line_plane_deg,
@@ -35,16 +35,27 @@ from cloudet.geometry import (
     plane_from_plane_point,
     plane_from_two_lines,
     project_point_to_plane,
+    rotate_line_about_line,
     rotate_plane_about_line,
+    rotate_point_about_line,
 )
-from cloudet.frame import (
+from cloudet.reduction.frame import (
     ALIGNED_AXIS_IDS,
+    ALIGNED_ENTITY_IDS,
+    ALIGNED_KIND,
+    ALIGNED_ORIGIN_ID,
+    ALIGNED_PLANE_IDS,
     aligned_axis_line,
+    aligned_origin_point,
+    aligned_plane,
     is_aligned_axis_id,
+    is_aligned_id,
+    is_aligned_origin_id,
+    is_aligned_plane_id,
 )
-from cloudet.plane import Plane
+from cloudet.core.plane import Plane
 from cloudet.project import FittedPlane, load_fitted_plane, load_group_doc
-from cloudet.reduction_ops import MEASURE_OPERAND_FIELDS, REDUCTION_OP_BY_RECIPE
+from cloudet.reduction.ops import MEASURE_OPERAND_FIELDS, REDUCTION_OP_BY_RECIPE
 
 __all__ = [
     "ConstructPreview",
@@ -184,7 +195,19 @@ def _bind_face(project_dir: Path, alias: str, spec: dict) -> tuple[Plane, dict]:
     return fitted.plane, record
 
 
-def _require_plane(store: dict[str, _Entity], key: str, *, where: str) -> Plane:
+def _require_plane(
+    store: dict[str, _Entity],
+    key: str,
+    *,
+    where: str,
+    extra_planes: dict[str, Plane] | None = None,
+) -> Plane:
+    extra_planes = extra_planes or {}
+    if is_aligned_plane_id(key):
+        plane = extra_planes.get(key)
+        if plane is None:
+            raise ValueError(f"{where}: {key} needs FRAME axis and origin")
+        return plane
     ent = store.get(key)
     if ent is None:
         raise KeyError(f"{where}: unknown id {key!r}")
@@ -214,7 +237,19 @@ def _require_line(
     return ent.value
 
 
-def _require_point(store: dict[str, _Entity], key: str, *, where: str) -> np.ndarray:
+def _require_point(
+    store: dict[str, _Entity],
+    key: str,
+    *,
+    where: str,
+    extra_points: dict[str, np.ndarray] | None = None,
+) -> np.ndarray:
+    extra_points = extra_points or {}
+    if is_aligned_origin_id(key):
+        pt = extra_points.get(key)
+        if pt is None:
+            raise ValueError(f"{where}: {key} needs FRAME axis and origin")
+        return np.asarray(pt, dtype=np.float64).reshape(3)
     ent = store.get(key)
     if ent is None:
         raise KeyError(f"{where}: unknown id {key!r}")
@@ -233,6 +268,8 @@ def _run_construct_step(
     store: dict[str, _Entity],
     step: dict,
     extra_lines: dict[str, Line] | None = None,
+    extra_planes: dict[str, Plane] | None = None,
+    extra_points: dict[str, np.ndarray] | None = None,
     anchors: dict[str, np.ndarray] | None = None,
 ) -> None:
     if not isinstance(step, dict):
@@ -243,14 +280,22 @@ def _run_construct_step(
         raise ValueError("construct step needs id and op")
     where = f"construct[{entity_id}]"
     extra_lines = extra_lines or {}
+    extra_planes = extra_planes or {}
+    extra_points = extra_points or {}
 
     def require_line(key: str) -> Line:
         return _require_line(store, key, where=where, extra_lines=extra_lines)
 
+    def require_plane(key: str) -> Plane:
+        return _require_plane(store, key, where=where, extra_planes=extra_planes)
+
+    def require_point(key: str) -> np.ndarray:
+        return _require_point(store, key, where=where, extra_points=extra_points)
+
     if op == "offset":
         of = step["of"]
         distance = float(step["distance_mm"])
-        src = _require_plane(store, of, where=where)
+        src = require_plane(of)
         plane = offset_plane(src, distance)
         _put(
             store,
@@ -270,8 +315,8 @@ def _run_construct_step(
         a = step["a"]
         b = step["b"]
         line = intersect_planes(
-            _require_plane(store, a, where=where),
-            _require_plane(store, b, where=where),
+            require_plane(a),
+            require_plane(b),
         )
         _put(
             store,
@@ -290,7 +335,7 @@ def _run_construct_step(
     if op == "intersect_three_planes":
         keys = [step["a"], step["b"], step["c"]]
         pt = intersect_three_planes(
-            *(_require_plane(store, k, where=where) for k in keys)
+            *(require_plane(k) for k in keys)
         )
         _put(
             store,
@@ -310,7 +355,7 @@ def _run_construct_step(
         plane_id = step["plane"]
         pt = intersect_line_plane(
             require_line(line_id),
-            _require_plane(store, plane_id, where=where),
+            require_plane(plane_id),
         )
         _put(
             store,
@@ -328,7 +373,7 @@ def _run_construct_step(
     if op == "intersect_normal_plane":
         src_id = step["src"]
         dst_id = step["dst"]
-        src_plane = _require_plane(store, src_id, where=where)
+        src_plane = require_plane(src_id)
         through = step.get("through")
         if through is not None:
             through_arr = np.asarray(through, dtype=np.float64)
@@ -338,7 +383,7 @@ def _run_construct_step(
             through_arr = None
         pt = intersect_normal_plane(
             src_plane,
-            _require_plane(store, dst_id, where=where),
+            require_plane(dst_id),
             through=through_arr,
         )
         record = {
@@ -356,8 +401,8 @@ def _run_construct_step(
         point_id = step["point"]
         plane_id = step["plane"]
         line = line_from_point_normal(
-            _require_point(store, point_id, where=where),
-            _require_plane(store, plane_id, where=where),
+            require_point(point_id),
+            require_plane(plane_id),
         )
         _put(
             store,
@@ -380,8 +425,8 @@ def _run_construct_step(
         if a == b:
             raise ValueError(f"{where}: points a and b must differ")
         line = line_from_two_points(
-            _require_point(store, a, where=where),
-            _require_point(store, b, where=where),
+            require_point(a),
+            require_point(b),
         )
         _put(
             store,
@@ -405,8 +450,8 @@ def _run_construct_step(
         if a == b:
             raise ValueError(f"{where}: planes a and b must differ")
         line = require_line(line_id)
-        pa = _require_plane(store, a, where=where)
-        pb = _require_plane(store, b, where=where)
+        pa = require_plane(a)
+        pb = require_plane(b)
         end_a = intersect_line_plane(line, pa)
         end_b = intersect_line_plane(line, pb)
         pt = 0.5 * (end_a + end_b)
@@ -432,8 +477,8 @@ def _run_construct_step(
         plane_id = step["plane"]
         point_id = step["point"]
         plane = plane_from_plane_point(
-            _require_plane(store, plane_id, where=where),
-            _require_point(store, point_id, where=where),
+            require_plane(plane_id),
+            require_point(point_id),
         )
         _put(
             store,
@@ -454,7 +499,7 @@ def _run_construct_step(
         point_id = step["point"]
         plane = plane_from_line_point(
             require_line(line_id),
-            _require_point(store, point_id, where=where),
+            require_point(point_id),
         )
         _put(
             store,
@@ -498,7 +543,7 @@ def _run_construct_step(
         line_id = step["line"]
         angle_deg = float(step["angle_deg"])
         plane = rotate_plane_about_line(
-            _require_plane(store, plane_id, where=where),
+            require_plane(plane_id),
             require_line(line_id),
             angle_deg,
         )
@@ -512,6 +557,55 @@ def _run_construct_step(
                 "provenance": "constructed",
                 "of": [plane_id, line_id],
                 "op": "rotate_plane_about_line",
+                "angle_deg": angle_deg,
+            },
+        )
+        return
+
+    if op == "rotate_point_about_line":
+        point_id = step["point"]
+        line_id = step["line"]
+        angle_deg = float(step["angle_deg"])
+        pt = rotate_point_about_line(
+            require_point(point_id),
+            require_line(line_id),
+            angle_deg,
+        )
+        _put(
+            store,
+            entity_id,
+            "point",
+            pt,
+            {
+                "xyz": pt.tolist(),
+                "provenance": "constructed",
+                "of": [point_id, line_id],
+                "op": "rotate_point_about_line",
+                "angle_deg": angle_deg,
+            },
+        )
+        return
+
+    if op == "rotate_line_about_line":
+        line_id = step["line"]
+        axis_id = step["axis"]
+        angle_deg = float(step["angle_deg"])
+        ln = rotate_line_about_line(
+            require_line(line_id),
+            require_line(axis_id),
+            angle_deg,
+        )
+        _put(
+            store,
+            entity_id,
+            "line",
+            ln,
+            {
+                "point": ln.point.tolist(),
+                "direction": ln.direction.tolist(),
+                "provenance": "constructed",
+                "of": [line_id, axis_id],
+                "op": "rotate_line_about_line",
                 "angle_deg": angle_deg,
             },
         )
@@ -676,7 +770,7 @@ def _parse_construct_step(step, *, where: str) -> dict:
     if not entity_id:
         raise ValueError(f"{where}: needs id")
     entity_id = str(entity_id)
-    if is_aligned_axis_id(entity_id):
+    if is_aligned_id(entity_id):
         raise ValueError(f"{where}: id {entity_id!r} is reserved")
     if not op:
         raise ValueError(f"{where}: needs op")
@@ -726,9 +820,13 @@ def _validate_construct_step_refs(
     _result_kind, operands, _scalars, _must_differ = _construct_step_schema(op)
     for key, kind in operands:
         eid = str(parsed[key])
-        if kind == "line" and is_aligned_axis_id(eid):
-            if eid not in session.available_aligned_axis_ids(before=allowed):
-                raise KeyError(f"{where}.{key}: aligned axis {eid!r} not available yet")
+        if is_aligned_id(eid):
+            if ALIGNED_KIND[eid] != kind:
+                raise ValueError(f"{where}.{key} {eid!r} must be a {kind}")
+            if eid not in session.available_aligned_ids(kind=kind, before=allowed):
+                raise KeyError(
+                    f"{where}.{key}: aligned {eid!r} not available yet"
+                )
             continue
         if eid not in allowed:
             raise KeyError(f"{where}.{key}: id {eid!r} not available yet")
@@ -769,10 +867,10 @@ def _frame_ref_ids(spec: dict | None) -> set[str]:
 def _validate_frame_spec(session: "ReductionSession", spec: dict) -> None:
     axis = spec["axis"]
     origin = spec["origin"]
-    if is_aligned_axis_id(axis):
-        raise ValueError("recipe.frame.axis cannot be an aligned axis")
-    if is_aligned_axis_id(origin):
-        raise ValueError("recipe.frame.origin must be a point")
+    if is_aligned_id(axis):
+        raise ValueError("recipe.frame.axis cannot be an aligned entity")
+    if is_aligned_id(origin):
+        raise ValueError("recipe.frame.origin cannot be an aligned entity")
     if axis not in session._store:
         raise KeyError(f"recipe.frame.axis: unknown id {axis!r}")
     if origin not in session._store:
@@ -783,6 +881,8 @@ def _validate_frame_spec(session: "ReductionSession", spec: dict) -> None:
         raise ValueError(f"recipe.frame.origin {origin!r} must be a point")
     yaw_plane = spec.get("yaw_plane")
     if yaw_plane:
+        if is_aligned_id(yaw_plane):
+            raise ValueError("recipe.frame.yaw_plane cannot be an aligned entity")
         if yaw_plane not in session._store:
             raise KeyError(f"recipe.frame.yaw_plane: unknown id {yaw_plane!r}")
         if session.kind_of(yaw_plane) != "plane":
@@ -790,8 +890,8 @@ def _validate_frame_spec(session: "ReductionSession", spec: dict) -> None:
         return
     yaw_line = spec.get("yaw_line")
     if yaw_line:
-        if is_aligned_axis_id(yaw_line):
-            raise ValueError("recipe.frame.yaw_line cannot be an aligned axis")
+        if is_aligned_id(yaw_line):
+            raise ValueError("recipe.frame.yaw_line cannot be an aligned entity")
         if yaw_line not in session._store:
             raise KeyError(f"recipe.frame.yaw_line: unknown id {yaw_line!r}")
         if session.kind_of(yaw_line) != "line":
@@ -879,7 +979,7 @@ def export_reduction_result(
     """Build ``ReductionResult`` for CLI/GUI export with optional Align Z copy."""
     result = session.to_result(source_project=source_project, export=export)
     if aligned_frame is not None:
-        from cloudet.frame import with_aligned_copy
+        from cloudet.reduction.frame import with_aligned_copy
 
         result = with_aligned_copy(result, aligned_frame)
     return result
@@ -1052,16 +1152,21 @@ class ReductionSession:
         return [k for k, e in self._store.items() if e.kind == kind]
 
     def kind_of(self, entity_id: str) -> str:
-        if is_aligned_axis_id(entity_id):
-            if entity_id not in self.aligned_axis_lines():
+        if is_aligned_id(entity_id):
+            if entity_id not in self.available_aligned_ids():
                 raise KeyError(f"unknown id {entity_id!r}")
-            return "line"
+            return ALIGNED_KIND[str(entity_id)]
         return self._store[entity_id].kind
 
     def record_of(self, entity_id: str) -> dict:
         return self._store[entity_id].record
 
     def plane(self, entity_id: str) -> Plane:
+        if is_aligned_plane_id(entity_id):
+            extra = self.aligned_planes()
+            if entity_id not in extra:
+                raise KeyError(f"{entity_id!r} needs FRAME axis and origin")
+            return extra[entity_id]
         ent = self._store[entity_id]
         if ent.kind != "plane":
             raise TypeError(f"{entity_id!r} is a {ent.kind}, expected plane")
@@ -1079,6 +1184,11 @@ class ReductionSession:
         return ent.value
 
     def point(self, entity_id: str) -> np.ndarray:
+        if is_aligned_origin_id(entity_id):
+            extra = self.aligned_origin_points()
+            if entity_id not in extra:
+                raise KeyError(f"{entity_id!r} needs FRAME axis and origin")
+            return extra[entity_id]
         ent = self._store[entity_id]
         if ent.kind != "point":
             raise TypeError(f"{entity_id!r} is a {ent.kind}, expected point")
@@ -1130,7 +1240,7 @@ class ReductionSession:
         if not entity_id:
             raise ValueError("construct step needs id")
         entity_id = str(entity_id)
-        if is_aligned_axis_id(entity_id):
+        if is_aligned_id(entity_id):
             raise ValueError(f"id {entity_id!r} is reserved")
         if entity_id in self._store:
             raise ValueError(f"duplicate id {entity_id!r}")
@@ -1139,6 +1249,8 @@ class ReductionSession:
             self._store,
             step,
             extra_lines=self.aligned_axis_lines(),
+            extra_planes=self.aligned_planes(),
+            extra_points=self.aligned_origin_points(),
             anchors=self.anchors,
         )
         self._construct.append(step)
@@ -1157,14 +1269,23 @@ class ReductionSession:
             self.anchors[entity_id] = self.point(entity_id)
             return entity_id
         # Inherit overlay centre from an operand when possible.
-        if step.get("point") in self._store and self._store[step["point"]].kind == "point":
-            self.anchors[entity_id] = self.point(step["point"])
-            return entity_id
+        pt_id = step.get("point")
+        if pt_id and (pt_id in self._store or is_aligned_origin_id(pt_id)):
+            try:
+                if self.kind_of(pt_id) == "point":
+                    self.anchors[entity_id] = self.point(pt_id)
+                    return entity_id
+            except (KeyError, TypeError):
+                pass
         of = step.get("of") or step.get("a") or step.get("src") or step.get("line")
         if of in self.anchors:
             self.anchors[entity_id] = self.anchors[of].copy()
         elif step.get("plane") in self.anchors:
             self.anchors[entity_id] = self.anchors[step["plane"]].copy()
+        elif is_aligned_id(str(of or "")) or is_aligned_id(str(step.get("plane") or "")):
+            extra = self.aligned_origin_points()
+            if ALIGNED_ORIGIN_ID in extra:
+                self.anchors[entity_id] = extra[ALIGNED_ORIGIN_ID].copy()
         elif kind == "line":
             self.anchors[entity_id] = self.line(entity_id).point.copy()
         return entity_id
@@ -1221,7 +1342,7 @@ class ReductionSession:
                 f"cannot change op of {entity_id!r} from {old_op!r} to {new_op!r}"
             )
         allowed = self.operand_ids_before(entity_id)
-        allowed.update(self.available_aligned_axis_ids(before=allowed))
+        allowed.update(self.available_aligned_ids(before=allowed))
         ops = _step_operand_ids(step)
         if entity_id in ops:
             raise ValueError(f"{entity_id!r} cannot reference itself")
@@ -1255,7 +1376,7 @@ class ReductionSession:
         for step in steps:
             self.apply_step(step)
         for eid, shown in vis.items():
-            if eid in self._store or is_aligned_axis_id(eid):
+            if eid in self._store or is_aligned_id(eid):
                 self.visible[eid] = shown
         self.display_mm = {k: v for k, v in display_mm.items() if k in self._store}
         self.display_width_mm = {
@@ -1380,7 +1501,7 @@ class ReductionSession:
             raise ValueError("id must not contain whitespace")
         if new_id == old_id:
             return old_id
-        if is_aligned_axis_id(new_id):
+        if is_aligned_id(new_id):
             raise ValueError(f"id {new_id!r} is reserved")
         if new_id in self._store:
             raise ValueError(f"id {new_id!r} already exists")
@@ -1419,7 +1540,7 @@ class ReductionSession:
         if entity_id in _frame_ref_ids(self.frame_spec):
             for step in self._construct:
                 sid = str(step.get("id", ""))
-                if sid and (_step_operand_ids(step) & set(ALIGNED_AXIS_IDS)):
+                if sid and (_step_operand_ids(step) & set(ALIGNED_ENTITY_IDS)):
                     doomed.add(sid)
         changed = True
         while changed:
@@ -1454,7 +1575,7 @@ class ReductionSession:
             refs = {self.frame_spec.get("axis"), self.frame_spec.get("origin")}
             aligned_doomed: set[str] = set()
             if doomed & _frame_ref_ids(self.frame_spec):
-                aligned_doomed.update(ALIGNED_AXIS_IDS)
+                aligned_doomed.update(ALIGNED_ENTITY_IDS)
             if doomed & refs:
                 self.frame_spec = None
             elif self.frame_spec.get("yaw_line") in doomed:
@@ -1609,11 +1730,33 @@ class ReductionSession:
             "angle_deg": float(angle_deg),
         })
 
+    def rotate_point_about_line(
+        self, entity_id: str, point: str, line: str, angle_deg: float
+    ) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "rotate_point_about_line",
+            "point": point,
+            "line": line,
+            "angle_deg": float(angle_deg),
+        })
+
+    def rotate_line_about_line(
+        self, entity_id: str, line: str, axis: str, angle_deg: float
+    ) -> str:
+        return self.apply_step({
+            "id": str(entity_id),
+            "op": "rotate_line_about_line",
+            "line": line,
+            "axis": axis,
+            "angle_deg": float(angle_deg),
+        })
+
     def unique_id(self, prefix: str) -> str:
         n = 1
         while True:
             candidate = f"{prefix}_{n}"
-            if candidate not in self._store and not is_aligned_axis_id(candidate):
+            if candidate not in self._store and not is_aligned_id(candidate):
                 return candidate
             n += 1
 
@@ -1704,43 +1847,69 @@ class ReductionSession:
         out["unit"] = unit
         return out
 
-    def aligned_axis_lines(self) -> dict[str, Line]:
-        """Survey-frame lines for ``aligned.x/y/z`` when FRAME can be resolved."""
+    def _resolved_aligned_frame(self):
+        """RigidFrame for virtual aligned entities, or ``None`` if cyclic/unset."""
         spec = self.frame_spec
         if not spec:
-            return {}
-        axis = str(spec.get("axis") or "")
-        origin = str(spec.get("origin") or "")
-        yaw_line = str(spec.get("yaw_line") or "")
-        if is_aligned_axis_id(axis) or is_aligned_axis_id(origin) or is_aligned_axis_id(
-            yaw_line
+            return None
+        if any(
+            is_aligned_id(str(spec.get(key) or ""))
+            for key in ("axis", "origin", "yaw_line", "yaw_plane")
         ):
-            return {}
+            return None
         try:
             frame = self.rigid_frame()
         except (KeyError, TypeError, ValueError):
-            return {}
+            return None
+        return frame
+
+    def aligned_axis_lines(self) -> dict[str, Line]:
+        """Survey-frame lines for ``aligned.x/y/z`` when FRAME can be resolved."""
+        frame = self._resolved_aligned_frame()
         if frame is None:
             return {}
         return {eid: aligned_axis_line(frame, eid) for eid in ALIGNED_AXIS_IDS}
 
-    def available_aligned_axis_ids(self, *, before: set[str] | None = None) -> set[str]:
-        """Aligned axis ids that may be used as line operands."""
+    def aligned_origin_points(self) -> dict[str, np.ndarray]:
+        """Survey-frame origin for ``aligned.origin`` when FRAME can be resolved."""
+        frame = self._resolved_aligned_frame()
+        if frame is None:
+            return {}
+        return {ALIGNED_ORIGIN_ID: aligned_origin_point(frame)}
+
+    def aligned_planes(self) -> dict[str, Plane]:
+        """Survey-frame coordinate planes when FRAME can be resolved."""
+        frame = self._resolved_aligned_frame()
+        if frame is None:
+            return {}
+        return {eid: aligned_plane(frame, eid) for eid in ALIGNED_PLANE_IDS}
+
+    def available_aligned_ids(
+        self, *, kind: str | None = None, before: set[str] | None = None
+    ) -> set[str]:
+        """Virtual aligned entity ids that may be used as operands."""
         spec = self.frame_spec
-        if not spec or not self.aligned_axis_lines():
+        if not spec or self._resolved_aligned_frame() is None:
             return set()
         needed = _frame_ref_ids(spec)
         pool = set(self._store) if before is None else before
         if not needed <= pool:
             return set()
-        return set(ALIGNED_AXIS_IDS)
+        ids = set(ALIGNED_ENTITY_IDS)
+        if kind is not None:
+            ids = {eid for eid in ids if ALIGNED_KIND[eid] == kind}
+        return ids
+
+    def available_aligned_axis_ids(self, *, before: set[str] | None = None) -> set[str]:
+        """Aligned axis ids that may be used as line operands."""
+        return self.available_aligned_ids(kind="line", before=before)
 
     def rigid_frame(self):
         """Align Z pose from ``frame_spec``, or ``None`` if unset."""
         spec = self.frame_spec
         if not spec:
             return None
-        from cloudet.frame import RigidFrame
+        from cloudet.reduction.frame import RigidFrame
 
         line = self.line(spec["axis"])
         origin = self.point(spec["origin"])

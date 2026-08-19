@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cloudet.plane import Plane
+from cloudet.core.plane import Plane
 
 __all__ = [
     "Line",
@@ -30,7 +30,9 @@ __all__ = [
     "plane_from_line_point",
     "plane_from_plane_point",
     "plane_from_two_lines",
+    "rotate_line_about_line",
     "rotate_plane_about_line",
+    "rotate_point_about_line",
     "plane_patch_corners",
     "line_segment_points",
     "axis_arrow_points",
@@ -273,6 +275,27 @@ def rotate_plane_about_line(plane: Plane, axis: Line, angle_deg: float) -> Plane
     p0 = a - plane.signed_distances(a.reshape(1, 3))[0] * plane.normal
     p_rot = _rotate_point_about_axis(p0, a, k, theta)
     return Plane(n_rot, -float(n_rot @ p_rot))
+
+
+def rotate_point_about_line(
+    point: np.ndarray, axis: Line, angle_deg: float
+) -> np.ndarray:
+    """Rotate *point* about *axis* by *angle_deg* (right-hand rule)."""
+    theta = float(np.deg2rad(angle_deg))
+    return _rotate_point_about_axis(
+        np.asarray(point, dtype=np.float64).reshape(3),
+        axis.point,
+        axis.direction,
+        theta,
+    )
+
+
+def rotate_line_about_line(target: Line, axis: Line, angle_deg: float) -> Line:
+    """Rotate *target* line rigidly about *axis* by *angle_deg*."""
+    theta = float(np.deg2rad(angle_deg))
+    p_rot = _rotate_point_about_axis(target.point, axis.point, axis.direction, theta)
+    d_rot = _rotate_vector_about_axis(target.direction, axis.direction, theta)
+    return Line(p_rot, d_rot)
 
 
 def _plane_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

@@ -3,17 +3,19 @@
 import numpy as np
 import pytest
 
-from cloudet.frame import (
+from cloudet.reduction.frame import (
     RigidFrame,
     aligned_axis_line,
+    aligned_origin_point,
+    aligned_plane,
     result_in_frame,
     rotation_mapping_to_z,
     transform_record,
     with_aligned_copy,
 )
-from cloudet.geometry import Line
-from cloudet.plane import Plane
-from cloudet.reduce import ReductionSession
+from cloudet.reduction.geometry import Line
+from cloudet.core.plane import Plane
+from cloudet.reduction import ReductionSession
 
 
 def test_rotation_x_axis_to_z():
@@ -239,6 +241,25 @@ def test_aligned_axis_lines_keep_view_positive_after_rotation():
     assert np.allclose(frame.apply_direction(x.direction), [1.0, 0.0, 0.0], atol=1e-12)
     assert np.allclose(frame.apply_direction(y.direction), [0.0, 1.0, 0.0], atol=1e-12)
     assert np.allclose(frame.apply_direction(z.direction), [0.0, 0.0, 1.0], atol=1e-12)
+
+
+def test_aligned_origin_and_planes_match_view_triad():
+    origin = np.array([10.0, 20.0, 30.0])
+    frame = RigidFrame.align_z([0.0, 0.0, 1.0], origin)
+    assert np.allclose(aligned_origin_point(frame), origin)
+    xy = aligned_plane(frame, "aligned.xy")
+    yz = aligned_plane(frame, "aligned.yz")
+    zx = aligned_plane(frame, "aligned.zx")
+    assert np.allclose(xy.normal, [0.0, 0.0, 1.0])
+    assert np.allclose(yz.normal, [1.0, 0.0, 0.0])
+    assert np.allclose(zx.normal, [0.0, 1.0, 0.0])
+    pt = origin.reshape(1, 3)
+    assert abs(xy.signed_distances(pt)[0]) < 1e-12
+    assert abs(yz.signed_distances(pt)[0]) < 1e-12
+    assert abs(zx.signed_distances(pt)[0]) < 1e-12
+    assert np.allclose(frame.apply_direction(xy.normal), [0.0, 0.0, 1.0])
+    assert np.allclose(frame.apply_direction(yz.normal), [1.0, 0.0, 0.0])
+    assert np.allclose(frame.apply_direction(zx.normal), [0.0, 1.0, 0.0])
 
 
 def test_transform_record_rewrites_segment_ends():

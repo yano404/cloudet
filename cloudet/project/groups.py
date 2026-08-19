@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cloudet.plyio import read_ply_xyz
+from cloudet.core.plyio import read_ply_xyz
 
 __all__ = ["GroupInfo", "load_groups", "sha256_file"]
 

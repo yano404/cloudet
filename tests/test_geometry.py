@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from cloudet.geometry import (
+from cloudet.reduction.geometry import (
     Line,
     angle_line_plane_deg,
     angle_lines_deg,
@@ -26,9 +26,11 @@ from cloudet.geometry import (
     plane_from_two_lines,
     project_point_to_line,
     project_point_to_plane,
+    rotate_line_about_line,
     rotate_plane_about_line,
+    rotate_point_about_line,
 )
-from cloudet.plane import Plane
+from cloudet.core.plane import Plane
 
 
 def test_offset_plane_moves_along_normal():
@@ -188,7 +190,7 @@ def test_midpoint_line_planes():
 
 
 def test_plane_patch_and_line_segment_helpers():
-    from cloudet.geometry import line_segment_points, plane_patch_corners
+    from cloudet.reduction.geometry import line_segment_points, plane_patch_corners
 
     p = Plane(np.array([0.0, 0.0, 1.0]), 0.0)
     corners = plane_patch_corners(p, center=np.array([10.0, 20.0, 5.0]), size_mm=100.0)
@@ -297,6 +299,44 @@ def test_rotate_plane_about_normal_axis_is_identity():
     rotated = rotate_plane_about_line(plane, axis, 35.0)
     assert np.allclose(rotated.normal, plane.normal, atol=1e-12)
     assert rotated.d == pytest.approx(plane.d, abs=1e-12)
+
+
+def test_rotate_point_about_line():
+    pt = np.array([1.0, 0.0, 0.0])
+    axis = Line(np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]))
+    rotated = rotate_point_about_line(pt, axis, 90.0)
+    assert np.allclose(rotated, [0.0, 1.0, 0.0], atol=1e-12)
+
+
+def test_rotate_point_about_offset_axis():
+    pt = np.array([0.0, 0.0, 0.0])
+    axis = Line(np.array([0.0, 0.0, 10.0]), np.array([1.0, 0.0, 0.0]))
+    rotated = rotate_point_about_line(pt, axis, 90.0)
+    assert np.allclose(rotated, [0.0, 10.0, 10.0], atol=1e-12)
+
+
+def test_rotate_point_360_returns_original():
+    pt = np.array([3.0, 4.0, 5.0])
+    axis = Line(np.array([1.0, 2.0, 3.0]), np.array([0.0, 1.0, 0.0]))
+    rotated = rotate_point_about_line(pt, axis, 360.0)
+    assert np.allclose(rotated, pt, atol=1e-12)
+
+
+def test_rotate_line_about_line():
+    target = Line(np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]))
+    axis = Line(np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]))
+    rotated = rotate_line_about_line(target, axis, 90.0)
+    assert np.allclose(rotated.point, [0.0, 1.0, 0.0], atol=1e-10)
+    # Line normalizes direction sign, so (-1,0,0) becomes (1,0,0)
+    assert np.allclose(np.abs(rotated.direction), [1.0, 0.0, 0.0], atol=1e-10)
+
+
+def test_rotate_line_360_returns_original():
+    target = Line(np.array([2.0, 3.0, 4.0]), np.array([0.0, 0.0, 1.0]))
+    axis = Line(np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]))
+    rotated = rotate_line_about_line(target, axis, 360.0)
+    assert np.allclose(rotated.point, target.point, atol=1e-12)
+    assert np.allclose(rotated.direction, target.direction, atol=1e-12)
 
 
 def test_axis_arrow_points_from_origin_along_plus_direction():

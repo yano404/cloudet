@@ -38,22 +38,25 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
 )
 
-from cloudet.frame import (
-    ALIGNED_AXIS_IDS,
-    ALIGNED_AXIS_LABELS,
-    RigidFrame,
+from cloudet.reduction.frame import (
+    ALIGNED_ENTITY_IDS,
+    ALIGNED_LABELS,
+    ALIGNED_ORIGIN_ID,
     is_aligned_axis_id,
+    is_aligned_id,
+    is_aligned_origin_id,
+    is_aligned_plane_id,
     transform_record,
 )
-from cloudet.geometry import (
+from cloudet.reduction.geometry import (
     axis_arrow_points,
     line_segment_points,
     plane_patch_corners,
     project_point_to_line,
     project_point_to_plane,
 )
-from cloudet.plane import Plane
-from cloudet.reduce import (
+from cloudet.core.plane import Plane
+from cloudet.reduction import (
     export_reduction_result,
     load_recipe,
     preview_construct_step,
@@ -61,7 +64,7 @@ from cloudet.reduce import (
     write_geometry_json,
     write_recipe_json,
 )
-from cloudet.reduction_ops import (
+from cloudet.reduction.ops import (
     GUI_APPLY_LABELS,
     GUI_ID_PREFIX,
     GUI_MENU_ITEMS,
@@ -69,11 +72,12 @@ from cloudet.reduction_ops import (
     MEASURE_MENU_ITEMS,
     MEASURE_OP_BY_KEY,
     REDUCTION_OP_BY_GUI,
+    REDUCTION_OPS,
     build_construct_step,
     form_values_from_step,
 )
 from cloudet.ui.constants import (
-    RD_ALIGNED_AXIS,
+    RD_ALIGNED,
     RD_AXIS,
     RD_GUI_TO_RECIPE_OP,
     RD_KIND_LABEL,
@@ -170,189 +174,34 @@ class ReductionMixin:
         bind_page.layout().insertWidget(1, self.rd_bind_hint)
         self.rd_stack.addWidget(bind_page)  # index 0
 
-        # page: offset
-        off_page, off_form = _form_page()
-        self.rd_offset_plane = _entity_combo()
-        off_form.addRow("Plane", self.rd_offset_plane)
-        self.rd_offset_spin = QDoubleSpinBox()
-        self.rd_offset_spin.setRange(-1.0e6, 1.0e6)
-        self.rd_offset_spin.setDecimals(3)
-        self.rd_offset_spin.setSingleStep(0.1)
-        self.rd_offset_spin.setSuffix(" mm")
-        self.rd_offset_spin.setValue(12.0)
-        self.rd_offset_spin.valueChanged.connect(self._reduction_on_offset_spin)
-        off_form.addRow("Distance", self.rd_offset_spin)
-        self.rd_offset_slider = QSlider(Qt.Horizontal)
-        self.rd_offset_slider.setRange(-5000, 5000)
-        self.rd_offset_slider.setValue(120)
-        self.rd_offset_slider.setTickPosition(QSlider.TicksBelow)
-        self.rd_offset_slider.setTickInterval(1000)
-        self.rd_offset_slider.valueChanged.connect(self._reduction_on_offset_slider)
-        off_form.addRow("", self.rd_offset_slider)
-        self.rd_offset_range_label = QLabel(
-            "slider ±500 mm (0.1 mm steps). Preview updates live."
-        )
-        self.rd_offset_range_label.setObjectName("muted")
-        off_form.addRow("", self.rd_offset_range_label)
-        self.rd_stack.addWidget(off_page)  # index 1
-
-        # page: intersect 2 planes
-        p2, p2_form = _form_page()
-        self.rd_p2_a = _entity_combo()
-        self.rd_p2_b = _entity_combo()
-        p2_form.addRow("Plane A", self.rd_p2_a)
-        p2_form.addRow("Plane B", self.rd_p2_b)
-        self.rd_stack.addWidget(p2)  # 2
-
-        # page: line ∩ plane
-        lp, lp_form = _form_page()
-        self.rd_lp_line = _entity_combo()
-        self.rd_lp_plane = _entity_combo()
-        lp_form.addRow("Axis", self.rd_lp_line)
-        lp_form.addRow("Plane", self.rd_lp_plane)
-        self.rd_stack.addWidget(lp)  # 3
-
-        # page: 3 planes
-        p3, p3_form = _form_page()
-        self.rd_p3_a = _entity_combo()
-        self.rd_p3_b = _entity_combo()
-        self.rd_p3_c = _entity_combo()
-        p3_form.addRow("Plane A", self.rd_p3_a)
-        p3_form.addRow("Plane B", self.rd_p3_b)
-        p3_form.addRow("Plane C", self.rd_p3_c)
-        self.rd_stack.addWidget(p3)  # 4
-
-        # page: point + normal → axis
-        npage, n_form = _form_page()
-        self.rd_pn_point = _entity_combo()
-        self.rd_pn_plane = _entity_combo()
-        n_form.addRow("Point", self.rd_pn_point)
-        n_form.addRow("Normal from", self.rd_pn_plane)
-        self.rd_pn_hint = QLabel(
-            "Axis through the point, direction = that plane's normal. "
-            "The point does not have to lie on the plane."
-        )
-        self.rd_pn_hint.setObjectName("muted")
-        self.rd_pn_hint.setWordWrap(True)
-        npage.layout().insertWidget(1, self.rd_pn_hint)
-        self.rd_stack.addWidget(npage)  # 5
-
-        # page: 2 points → axis
-        ppage, pp_form = _form_page()
-        self.rd_pp_a = _entity_combo()
-        self.rd_pp_b = _entity_combo()
-        pp_form.addRow("Point A", self.rd_pp_a)
-        pp_form.addRow("Point B", self.rd_pp_b)
-        self.rd_pp_hint = QLabel(
-            "Axis through both points. Direction is B − A "
-            "(sign is fixed by the largest component)."
-        )
-        self.rd_pp_hint.setObjectName("muted")
-        self.rd_pp_hint.setWordWrap(True)
-        ppage.layout().insertWidget(1, self.rd_pp_hint)
-        self.rd_stack.addWidget(ppage)  # 6
-
-        # page: line ∩ 2 planes → midpoint
-        mpage, mp_form = _form_page()
-        self.rd_mp_line = _entity_combo()
-        self.rd_mp_a = _entity_combo()
-        self.rd_mp_b = _entity_combo()
-        mp_form.addRow("Axis", self.rd_mp_line)
-        mp_form.addRow("Plane A", self.rd_mp_a)
-        mp_form.addRow("Plane B", self.rd_mp_b)
-        self.rd_mp_hint = QLabel(
-            "Hits of the axis on the two planes form a segment. "
-            "The result is that segment's midpoint."
-        )
-        self.rd_mp_hint.setObjectName("muted")
-        self.rd_mp_hint.setWordWrap(True)
-        mpage.layout().insertWidget(1, self.rd_mp_hint)
-        self.rd_stack.addWidget(mpage)  # 7
-
-        # page: plane + point → parallel plane
-        pp_page, pp_form = _form_page()
-        self.rd_pp_plane = _entity_combo()
-        self.rd_pp_point = _entity_combo()
-        pp_form.addRow("Plane", self.rd_pp_plane)
-        pp_form.addRow("Point", self.rd_pp_point)
-        self.rd_pp_hint = QLabel(
-            "Plane parallel to the source, passing through the point."
-        )
-        self.rd_pp_hint.setObjectName("muted")
-        self.rd_pp_hint.setWordWrap(True)
-        pp_page.layout().insertWidget(1, self.rd_pp_hint)
-        self.rd_stack.addWidget(pp_page)  # 8
-
-        # page: line + point → plane
-        lpp_page, lpp_form = _form_page()
-        self.rd_lpp_line = _entity_combo()
-        self.rd_lpp_point = _entity_combo()
-        lpp_form.addRow("Axis", self.rd_lpp_line)
-        lpp_form.addRow("Point", self.rd_lpp_point)
-        self.rd_lpp_hint = QLabel(
-            "Plane through the point with normal = the axis direction."
-        )
-        self.rd_lpp_hint.setObjectName("muted")
-        self.rd_lpp_hint.setWordWrap(True)
-        lpp_page.layout().insertWidget(1, self.rd_lpp_hint)
-        self.rd_stack.addWidget(lpp_page)  # 9
-
-        # page: 2 lines → plane
-        l2p_page, l2p_form = _form_page()
-        self.rd_l2p_a = _entity_combo()
-        self.rd_l2p_b = _entity_combo()
-        l2p_form.addRow("Axis A", self.rd_l2p_a)
-        l2p_form.addRow("Axis B", self.rd_l2p_b)
-        self.rd_l2p_hint = QLabel(
-            "Plane containing both axes. They must be coplanar (intersect or "
-            "parallel in the same plane); skew lines are rejected."
-        )
-        self.rd_l2p_hint.setObjectName("muted")
-        self.rd_l2p_hint.setWordWrap(True)
-        l2p_page.layout().insertWidget(1, self.rd_l2p_hint)
-        self.rd_stack.addWidget(l2p_page)  # 10
-
-        # page: rotate plane about axis
-        rot_page, rot_form = _form_page()
-        self.rd_rot_plane = _entity_combo()
-        self.rd_rot_line = _entity_combo()
-        self.rd_rot_angle = QDoubleSpinBox()
-        self.rd_rot_angle.setRange(-360.0, 360.0)
-        self.rd_rot_angle.setDecimals(3)
-        self.rd_rot_angle.setSingleStep(1.0)
-        self.rd_rot_angle.setSuffix(" °")
-        self.rd_rot_angle.setValue(0.0)
-        self.rd_rot_angle.valueChanged.connect(self._reduction_on_operand_combo)
-        rot_form.addRow("Plane", self.rd_rot_plane)
-        rot_form.addRow("Axis", self.rd_rot_line)
-        rot_form.addRow("Angle", self.rd_rot_angle)
-        self.rd_rot_hint = QLabel(
-            "Rotate the plane rigidly about the axis. The axis does not have "
-            "to lie in the plane. When FRAME axis and origin are set, aligned "
-            "X/Y/Z appear in the Axis list. Positive angle follows the "
-            "right-hand rule. Rotation about a normal-direction axis leaves "
-            "an infinite plane unchanged."
-        )
-        self.rd_rot_hint.setObjectName("muted")
-        self.rd_rot_hint.setWordWrap(True)
-        rot_page.layout().insertWidget(1, self.rd_rot_hint)
-        self.rd_stack.addWidget(rot_page)  # 11
-
-        # page: source-plane normal ∩ destination plane → point
-        np_page, np_form = _form_page()
-        self.rd_np_src = _entity_combo()
-        self.rd_np_dst = _entity_combo()
-        np_form.addRow("Normal from", self.rd_np_src)
-        np_form.addRow("Hit plane", self.rd_np_dst)
-        self.rd_np_hint = QLabel(
-            "Ray along the source plane's normal from the source overlay "
-            "(the patch you see) intersecting the destination plane. "
-            "Nearly perpendicular planes send the hit far away."
-        )
-        self.rd_np_hint.setObjectName("muted")
-        self.rd_np_hint.setWordWrap(True)
-        np_page.layout().insertWidget(1, self.rd_np_hint)
-        self.rd_stack.addWidget(np_page)  # 12
+        for op in REDUCTION_OPS:
+            page, form = _form_page()
+            for field in op.operands:
+                combo = _entity_combo()
+                setattr(self, field.widget, combo)
+                form.addRow(field.label, combo)
+            for field in op.scalars:
+                spin = QDoubleSpinBox()
+                spin.setRange(field.minimum, field.maximum)
+                spin.setDecimals(field.decimals)
+                spin.setSingleStep(field.step)
+                spin.setSuffix(field.suffix)
+                spin.setValue(field.default)
+                if op.gui_key == "offset":
+                    spin.valueChanged.connect(self._reduction_on_offset_spin)
+                else:
+                    spin.valueChanged.connect(self._reduction_on_operand_combo)
+                setattr(self, field.widget, spin)
+                form.addRow(field.label, spin)
+            if op.gui_key == "offset":
+                self._reduction_attach_offset_slider(form)
+            if op.hint:
+                hint = QLabel(op.hint)
+                hint.setObjectName("muted")
+                hint.setWordWrap(True)
+                setattr(self, f"rd_{op.gui_key}_hint", hint)
+                page.layout().insertWidget(1, hint)
+            self.rd_stack.addWidget(page)
 
         op_lay.addWidget(self.rd_stack)
         self._reduction_lock_operation_stack_height()
@@ -800,7 +649,7 @@ class ReductionMixin:
         keep: str | None = None,
         placeholder: str = "(choose)",
         allowed: set[str] | None = None,
-        include_aligned_axes: bool = True,
+        include_aligned: bool = True,
     ) -> None:
         ids = self._reduction.ids(kind=kind) if kind else self._reduction.ids()
         if allowed is not None:
@@ -808,13 +657,14 @@ class ReductionMixin:
         combo.blockSignals(True)
         _reset_combo(combo)
         combo.addItem(placeholder, None)
-        if include_aligned_axes and kind == "line":
-            extras = self._reduction.available_aligned_axis_ids(
-                before=None if allowed is None else allowed
+        if include_aligned and kind in ("line", "plane", "point"):
+            extras = self._reduction.available_aligned_ids(
+                kind=kind, before=None if allowed is None else allowed
             )
-            for eid in extras:
-                label = ALIGNED_AXIS_LABELS.get(eid, eid)
-                combo.addItem(label, eid)
+            for eid in ALIGNED_ENTITY_IDS:
+                if eid not in extras:
+                    continue
+                combo.addItem(ALIGNED_LABELS.get(eid, eid), eid)
         for eid in ids:
             tag = RD_KIND_LABEL.get(self._reduction.kind_of(eid), "")
             combo.addItem(f"{eid}  ({tag})" if tag else eid, eid)
@@ -853,164 +703,79 @@ class ReductionMixin:
     ) -> None:
         self._reduction_fill_bind_combo()
         keep = {
-            "offset": self._reduction_combo_id(getattr(self, "rd_offset_plane", None)),
-            "p2a": self._reduction_combo_id(getattr(self, "rd_p2_a", None)),
-            "p2b": self._reduction_combo_id(getattr(self, "rd_p2_b", None)),
-            "lp_line": self._reduction_combo_id(getattr(self, "rd_lp_line", None)),
-            "lp_plane": self._reduction_combo_id(getattr(self, "rd_lp_plane", None)),
-            "p3a": self._reduction_combo_id(getattr(self, "rd_p3_a", None)),
-            "p3b": self._reduction_combo_id(getattr(self, "rd_p3_b", None)),
-            "p3c": self._reduction_combo_id(getattr(self, "rd_p3_c", None)),
-            "pn_point": self._reduction_combo_id(getattr(self, "rd_pn_point", None)),
-            "pn_plane": self._reduction_combo_id(getattr(self, "rd_pn_plane", None)),
-            "pp_a": self._reduction_combo_id(getattr(self, "rd_pp_a", None)),
-            "pp_b": self._reduction_combo_id(getattr(self, "rd_pp_b", None)),
-            "mp_line": self._reduction_combo_id(getattr(self, "rd_mp_line", None)),
-            "mp_a": self._reduction_combo_id(getattr(self, "rd_mp_a", None)),
-            "mp_b": self._reduction_combo_id(getattr(self, "rd_mp_b", None)),
-            "pp_plane": self._reduction_combo_id(getattr(self, "rd_pp_plane", None)),
-            "pp_point": self._reduction_combo_id(getattr(self, "rd_pp_point", None)),
-            "lpp_line": self._reduction_combo_id(getattr(self, "rd_lpp_line", None)),
-            "lpp_point": self._reduction_combo_id(getattr(self, "rd_lpp_point", None)),
-            "l2p_a": self._reduction_combo_id(getattr(self, "rd_l2p_a", None)),
-            "l2p_b": self._reduction_combo_id(getattr(self, "rd_l2p_b", None)),
-            "rot_plane": self._reduction_combo_id(getattr(self, "rd_rot_plane", None)),
-            "rot_line": self._reduction_combo_id(getattr(self, "rd_rot_line", None)),
-            "np_src": self._reduction_combo_id(getattr(self, "rd_np_src", None)),
-            "np_dst": self._reduction_combo_id(getattr(self, "rd_np_dst", None)),
-            "frame_axis": self._reduction_combo_id(getattr(self, "rd_frame_axis", None)),
-            "frame_origin": self._reduction_combo_id(
-                getattr(self, "rd_frame_origin", None)
-            ),
-            "frame_yaw": self._reduction_combo_id(
-                getattr(self, "rd_frame_yaw_ref", None)
-            ),
-            "measure_a": self._reduction_combo_id(getattr(self, "rd_measure_a", None)),
-            "measure_b": self._reduction_combo_id(getattr(self, "rd_measure_b", None)),
+            field.widget: self._reduction_combo_id(getattr(self, field.widget, None))
+            for op in REDUCTION_OPS
+            for field in op.operands
         }
+        keep.update(
+            {
+                "frame_axis": self._reduction_combo_id(
+                    getattr(self, "rd_frame_axis", None)
+                ),
+                "frame_origin": self._reduction_combo_id(
+                    getattr(self, "rd_frame_origin", None)
+                ),
+                "frame_yaw": self._reduction_combo_id(
+                    getattr(self, "rd_frame_yaw_ref", None)
+                ),
+                "measure_a": self._reduction_combo_id(
+                    getattr(self, "rd_measure_a", None)
+                ),
+                "measure_b": self._reduction_combo_id(
+                    getattr(self, "rd_measure_b", None)
+                ),
+            }
+        )
         if rename:
             old, new = rename
             keep = {k: (new if v == old else v) for k, v in keep.items()}
         allowed = self._reduction_operand_allowlist()
         fill_kw = {"allowed": allowed} if allowed is not None else {}
-        if hasattr(self, "rd_offset_plane"):
+        for op in REDUCTION_OPS:
+            for field in op.operands:
+                combo = getattr(self, field.widget, None)
+                if combo is None:
+                    continue
+                self._reduction_fill_combo(
+                    combo, kind=field.kind, keep=keep.get(field.widget), **fill_kw
+                )
+        if include_frame and hasattr(self, "rd_frame_axis"):
             self._reduction_fill_combo(
-                self.rd_offset_plane, kind="plane", keep=keep["offset"], **fill_kw
+                self.rd_frame_axis,
+                kind="line",
+                keep=keep.get("frame_axis"),
+                include_aligned=False,
             )
             self._reduction_fill_combo(
-                self.rd_p2_a, kind="plane", keep=keep["p2a"], **fill_kw
+                self.rd_frame_origin,
+                kind="point",
+                keep=keep.get("frame_origin"),
+                include_aligned=False,
+            )
+            if hasattr(self, "rd_frame_yaw_ref"):
+                spec = self._reduction.frame_spec or {}
+                yaw_kind = "plane" if spec.get("yaw_plane") else "line"
+                idx = self.rd_frame_yaw_kind.findData(yaw_kind)
+                if idx >= 0:
+                    self.rd_frame_yaw_kind.blockSignals(True)
+                    self.rd_frame_yaw_kind.setCurrentIndex(idx)
+                    self.rd_frame_yaw_kind.blockSignals(False)
+                self._reduction_fill_frame_yaw_ref(keep=keep.get("frame_yaw"))
+            if rename and self._view_frame is not None:
+                old, new = rename
+                self._view_frame = self._view_frame.relabel(old, new)
+                self._update_frame_controls()
+                self._rebuild_status_default()
+            self._sync_frame_align_enabled()
+        if hasattr(self, "rd_measure_a"):
+            kinds, _labels = self._measure_operand_meta()
+            self._reduction_fill_combo(
+                self.rd_measure_a, kind=kinds[0], keep=keep.get("measure_a")
             )
             self._reduction_fill_combo(
-                self.rd_p2_b, kind="plane", keep=keep["p2b"], **fill_kw
+                self.rd_measure_b, kind=kinds[1], keep=keep.get("measure_b")
             )
-            self._reduction_fill_combo(
-                self.rd_lp_line, kind="line", keep=keep["lp_line"], **fill_kw
-            )
-            self._reduction_fill_combo(
-                self.rd_lp_plane, kind="plane", keep=keep["lp_plane"], **fill_kw
-            )
-            self._reduction_fill_combo(
-                self.rd_p3_a, kind="plane", keep=keep["p3a"], **fill_kw
-            )
-            self._reduction_fill_combo(
-                self.rd_p3_b, kind="plane", keep=keep["p3b"], **fill_kw
-            )
-            self._reduction_fill_combo(
-                self.rd_p3_c, kind="plane", keep=keep["p3c"], **fill_kw
-            )
-            self._reduction_fill_combo(
-                self.rd_pn_point, kind="point", keep=keep["pn_point"], **fill_kw
-            )
-            self._reduction_fill_combo(
-                self.rd_pn_plane, kind="plane", keep=keep["pn_plane"], **fill_kw
-            )
-            if hasattr(self, "rd_pp_a"):
-                self._reduction_fill_combo(
-                    self.rd_pp_a, kind="point", keep=keep["pp_a"], **fill_kw
-                )
-                self._reduction_fill_combo(
-                    self.rd_pp_b, kind="point", keep=keep["pp_b"], **fill_kw
-                )
-            if hasattr(self, "rd_mp_line"):
-                self._reduction_fill_combo(
-                    self.rd_mp_line, kind="line", keep=keep["mp_line"], **fill_kw
-                )
-                self._reduction_fill_combo(
-                    self.rd_mp_a, kind="plane", keep=keep["mp_a"], **fill_kw
-                )
-                self._reduction_fill_combo(
-                    self.rd_mp_b, kind="plane", keep=keep["mp_b"], **fill_kw
-                )
-            if hasattr(self, "rd_pp_plane"):
-                self._reduction_fill_combo(
-                    self.rd_pp_plane, kind="plane", keep=keep["pp_plane"], **fill_kw
-                )
-            if hasattr(self, "rd_pp_point"):
-                self._reduction_fill_combo(
-                    self.rd_pp_point, kind="point", keep=keep["pp_point"], **fill_kw
-                )
-            if hasattr(self, "rd_lpp_line"):
-                self._reduction_fill_combo(
-                    self.rd_lpp_line, kind="line", keep=keep["lpp_line"], **fill_kw
-                )
-                self._reduction_fill_combo(
-                    self.rd_lpp_point, kind="point", keep=keep["lpp_point"], **fill_kw
-                )
-            if hasattr(self, "rd_l2p_a"):
-                self._reduction_fill_combo(
-                    self.rd_l2p_a, kind="line", keep=keep["l2p_a"], **fill_kw
-                )
-                self._reduction_fill_combo(
-                    self.rd_l2p_b, kind="line", keep=keep["l2p_b"], **fill_kw
-                )
-            if hasattr(self, "rd_rot_plane"):
-                self._reduction_fill_combo(
-                    self.rd_rot_plane, kind="plane", keep=keep["rot_plane"], **fill_kw
-                )
-                self._reduction_fill_combo(
-                    self.rd_rot_line, kind="line", keep=keep["rot_line"], **fill_kw
-                )
-            if hasattr(self, "rd_np_src"):
-                self._reduction_fill_combo(
-                    self.rd_np_src, kind="plane", keep=keep["np_src"], **fill_kw
-                )
-                self._reduction_fill_combo(
-                    self.rd_np_dst, kind="plane", keep=keep["np_dst"], **fill_kw
-                )
-            if include_frame and hasattr(self, "rd_frame_axis"):
-                self._reduction_fill_combo(
-                    self.rd_frame_axis,
-                    kind="line",
-                    keep=keep.get("frame_axis"),
-                    include_aligned_axes=False,
-                )
-                self._reduction_fill_combo(
-                    self.rd_frame_origin, kind="point", keep=keep.get("frame_origin")
-                )
-                if hasattr(self, "rd_frame_yaw_ref"):
-                    spec = self._reduction.frame_spec or {}
-                    yaw_kind = "plane" if spec.get("yaw_plane") else "line"
-                    idx = self.rd_frame_yaw_kind.findData(yaw_kind)
-                    if idx >= 0:
-                        self.rd_frame_yaw_kind.blockSignals(True)
-                        self.rd_frame_yaw_kind.setCurrentIndex(idx)
-                        self.rd_frame_yaw_kind.blockSignals(False)
-                    self._reduction_fill_frame_yaw_ref(keep=keep.get("frame_yaw"))
-                if rename and self._view_frame is not None:
-                    old, new = rename
-                    self._view_frame = self._view_frame.relabel(old, new)
-                    self._update_frame_controls()
-                    self._rebuild_status_default()
-                self._sync_frame_align_enabled()
-            if hasattr(self, "rd_measure_a"):
-                kinds, _labels = self._measure_operand_meta()
-                self._reduction_fill_combo(
-                    self.rd_measure_a, kind=kinds[0], keep=keep.get("measure_a")
-                )
-                self._reduction_fill_combo(
-                    self.rd_measure_b, kind=kinds[1], keep=keep.get("measure_b")
-                )
-                self._reduction_update_live_measure()
+            self._reduction_update_live_measure()
 
     def _reduction_selected_ids(self) -> list[str]:
         """Operand ids for the current operation (from OPERATION combos)."""
@@ -1050,7 +815,7 @@ class ReductionMixin:
         if eid is None:
             return None
         allowed = self._reduction.operand_ids_before(eid)
-        allowed.update(self._reduction.available_aligned_axis_ids(before=allowed))
+        allowed.update(self._reduction.available_aligned_ids(before=allowed))
         return allowed
 
     def _reduction_set_combo(self, combo: QComboBox | None, eid: str | None) -> None:
@@ -1235,12 +1000,17 @@ class ReductionMixin:
         parts = []
         for eid in ids:
             kind = self._reduction.kind_of(eid)
-            name = ALIGNED_AXIS_LABELS.get(eid, eid)
+            name = ALIGNED_LABELS.get(eid, eid)
             tag = RD_KIND_LABEL.get(kind, kind)
             parts.append(f"{name} [{tag}]")
         self.rd_selection_label.setText("Operands: " + ", ".join(parts))
 
     def _reduction_entity_color(self, eid: str, *, selected: bool) -> str:
+        if is_aligned_id(eid):
+            base = RD_ALIGNED.get(eid, RD_AXIS)
+            if selected:
+                return "#ffffff" if self._reduction.kind_of(eid) == "line" else base
+            return base
         kind = self._reduction.kind_of(eid)
         if kind == "plane":
             rec = self._reduction.record_of(eid)
@@ -1252,6 +1022,21 @@ class ReductionMixin:
         if selected:
             return "#ffffff" if kind == "line" else base
         return base
+
+    def _reduction_attach_offset_slider(self, form: QFormLayout) -> None:
+        """Offset-only extra: a ±500 mm slider beside the distance spin."""
+        self.rd_offset_slider = QSlider(Qt.Horizontal)
+        self.rd_offset_slider.setRange(-5000, 5000)
+        self.rd_offset_slider.setValue(120)
+        self.rd_offset_slider.setTickPosition(QSlider.TicksBelow)
+        self.rd_offset_slider.setTickInterval(1000)
+        self.rd_offset_slider.valueChanged.connect(self._reduction_on_offset_slider)
+        form.addRow("", self.rd_offset_slider)
+        self.rd_offset_range_label = QLabel(
+            "slider ±500 mm (0.1 mm steps). Preview updates live."
+        )
+        self.rd_offset_range_label.setObjectName("muted")
+        form.addRow("", self.rd_offset_range_label)
 
     def _reduction_on_offset_spin(self, value: float):
         if self._rd_offset_sync:
@@ -1907,9 +1692,12 @@ class ReductionMixin:
         muted = QColor("#8b919a")
         italic = QFont()
         italic.setItalic(True)
-        for eid in self._reduction_aligned_axis_ids():
-            label = ALIGNED_AXIS_LABELS.get(eid, eid)
-            item = QTreeWidgetItem([label, "axis", "—", "FRAME triad"])
+        for eid in self._reduction_aligned_entity_ids():
+            label = ALIGNED_LABELS.get(eid, eid)
+            kind_tag = "origin" if is_aligned_origin_id(eid) else (
+                "axis" if is_aligned_axis_id(eid) else "plane"
+            )
+            item = QTreeWidgetItem([label, kind_tag, "—", "FRAME triad"])
             item.setData(0, Qt.UserRole, eid)
             item.setFlags(
                 Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable
@@ -1919,7 +1707,7 @@ class ReductionMixin:
                 Qt.Checked if self._reduction.visible.get(eid, True) else Qt.Unchecked,
             )
             item.setForeground(0, muted)
-            item.setForeground(1, QColor(RD_ALIGNED_AXIS.get(eid, RD_AXIS)))
+            item.setForeground(1, QColor(RD_ALIGNED.get(eid, RD_AXIS)))
             item.setForeground(2, muted)
             item.setForeground(3, muted)
             for col in range(4):
@@ -1964,8 +1752,13 @@ class ReductionMixin:
             return
         if column in (1, 3):
             self.rd_tree.blockSignals(True)
-            if is_aligned_axis_id(eid):
-                item.setText(1, "axis")
+            if is_aligned_id(eid):
+                if is_aligned_origin_id(eid):
+                    item.setText(1, "origin")
+                elif is_aligned_axis_id(eid):
+                    item.setText(1, "axis")
+                else:
+                    item.setText(1, "plane")
                 item.setText(3, "FRAME triad")
             elif eid in self._reduction.ids():
                 kind = self._reduction.kind_of(eid)
@@ -1979,7 +1772,7 @@ class ReductionMixin:
             return
         vis = item.checkState(0) == Qt.Checked
         was_vis = self._reduction.visible.get(eid, True)
-        if is_aligned_axis_id(eid):
+        if is_aligned_id(eid):
             self._reduction.visible[eid] = vis
             if vis != was_vis:
                 self._apply_reduction_entity_visibility(eid, vis)
@@ -2167,16 +1960,23 @@ class ReductionMixin:
                 ids.append(str(eid))
         return ids
 
-    def _reduction_aligned_axis_ids(self) -> list[str]:
+    def _reduction_aligned_entity_ids(self) -> list[str]:
         """FRAME triad ids shown as virtual ENTITIES rows."""
-        available = self._reduction.available_aligned_axis_ids()
-        return [eid for eid in ALIGNED_AXIS_IDS if eid in available]
+        available = self._reduction.available_aligned_ids()
+        return [eid for eid in ALIGNED_ENTITY_IDS if eid in available]
+
+    def _reduction_aligned_axis_ids(self) -> list[str]:
+        return [
+            eid
+            for eid in self._reduction_aligned_entity_ids()
+            if is_aligned_axis_id(eid)
+        ]
 
     def _reduction_overlay_ids(self) -> list[str]:
-        return list(self._reduction.ids()) + self._reduction_aligned_axis_ids()
+        return list(self._reduction.ids()) + self._reduction_aligned_entity_ids()
 
     def _reduction_has_overlay(self, eid: str) -> bool:
-        return eid in self._reduction.ids() or eid in self._reduction_aligned_axis_ids()
+        return eid in self._reduction.ids() or eid in self._reduction_aligned_entity_ids()
 
     def _reduction_overlay_selected_ids(self) -> set[str]:
         return set(self._reduction_selected_ids()) | set(
@@ -2189,7 +1989,7 @@ class ReductionMixin:
             raise ValueError("select an entity in the list to delete")
         real = [eid for eid in ids if eid in self._reduction.ids()]
         if not real:
-            raise ValueError("aligned axes cannot be renamed or deleted")
+            raise ValueError("aligned entities cannot be renamed or deleted")
         removed: list[str] = []
         for eid in real:
             removed.extend(self._reduction.remove(eid))
@@ -2235,6 +2035,13 @@ class ReductionMixin:
         if is_aligned_axis_id(eid):
             line = self._reduction.line(eid)
             return axis_arrow_points(line, self._reduction.overlay_mm(eid))[1]
+        if is_aligned_origin_id(eid):
+            return self._reduction.point(eid)
+        if is_aligned_plane_id(eid):
+            plane = self._reduction.plane(eid)
+            origin = self._reduction.point(ALIGNED_ORIGIN_ID)
+            size = self._reduction.overlay_mm(eid)
+            return origin + plane.normal * (size * 0.08)
         kind = self._reduction.kind_of(eid)
         anchor = self._reduction.anchors.get(eid)
         size = self._reduction.overlay_mm(eid)
@@ -2293,7 +2100,7 @@ class ReductionMixin:
         diam = self._reduction.overlay_width_mm(eid)
         if selected:
             diam *= 1.35
-        color = RD_ALIGNED_AXIS.get(eid, RD_AXIS)
+        color = RD_ALIGNED.get(eid, RD_AXIS)
         name = self._reduction_actor_name(eid)
         self.plotter.add_mesh(
             _line_tube_mesh(origin_v, shaft_end, diam),
@@ -2337,7 +2144,84 @@ class ReductionMixin:
             )
             self._reduction_actor_names.append(cname)
 
+    def _add_aligned_origin_overlay(self, eid: str, *, selected: bool) -> None:
+        pt = self._to_view_point(self._reduction.point(eid))
+        r = max(self._reduction.overlay_mm(eid), 6.0)
+        if selected:
+            r *= 1.4
+        name = self._reduction_actor_name(eid)
+        mesh = pv.Sphere(radius=r, center=pt.tolist())
+        self.plotter.add_mesh(
+            mesh,
+            name=name,
+            color=RD_ALIGNED.get(eid, RD_POINT),
+            reset_camera=False,
+            pickable=False,
+            render=False,
+        )
+        self._reduction_actor_names.append(name)
+        if selected:
+            ring = pv.Sphere(radius=r * 1.35, center=pt.tolist())
+            rname = name + "_ring"
+            self.plotter.add_mesh(
+                ring,
+                name=rname,
+                style="wireframe",
+                color=RD_SELECTED_RING,
+                line_width=2,
+                reset_camera=False,
+                pickable=False,
+                render=False,
+            )
+            self._reduction_actor_names.append(rname)
+
+    def _add_aligned_plane_overlay(self, eid: str, *, selected: bool) -> None:
+        plane = self._reduction.plane(eid)
+        origin = self._reduction.point(ALIGNED_ORIGIN_ID)
+        size = max(self._reduction.overlay_mm(eid), 1.0)
+        corners_s = plane_patch_corners(plane, center=origin, size_mm=size)
+        corners = self._to_view_points(corners_s)
+        faces = np.array([3, 0, 1, 2, 3, 0, 2, 3], dtype=np.int64)
+        mesh = pv.PolyData(corners, faces=faces)
+        color = RD_ALIGNED.get(eid, RD_PLANE_OFFSET)
+        opacity = 0.40 if selected else 0.22
+        lw = 4 if selected else 2
+        name = self._reduction_actor_name(eid)
+        self.plotter.add_mesh(
+            mesh,
+            name=name,
+            color=color,
+            opacity=opacity,
+            reset_camera=False,
+            pickable=False,
+            render=False,
+        )
+        edge_name = name + "_e"
+        edge_color = RD_SELECTED_RING if selected else color
+        self.plotter.add_mesh(
+            mesh,
+            name=edge_name,
+            style="wireframe",
+            color=edge_color,
+            line_width=lw,
+            reset_camera=False,
+            pickable=False,
+            render=False,
+        )
+        self._reduction_actor_names.extend([name, edge_name])
+
     def _add_reduction_entity_overlay(self, eid: str, *, selected: bool) -> None:
+        if is_aligned_id(eid):
+            try:
+                if is_aligned_axis_id(eid):
+                    self._add_aligned_axis_overlay(eid, selected=selected)
+                elif is_aligned_plane_id(eid):
+                    self._add_aligned_plane_overlay(eid, selected=selected)
+                else:
+                    self._add_aligned_origin_overlay(eid, selected=selected)
+            except Exception:
+                traceback.print_exc()
+            return
         kind = self._reduction.kind_of(eid)
         name = self._reduction_actor_name(eid)
         anchor = self._reduction.anchors.get(eid)
@@ -2398,9 +2282,6 @@ class ReductionMixin:
                 )
                 self._reduction_actor_names.append(nname)
             elif kind == "line":
-                if is_aligned_axis_id(eid):
-                    self._add_aligned_axis_overlay(eid, selected=selected)
-                    return
                 line = self._reduction.line(eid)
                 seg = line_segment_points(
                     line, half_length_mm=size, center=anchor
@@ -2494,7 +2375,7 @@ class ReductionMixin:
                 continue
             try:
                 label_pts.append(self._reduction_label_position(eid))
-                label_text.append(ALIGNED_AXIS_LABELS.get(eid, eid))
+                label_text.append(ALIGNED_LABELS.get(eid, eid))
             except Exception:
                 traceback.print_exc()
         if label_pts:

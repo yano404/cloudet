@@ -9,7 +9,7 @@ from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QFont, QHelpEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QToolTip, QWidget
 
-from cloudet.array_backend import (
+from cloudet.core.array_backend import (
     cupy_unavailable_reason,
     device_name,
     resolve_compute_backend,
