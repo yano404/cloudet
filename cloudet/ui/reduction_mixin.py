@@ -59,10 +59,12 @@ from cloudet.core.plane import Plane
 from cloudet.project.schema import plane_from_json
 from cloudet.reduction import (
     export_reduction_result,
+    geometry_summary_path,
     load_recipe,
     preview_construct_step,
     scanned_plane_record,
     write_geometry_json,
+    write_geometry_summary_json,
     write_recipe_json,
 )
 from cloudet.reduction.ops import (
@@ -1626,6 +1628,8 @@ class ReductionMixin:
         if not path:
             return
         write_geometry_json(path, result)
+        summary_path = geometry_summary_path(path)
+        write_geometry_summary_json(summary_path, result)
         # Also write recipe beside it for reproducibility.
         recipe_path = Path(path).with_name(
             Path(path).stem + "_recipe.json"
@@ -1641,7 +1645,8 @@ class ReductionMixin:
         else:
             frame_note = ", survey only"
         self._status(
-            f"exported {path}  ({len(result.planes)} planes, "
+            f"exported {path} + {summary_path.name}  "
+            f"({len(result.planes)} planes, "
             f"{len(result.lines)} lines, {len(result.points)} points{frame_note})"
         )
 

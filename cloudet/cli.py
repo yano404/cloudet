@@ -136,7 +136,13 @@ def _run_app(args: argparse.Namespace) -> int:
 
 
 def _run_reduce(argv: list[str]) -> int:
-    from cloudet.reduction import load_recipe, run_reduction, write_geometry_json
+    from cloudet.reduction import (
+        geometry_summary_path,
+        load_recipe,
+        run_reduction,
+        write_geometry_json,
+        write_geometry_summary_json,
+    )
 
     args = build_reduce_parser().parse_args(argv)
     project = Path(args.project_dir)
@@ -144,6 +150,9 @@ def _run_reduce(argv: list[str]) -> int:
         recipe = load_recipe(args.recipe)
         result = run_reduction(project, recipe)
         out = write_geometry_json(args.output, result)
+        summary_out = write_geometry_summary_json(
+            geometry_summary_path(out), result
+        )
     except (OSError, ValueError, KeyError, TypeError, NotADirectoryError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
@@ -155,6 +164,7 @@ def _run_reduce(argv: list[str]) -> int:
         f"wrote {out}  ({n_p} plane(s), {n_l} line(s), {n_x} point(s); "
         f"export={result.exported}{frame_note})"
     )
+    print(f"wrote {summary_out}  (slim names + coordinates)")
     return 0
 
 

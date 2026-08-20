@@ -70,11 +70,14 @@ __all__ = [
     "ReductionResult",
     "ReductionSession",
     "export_reduction_result",
+    "geometry_summary_dict",
+    "geometry_summary_path",
     "load_recipe",
     "preview_construct_step",
     "run_reduction",
     "scanned_plane_record",
     "write_geometry_json",
+    "write_geometry_summary_json",
     "write_recipe_json",
 ]
 
@@ -1078,6 +1081,99 @@ def write_geometry_json(path: str | Path, result: ReductionResult) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(result.to_dict(), f, indent=2)
+        f.write("\n")
+    return path
+
+
+def geometry_summary_path(geometry_path: str | Path) -> Path:
+    """Sibling path for the slim summary next to a full geometry.json."""
+    path = Path(geometry_path)
+    if path.name == "geometry.json":
+        return path.with_name("geometry_summary.json")
+    return path.with_name(f"{path.stem}_summary.json")
+
+
+def geometry_summary_dict(result: ReductionResult) -> dict:
+    """Slim view: entity names + coordinates (aligned frame when available).
+
+    Includes only ``result.exported`` ids when that list is non-empty; otherwise
+    all entities. Drops recipe echo, provenance, parents, and quality metadata.
+    """
+    use_aligned = isinstance(result.aligned, dict)
+    if use_aligned:
+        planes_src = result.aligned.get("planes") or {}
+        lines_src = result.aligned.get("lines") or {}
+        points_src = result.aligned.get("points") or {}
+        frame_label = "aligned"
+    else:
+        planes_src = result.planes
+        lines_src = result.lines
+        points_src = result.points
+        frame_label = "survey"
+
+    wanted = [str(x) for x in (result.exported or [])]
+    if wanted:
+        wanted_set = set(wanted)
+
+        def _select(mapping: dict) -> dict:
+            return {k: mapping[k] for k in wanted if k in mapping}
+    else:
+
+        def _select(mapping: dict) -> dict:
+            return dict(mapping)
+
+    planes_out: dict[str, dict] = {}
+    for eid, rec in _select(planes_src).items():
+        if not isinstance(rec, dict):
+            continue
+        if "normal" in rec and "d" in rec:
+            planes_out[eid] = {
+                "normal": list(rec["normal"]),
+                "d": float(rec["d"]),
+            }
+        elif "abcd" in rec:
+            plane = Plane.from_array(rec["abcd"])
+            planes_out[eid] = {
+                "normal": plane.normal.tolist(),
+                "d": float(plane.d),
+            }
+
+    lines_out: dict[str, dict] = {}
+    for eid, rec in _select(lines_src).items():
+        if not isinstance(rec, dict):
+            continue
+        if "point" in rec and "direction" in rec:
+            lines_out[eid] = {
+                "point": list(rec["point"]),
+                "direction": list(rec["direction"]),
+            }
+
+    points_out: dict[str, dict] = {}
+    for eid, rec in _select(points_src).items():
+        if not isinstance(rec, dict):
+            continue
+        if "xyz" in rec:
+            points_out[eid] = {"xyz": list(rec["xyz"])}
+
+    out: dict[str, Any] = {
+        "units": "mm",
+        "frame": frame_label,
+        "planes": planes_out,
+        "lines": lines_out,
+        "points": points_out,
+    }
+    return out
+
+
+def write_geometry_summary_json(
+    path: str | Path, result: ReductionResult
+) -> Path:
+    """Write ``geometry_summary.json`` (or a custom path) for human-facing use."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(geometry_summary_dict(result), f, indent=2)
+        f.write("\n")
     return path
 
 
@@ -1086,6 +1182,7 @@ def write_recipe_json(path: str | Path, recipe: dict) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(recipe, f, indent=2)
+        f.write("\n")
     return path
 
 

@@ -161,6 +161,13 @@ cloudet migrate <project> [--dry-run]
 FRAME の **Axis** と **Origin** を設定してください（Export に Align Z は不要）。
 GUI は同じフォルダに `geometry_recipe.json` も書きます。
 
+#### `geometry_summary.json`（薄いサマリ）
+
+エクスポート時、`geometry.json` の隣に **`geometry_summary.json`** も書きます
+（CLI / GUI）。レシピ echo・provenance・parents は含めず、entity の**名前と座標**
+だけです。`aligned` があればその座標を優先し、なければ survey です。
+レシピの `export` が空でなければ、その id だけを含めます。
+
 #### aligned triad オペランド（原点 / 軸 / 平面）
 
 `recipe.frame` で `axis` と `origin` を設定すると、construct から次の仮想 id が

@@ -151,6 +151,27 @@ def test_reduction_beam_on_target(tmp_path):
     assert doc["export"] == ["beam_axis", "beam_on_target"]
     assert "sha256" in doc["recipe"]
 
+    from cloudet.reduction import (
+        geometry_summary_dict,
+        geometry_summary_path,
+        write_geometry_summary_json,
+    )
+
+    summary_path = write_geometry_summary_json(
+        geometry_summary_path(out), result
+    )
+    summary = json.loads(summary_path.read_text())
+    assert summary == geometry_summary_dict(result)
+    assert summary["frame"] == "survey"
+    assert set(summary["lines"]) == {"beam_axis"}
+    assert set(summary["points"]) == {"beam_on_target"}
+    assert "tracker_left" not in summary["planes"]
+    assert "export" not in summary
+    assert "provenance" not in summary["lines"]["beam_axis"]
+    assert "point" in summary["lines"]["beam_axis"]
+    assert "direction" in summary["lines"]["beam_axis"]
+    assert "xyz" in summary["points"]["beam_on_target"]
+
 
 def test_load_recipe_and_unknown_op(tmp_path):
     project = _make_project(tmp_path)
@@ -716,6 +737,17 @@ def test_recipe_frame_roundtrip(tmp_path):
     assert aligned.aligned is not None
     assert aligned.frame is not None
     assert "beam_on_target" in aligned.aligned["points"]
+
+    from cloudet.reduction import geometry_summary_dict
+
+    summary = geometry_summary_dict(aligned)
+    assert summary["frame"] == "aligned"
+    assert np.allclose(
+        summary["points"]["beam_on_target"]["xyz"],
+        aligned.aligned["points"]["beam_on_target"]["xyz"],
+    )
+    survey_summary = geometry_summary_dict(survey)
+    assert survey_summary["frame"] == "survey"
 
 
 def test_recipe_frame_yaw_roundtrip(tmp_path):

@@ -98,6 +98,12 @@ def test_reduce_cli(tmp_path):
     doc = json.loads(out.read_text())
     assert "target" in doc["planes"]
     assert doc["planes"]["target"]["provenance"] == "scanned"
+    summary = json.loads((tmp_path / "out" / "geometry_summary.json").read_text())
+    assert summary["frame"] == "survey"
+    assert "export" not in summary
+    assert "normal" in summary["planes"]["target"]
+    assert "d" in summary["planes"]["target"]
+    assert "provenance" not in summary["planes"]["target"]
 
 
 def test_reduce_parser_requires_recipe():
