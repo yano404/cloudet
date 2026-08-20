@@ -158,6 +158,8 @@ def run_cloudet_qt(project_dir: str, cloud_path: str | None = None) -> None:
     """Launch the cloudet Qt application."""
     install_qt_message_filter()
     app = QApplication.instance() or QApplication([])
+    app.setApplicationName("cloudet")
+    app.setApplicationDisplayName("cloudet")
     icon = app_icon()
     app.setWindowIcon(icon)
     win = CloudetAppWindow(project_dir, cloud_path=cloud_path)
