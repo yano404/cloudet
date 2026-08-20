@@ -3,10 +3,8 @@
 Naming convention for this package
 ----------------------------------
 * ``load_*`` / ``save_*`` — project-domain objects (settings, groups, caches,
-  manifest). Prefer these names in new code.
-* ``read_*`` / ``write_*`` — raw file formats (PLY) and legacy aliases for
-  manifest I/O. ``read_manifest`` / ``write_manifest`` remain as aliases of
-  ``load_manifest`` / ``save_manifest``.
+  manifest).
+* ``read_*`` / ``write_*`` — raw file formats only (e.g. PLY via ``plyio``).
 
 Layout::
 
@@ -45,14 +43,11 @@ from cloudet.core.plyio import write_ply_xyz
 
 __all__ = [
     "SourceInfo",
-    "PickerSettings",
     "CloudetSettings",
     "FittedPlane",
     "save_group",
     "save_manifest",
     "load_manifest",
-    "write_manifest",
-    "read_manifest",
     "load_group_indices",
     "load_plane_inlier_indices",
     "plane_inlier_indices_path",
@@ -93,7 +88,7 @@ class ViewSettings:
 
 
 @dataclass
-class PickerSettings:
+class CloudetSettings:
     detection: PickParams = PickParams()
     view: ViewSettings = None  # type: ignore[assignment]
 
@@ -102,11 +97,7 @@ class PickerSettings:
             self.view = ViewSettings()
 
 
-# Preferred alias (settings schema / file format unchanged).
-CloudetSettings = PickerSettings
-
-
-def save_settings(project_dir: str | Path, settings: PickerSettings) -> Path:
+def save_settings(project_dir: str | Path, settings: CloudetSettings) -> Path:
     path = Path(project_dir) / "settings.json"
     doc = {
         "version": 1,
@@ -119,10 +110,10 @@ def save_settings(project_dir: str | Path, settings: PickerSettings) -> Path:
     return path
 
 
-def load_settings(project_dir: str | Path, warn=print) -> PickerSettings:
+def load_settings(project_dir: str | Path, warn=print) -> CloudetSettings:
     path = Path(project_dir) / "settings.json"
     if not path.exists():
-        return PickerSettings()
+        return CloudetSettings()
     with open(path, encoding="utf-8") as f:
         doc = json.load(f)
     if doc.get("version", 1) != 1:
@@ -149,7 +140,7 @@ def load_settings(project_dir: str | Path, warn=print) -> PickerSettings:
     if detection.ransac_backend == "numpy":
         detection = replace(detection, ransac_backend="seeded")
 
-    return PickerSettings(
+    return CloudetSettings(
         detection=detection,
         view=build(ViewSettings, "view", view_raw),
     )
@@ -182,11 +173,6 @@ def load_manifest(project_dir: str | Path) -> dict | None:
         return None
     with open(path, encoding="utf-8") as f:
         return json.load(f)
-
-
-# Legacy aliases (prefer load_manifest / save_manifest).
-write_manifest = save_manifest
-read_manifest = load_manifest
 
 
 def _jsonable_fit_summary(fit_summary: dict | None) -> dict | None:

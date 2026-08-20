@@ -8,15 +8,15 @@ import pytest
 from cloudet.project.groups import load_groups
 from cloudet.fit.picking import PickParams, pick_plane_region
 from cloudet.project import (
-    PickerSettings,
+    CloudetSettings,
     SourceInfo,
     load_group_indices,
     load_plane_inlier_indices,
     load_settings,
-    read_manifest,
+    load_manifest,
     save_group,
     save_settings,
-    write_manifest,
+    save_manifest,
 )
 
 SIGMA = 0.03
@@ -256,7 +256,7 @@ def test_project_roundtrip(tmp_path):
         color=[0.9, 0.25, 0.25], detection=params,
         fit_summary={"status": "ok", "mad_sigma_mm": 0.031},
     )
-    write_manifest(
+    save_manifest(
         tmp_path, SourceInfo(path="/data/scan.ply", n_points=100_000), params, n_groups=1
     )
 
@@ -272,7 +272,7 @@ def test_project_roundtrip(tmp_path):
     idx = load_group_indices(tmp_path, 0)
     assert np.array_equal(idx, indices)
 
-    m = read_manifest(tmp_path)
+    m = load_manifest(tmp_path)
     assert m["units"] == "mm"
     assert m["source"]["n_points"] == 100_000
     assert m["detection"]["accumulate_threshold_mm"] == 2.5
@@ -390,7 +390,7 @@ def test_plane_name_roundtrip(tmp_path):
 
 
 def test_settings_roundtrip_and_unknown_keys(tmp_path):
-    s = PickerSettings()
+    s = CloudetSettings()
     s.detection = PickParams(local_radius_mm=15.0)
     save_settings(tmp_path, s)
 

@@ -66,10 +66,10 @@ from cloudet.project import (
     load_group_indices,
     load_plane_inlier_indices,
     load_settings,
-    read_manifest,
+    load_manifest,
     save_group,
     save_settings,
-    write_manifest,
+    save_manifest,
 )
 from cloudet.project.spatial_cache import load_display_xyz, load_voxel_grid, save_display_xyz, save_voxel_grid
 from cloudet.project.settings_apply import classify_settings_apply
@@ -1014,10 +1014,10 @@ class GroupsMixin:
         self.grid = None
 
         # Prefer the cloud recorded in the new project's manifest when present.
-        manifest = read_manifest(self.project_dir)
+        manifest = load_manifest(self.project_dir)
         src = (manifest or {}).get("source", {}).get("path", "")
         if src:
-            self.pcd_edit_path = src
+            self.cloud_edit_path = src
             self.cloud_label.setText(Path(src).name)
             self.cloud_label.setToolTip(src)
 
@@ -1031,12 +1031,12 @@ class GroupsMixin:
             "Point clouds (*.ply);;All files (*)",
         )
         if path:
-            self.pcd_edit_path = path
+            self.cloud_edit_path = path
             self.cloud_label.setText(Path(path).name)
             self.cloud_label.setToolTip(path)
 
     def _load_cloud(self):
-        path = getattr(self, "pcd_edit_path", "").strip()
+        path = getattr(self, "cloud_edit_path", "").strip()
         if not path:
             raise ValueError("no cloud file selected (Browse...)")
         if not os.path.exists(path):
@@ -1044,7 +1044,7 @@ class GroupsMixin:
         self._status(f"loading {path} ...")
         QApplication.processEvents()
         self.full_points = read_ply_xyz(path)
-        self.pcd_path = path
+        self.cloud_path = path
         self.cloud_label.setText(Path(path).name)
         self.cloud_label.setToolTip(path)
         self.grid = None
@@ -1068,7 +1068,7 @@ class GroupsMixin:
 
     def _source_cloud_path(self) -> str:
         return str(
-            getattr(self, "pcd_path", "") or getattr(self, "pcd_edit_path", "") or ""
+            getattr(self, "cloud_path", "") or getattr(self, "cloud_edit_path", "") or ""
         ).strip()
 
     def _ensure_grid(self) -> VoxelHashGrid:
@@ -1622,12 +1622,12 @@ class GroupsMixin:
                 detection=self.settings.detection,
                 fit_summary=g["fit"],
             )
-        write_manifest(
+        save_manifest(
             self.project_dir,
             SourceInfo(
-                path=self.pcd_path,
+                path=self.cloud_path,
                 n_points=len(self.full_points),
-                size_bytes=os.path.getsize(self.pcd_path) if self.pcd_path else None,
+                size_bytes=os.path.getsize(self.cloud_path) if self.cloud_path else None,
             ),
             self.settings.detection,
             n_groups=len(self.groups),
@@ -1672,7 +1672,7 @@ class GroupsMixin:
     def _load_all(self):
         if len(self.full_points) == 0:
             raise ValueError("load the source cloud first")
-        manifest = read_manifest(self.project_dir)
+        manifest = load_manifest(self.project_dir)
         if manifest is not None:
             src_n = manifest.get("source", {}).get("n_points")
             if src_n is not None and src_n != len(self.full_points):

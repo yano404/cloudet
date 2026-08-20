@@ -10,7 +10,7 @@ import cloudet
 from cloudet.cli import build_app_parser, build_reduce_parser, main
 from cloudet.fit.picking import PickParams
 from cloudet.core.plane import Plane
-from cloudet.project import SourceInfo, save_group, write_manifest
+from cloudet.project import SourceInfo, save_group, save_manifest
 
 
 def test_version():
@@ -74,7 +74,7 @@ def test_reduce_cli(tmp_path):
             }]
         },
     )
-    write_manifest(
+    save_manifest(
         tmp_path, SourceInfo(path="s.ply", n_points=3), params, n_groups=1
     )
     recipe = {

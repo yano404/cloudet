@@ -119,11 +119,6 @@ def label_components(occupied: np.ndarray) -> np.ndarray:
     return remap[lab]
 
 
-# Backward-compatible aliases (prefer the public names above).
-_inplane_basis = inplane_basis
-_label_components = label_components
-
-
 def _select_main_component(
     iu,
     iv,

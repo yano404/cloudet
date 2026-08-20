@@ -63,10 +63,6 @@ def bimodality_flag(signed_residuals: np.ndarray, mad_sigma: float) -> bool:
     return False
 
 
-# Backward-compatible alias.
-_bimodality_flag = bimodality_flag
-
-
 def extract_planes(
     points: np.ndarray,
     params: MultiPlaneParams = MultiPlaneParams(),

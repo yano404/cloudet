@@ -60,13 +60,7 @@ class CloudetAppWindow(
 ):
     """Main application window for cloudet."""
 
-    def __init__(
-        self,
-        project_dir: str,
-        cloud_path: str | None = None,
-        *,
-        pcd_path: str | None = None,
-    ):
+    def __init__(self, project_dir: str, cloud_path: str | None = None):
         super().__init__()
         self.project_dir = Path(project_dir)
         self.project_dir.mkdir(parents=True, exist_ok=True)
@@ -77,8 +71,7 @@ class CloudetAppWindow(
 
         self.full_points: np.ndarray = np.zeros((0, 3))
         self.grid: VoxelHashGrid | None = None
-        # Preferred name is cloud_path; pcd_path is kept for older call sites.
-        self.pcd_path = ""
+        self.cloud_path = ""
         self._base_display_xyz: np.ndarray | None = None
         self._n_displayed = 0
 
@@ -146,44 +139,24 @@ class CloudetAppWindow(
         self._refresh_frame_overlay()
         self.statusBar().showMessage(self._status_default)
 
-        initial_cloud = cloud_path if cloud_path is not None else pcd_path
-        if initial_cloud:
-            self.pcd_edit_path = initial_cloud
+        if cloud_path:
+            self.cloud_edit_path = cloud_path
         else:
             manifest = load_manifest(self.project_dir)
-            self.pcd_edit_path = (
+            self.cloud_edit_path = (
                 manifest.get("source", {}).get("path", "") if manifest else ""
             )
-        if self.pcd_edit_path:
-            self.cloud_label.setText(Path(self.pcd_edit_path).name)
-            self.cloud_label.setToolTip(self.pcd_edit_path)
+        if self.cloud_edit_path:
+            self.cloud_label.setText(Path(self.cloud_edit_path).name)
+            self.cloud_label.setToolTip(self.cloud_edit_path)
         self._update_source_meta()
         self._update_project_labels()
 
-    @property
-    def cloud_path(self) -> str:
-        """Path to the loaded point cloud (alias of ``pcd_path``)."""
-        return self.pcd_path
 
-    @cloud_path.setter
-    def cloud_path(self, value: str) -> None:
-        self.pcd_path = value
-
-
-def run_cloudet_qt(
-    project_dir: str,
-    cloud_path: str | None = None,
-    *,
-    pcd_path: str | None = None,
-) -> None:
+def run_cloudet_qt(project_dir: str, cloud_path: str | None = None) -> None:
     """Launch the cloudet Qt application."""
     install_qt_message_filter()
     app = QApplication.instance() or QApplication([])
-    win = CloudetAppWindow(project_dir, cloud_path=cloud_path, pcd_path=pcd_path)
+    win = CloudetAppWindow(project_dir, cloud_path=cloud_path)
     win.show()
     app.exec()
-
-
-# Backward-compatible aliases.
-run_picker_qt = run_cloudet_qt
-PickerWindow = CloudetAppWindow

@@ -31,10 +31,6 @@ def install_qt_message_filter() -> None:
     _QT_MSG_FILTER_INSTALLED = True
 
 
-# Backward-compatible alias.
-_install_qt_message_filter = install_qt_message_filter
-
-
 # vtkOutputWindow only borrows the Python wrappers, so they must outlive the call.
 _VTK_LOG_KEEPALIVE: list = []
 

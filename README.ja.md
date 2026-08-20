@@ -44,7 +44,7 @@ cloudet/
     geometry.py     オフセット平面・交差・回転
     frame.py        表示専用 Align Z 姿勢（軸 → +Z、任意 yaw）
   ui/
-    main_window.py    CloudetAppWindow + run_picker_qt
+    main_window.py    CloudetAppWindow + run_cloudet_qt
     groups_mixin.py   Groups / Settings ドック、ピック、フィット、ツリー
     reduction_mixin.py  Reduction + Measure ドック
     uv_mixin.py       残差 u–v マップ ドック
