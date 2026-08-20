@@ -3,11 +3,11 @@
 import numpy as np
 import pytest
 
-from cloudet.fit.mainplane import MainPlaneParams, _label_components, extract_main_plane
+from cloudet.fit.mainplane import MainPlaneParams, label_components, extract_main_plane
 from cloudet.core.plane import Plane
 
 
-def _label_components_reference(occupied):
+def label_components_reference(occupied):
     """Per-cell BFS, kept only as an oracle for the vectorised labeller."""
     from collections import deque
 
@@ -45,20 +45,20 @@ def test_label_components_matches_bfs_reference():
     rng = np.random.default_rng(0)
     for density in (0.15, 0.45, 0.8):
         occ = rng.random((40, 55)) < density
-        assert _same_partition(_label_components(occ), _label_components_reference(occ))
+        assert _same_partition(label_components(occ), label_components_reference(occ))
 
 
 def test_label_components_edge_cases():
     empty = np.zeros((5, 5), dtype=bool)
-    assert _label_components(empty).max() == 0
+    assert label_components(empty).max() == 0
 
     full = np.ones((4, 6), dtype=bool)
-    assert _label_components(full).max() == 1
+    assert label_components(full).max() == 1
 
     # 4-connectivity: diagonal touch is NOT one component
     diag = np.zeros((3, 3), dtype=bool)
     diag[0, 0] = diag[1, 1] = True
-    assert _label_components(diag).max() == 2
+    assert label_components(diag).max() == 2
 
 SIGMA = 0.03
 

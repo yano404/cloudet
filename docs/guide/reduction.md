@@ -32,6 +32,25 @@ cloudet reduce <project> --recipe recipe.json -o geometry.json
 }
 ```
 
+## Recipe operand keys (version 1)
+
+Construct steps use short JSON keys. These are part of the on-disk schema —
+do not rename them without a recipe migration. Meaning by key:
+
+| Key | Meaning |
+|-----|---------|
+| `of` | Source plane for `offset` |
+| `a` / `b` / `c` | First / second / third operand (kind depends on the op) |
+| `line` | Axis or line operand |
+| `plane` | Plane operand |
+| `point` | Point operand |
+| `axis` | Rotation axis for `rotate_line_about_line` |
+| `src` / `dst` | Normal source / hit plane for `intersect_normal_plane` |
+| `distance_mm` | Signed offset along the Hesse normal (mm) |
+| `angle_deg` | Rotation angle, right-hand rule (degrees) |
+
+The same glossary lives in code as `cloudet.reduction.ops.RECIPE_OPERAND_KEYS`.
+
 ## Supported construct operations
 
 | Operation | Inputs | Output | Description |

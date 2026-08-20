@@ -14,7 +14,7 @@ from cloudet.project import (
     load_fitted_plane,
     load_group_docs,
     save_group,
-    write_manifest,
+    save_manifest,
 )
 from cloudet.reduction import load_recipe, run_reduction, write_geometry_json
 
@@ -59,7 +59,7 @@ def _make_project(tmp_path):
             detection=params,
             fit_summary=_fit_planes(plane.as_array()),
         )
-    write_manifest(
+    save_manifest(
         tmp_path,
         SourceInfo(path="/data/scan.ply", n_points=100),
         params,

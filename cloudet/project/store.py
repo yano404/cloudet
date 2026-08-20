@@ -1,5 +1,11 @@
 """Project directory I/O (the pipeline's on-disk contract).
 
+Naming convention for this package
+----------------------------------
+* ``load_*`` / ``save_*`` — project-domain objects (settings, groups, caches,
+  manifest).
+* ``read_*`` / ``write_*`` — raw file formats only (e.g. PLY via ``plyio``).
+
 Layout::
 
     <project>/
@@ -37,11 +43,11 @@ from cloudet.core.plyio import write_ply_xyz
 
 __all__ = [
     "SourceInfo",
-    "PickerSettings",
+    "CloudetSettings",
     "FittedPlane",
     "save_group",
-    "write_manifest",
-    "read_manifest",
+    "save_manifest",
+    "load_manifest",
     "load_group_indices",
     "load_plane_inlier_indices",
     "plane_inlier_indices_path",
@@ -82,7 +88,7 @@ class ViewSettings:
 
 
 @dataclass
-class PickerSettings:
+class CloudetSettings:
     detection: PickParams = PickParams()
     view: ViewSettings = None  # type: ignore[assignment]
 
@@ -91,7 +97,7 @@ class PickerSettings:
             self.view = ViewSettings()
 
 
-def save_settings(project_dir: str | Path, settings: PickerSettings) -> Path:
+def save_settings(project_dir: str | Path, settings: CloudetSettings) -> Path:
     path = Path(project_dir) / "settings.json"
     doc = {
         "version": 1,
@@ -104,10 +110,10 @@ def save_settings(project_dir: str | Path, settings: PickerSettings) -> Path:
     return path
 
 
-def load_settings(project_dir: str | Path, warn=print) -> PickerSettings:
+def load_settings(project_dir: str | Path, warn=print) -> CloudetSettings:
     path = Path(project_dir) / "settings.json"
     if not path.exists():
-        return PickerSettings()
+        return CloudetSettings()
     with open(path, encoding="utf-8") as f:
         doc = json.load(f)
     if doc.get("version", 1) != 1:
@@ -134,13 +140,13 @@ def load_settings(project_dir: str | Path, warn=print) -> PickerSettings:
     if detection.ransac_backend == "numpy":
         detection = replace(detection, ransac_backend="seeded")
 
-    return PickerSettings(
+    return CloudetSettings(
         detection=detection,
         view=build(ViewSettings, "view", view_raw),
     )
 
 
-def write_manifest(
+def save_manifest(
     project_dir: str | Path,
     source: SourceInfo,
     detection: PickParams,
@@ -161,7 +167,7 @@ def write_manifest(
     return path
 
 
-def read_manifest(project_dir: str | Path) -> dict | None:
+def load_manifest(project_dir: str | Path) -> dict | None:
     path = Path(project_dir) / "manifest.json"
     if not path.exists():
         return None

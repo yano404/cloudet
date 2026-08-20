@@ -44,7 +44,7 @@ cloudet/
     geometry.py     Offset planes, intersections, rotations
     frame.py        Display-only Align Z pose (axis → +Z, optional yaw)
   ui/
-    main_window.py    CloudetAppWindow + run_picker_qt
+    main_window.py    CloudetAppWindow + run_cloudet_qt
     groups_mixin.py   Groups / Settings dock, pick, fit, tree
     reduction_mixin.py  Reduction + Measure docks
     uv_mixin.py       Residual u–v map dock

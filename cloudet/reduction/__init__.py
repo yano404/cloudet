@@ -22,6 +22,8 @@ from cloudet.reduction.frame import (
     with_aligned_copy,
 )
 from cloudet.reduction.ops import (
+    RECIPE_OPERAND_KEYS,
+    RECIPE_SCALAR_KEYS,
     REDUCTION_OPS,
     build_construct_step,
     form_values_from_step,
@@ -49,6 +51,8 @@ __all__ = [
     "ALIGNED_ORIGIN_ID",
     "ALIGNED_PLANE_IDS",
     "ConstructPreview",
+    "RECIPE_OPERAND_KEYS",
+    "RECIPE_SCALAR_KEYS",
     "REDUCTION_OPS",
     "ReductionResult",
     "ReductionSession",

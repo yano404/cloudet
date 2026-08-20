@@ -38,12 +38,12 @@ from pyvistaqt import QtInteractor
 from cloudet.core.array_backend import set_default_backend
 from cloudet.reduction.frame import RigidFrame
 from cloudet.core.neighbors import VoxelHashGrid
-from cloudet.project import load_settings, read_manifest
+from cloudet.project import load_manifest, load_settings
 from cloudet.reduction import ReductionSession
 from cloudet.ui.app_common import AppCommonMixin
 from cloudet.ui.frame_mixin import FrameMixin
 from cloudet.ui.groups_mixin import GroupsMixin
-from cloudet.ui.qt_helpers import _install_qt_message_filter, route_vtk_messages_to_file
+from cloudet.ui.qt_helpers import install_qt_message_filter, route_vtk_messages_to_file
 from cloudet.ui.reduction_mixin import ReductionMixin
 from cloudet.ui.render_mixin import RenderMixin
 from cloudet.ui.uv_mixin import UvMixin
@@ -60,7 +60,7 @@ class CloudetAppWindow(
 ):
     """Main application window for cloudet."""
 
-    def __init__(self, project_dir: str, pcd_path: str | None = None):
+    def __init__(self, project_dir: str, cloud_path: str | None = None):
         super().__init__()
         self.project_dir = Path(project_dir)
         self.project_dir.mkdir(parents=True, exist_ok=True)
@@ -71,7 +71,7 @@ class CloudetAppWindow(
 
         self.full_points: np.ndarray = np.zeros((0, 3))
         self.grid: VoxelHashGrid | None = None
-        self.pcd_path = ""
+        self.cloud_path = ""
         self._base_display_xyz: np.ndarray | None = None
         self._n_displayed = 0
 
@@ -139,27 +139,24 @@ class CloudetAppWindow(
         self._refresh_frame_overlay()
         self.statusBar().showMessage(self._status_default)
 
-        if pcd_path:
-            self.pcd_edit_path = pcd_path
+        if cloud_path:
+            self.cloud_edit_path = cloud_path
         else:
-            manifest = read_manifest(self.project_dir)
-            self.pcd_edit_path = (
+            manifest = load_manifest(self.project_dir)
+            self.cloud_edit_path = (
                 manifest.get("source", {}).get("path", "") if manifest else ""
             )
-        if self.pcd_edit_path:
-            self.cloud_label.setText(Path(self.pcd_edit_path).name)
-            self.cloud_label.setToolTip(self.pcd_edit_path)
+        if self.cloud_edit_path:
+            self.cloud_label.setText(Path(self.cloud_edit_path).name)
+            self.cloud_label.setToolTip(self.cloud_edit_path)
         self._update_source_meta()
         self._update_project_labels()
 
 
-def run_picker_qt(project_dir: str, pcd_path: str | None = None) -> None:
-    _install_qt_message_filter()
+def run_cloudet_qt(project_dir: str, cloud_path: str | None = None) -> None:
+    """Launch the cloudet Qt application."""
+    install_qt_message_filter()
     app = QApplication.instance() or QApplication([])
-    win = CloudetAppWindow(project_dir, pcd_path)
+    win = CloudetAppWindow(project_dir, cloud_path=cloud_path)
     win.show()
     app.exec()
-
-
-# Backward-compatible alias during UI module split/rename.
-PickerWindow = CloudetAppWindow
