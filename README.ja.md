@@ -4,7 +4,7 @@
 
 # cloudet
 
-English: [README.md](README.md)
+[English](README.md) | 日本語
 
 FARO Quantum-S などで取得した三次元点群から、原子核実験用検出器の位置・位置関係をリダクションするツールです。
 
