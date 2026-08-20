@@ -1,4 +1,4 @@
-"""CLI dispatch: default app launch; reduce; version."""
+"""CLI dispatch: default app launch; reduce; migrate; version."""
 
 from __future__ import annotations
 

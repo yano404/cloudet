@@ -40,6 +40,11 @@ import cloudet
 from cloudet.fit.picking import PickParams
 from cloudet.core.plane import Plane
 from cloudet.core.plyio import write_ply_xyz
+from cloudet.project.schema import (
+    migrate_group_doc,
+    plane_from_json,
+    plane_to_json,
+)
 
 __all__ = [
     "SourceInfo",
@@ -184,7 +189,9 @@ def _jsonable_fit_summary(fit_summary: dict | None) -> dict | None:
         return fit_summary
     keep = (
         "plane_index",
-        "abcd",
+        "normal",
+        "d",
+        "abcd",  # accepted on input; rewritten below
         "n_points",
         "status",
         "reasons",
@@ -202,8 +209,12 @@ def _jsonable_fit_summary(fit_summary: dict | None) -> dict | None:
         if not isinstance(p, dict):
             continue
         entry = {k: p[k] for k in keep if k in p}
-        if "abcd" in entry:
-            entry["abcd"] = np.asarray(entry["abcd"], dtype=np.float64).tolist()
+        try:
+            plane = plane_from_json(entry)
+        except (KeyError, TypeError, ValueError):
+            continue
+        entry.update(plane_to_json(plane))
+        entry.pop("abcd", None)
         out_planes.append(entry)
     return {"planes": out_planes}
 
@@ -352,7 +363,7 @@ def load_group_doc(project_dir: str | Path, group_id: int) -> dict | None:
     if not path.exists():
         return None
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        return migrate_group_doc(json.load(f))
 
 
 def load_group_docs(project_dir: str | Path) -> list[dict]:
@@ -363,7 +374,7 @@ def load_group_docs(project_dir: str | Path) -> list[dict]:
     docs = []
     for path in sorted(groups_dir.glob("group_*.json")):
         with open(path, encoding="utf-8") as f:
-            docs.append(json.load(f))
+            docs.append(migrate_group_doc(json.load(f)))
     docs.sort(key=lambda d: int(d["group_id"]))
     return docs
 
@@ -374,22 +385,24 @@ def _planes_from_fit(fit: dict | None, *, group_label: str) -> list[dict]:
     planes = fit.get("planes")
     if isinstance(planes, list) and planes:
         return planes
-    # Legacy flat fit without abcd cannot drive geometry reduction.
-    if "abcd" in fit:
-        return [{
-            "plane_index": 0,
-            "abcd": fit["abcd"],
-            "status": fit.get("status"),
-            "mad_sigma_mm": fit.get("mad_sigma_mm"),
-            "threshold_mm": fit.get("threshold_mm"),
-            "reasons": fit.get("reasons", []),
-            "bimodal": fit.get("bimodal", False),
-            "n_points": fit.get("n_points"),
-        }]
-    raise ValueError(
-        f"{group_label}: fit has no planes[].abcd "
-        "(re-Fit and save, or use a project with fit.planes entries)"
-    )
+    # Legacy flat fit without planes[] cannot drive geometry reduction unless abcd/normal present.
+    try:
+        plane = plane_from_json(fit)
+    except (KeyError, TypeError, ValueError) as e:
+        raise ValueError(
+            f"{group_label}: fit has no planes[] with normal/d "
+            "(re-Fit and save, or use a project with fit.planes entries)"
+        ) from e
+    return [{
+        "plane_index": 0,
+        **plane_to_json(plane),
+        "status": fit.get("status"),
+        "mad_sigma_mm": fit.get("mad_sigma_mm"),
+        "threshold_mm": fit.get("threshold_mm"),
+        "reasons": fit.get("reasons", []),
+        "bimodal": fit.get("bimodal", False),
+        "n_points": fit.get("n_points"),
+    }]
 
 
 def load_fitted_plane(
@@ -430,8 +443,10 @@ def load_fitted_plane(
         raise KeyError(
             f"{label}: no plane_index={plane_index} (have {indices})"
         ) from e
-    if "abcd" not in entry:
-        raise ValueError(f"{label} plane {plane_index}: missing abcd")
+    try:
+        plane = plane_from_json(entry)
+    except (KeyError, TypeError, ValueError) as e:
+        raise ValueError(f"{label} plane {plane_index}: missing normal/d (or abcd)") from e
 
     quality = {
         "status": entry.get("status"),
@@ -445,6 +460,6 @@ def load_fitted_plane(
         group_id=int(doc["group_id"]),
         group_name=str(doc.get("name", f"G{doc['group_id']}")),
         plane_index=int(plane_index),
-        plane=Plane.from_array(entry["abcd"]),
+        plane=plane,
         quality=quality,
     )

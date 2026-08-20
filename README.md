@@ -115,12 +115,14 @@ VTK’s own errors and warnings go to `<project_dir>/vtk.log` instead of the ter
 
 ## Geometry reduction
 
-After Fit + save, faces live in `groups/group_*.json` (`fit.planes[].abcd`).
-Analysis parameters (virtual axes, beam-on-target points, drawing offsets)
-are derived with a declarative recipe — no point cloud required at this stage.
+After Fit + save, faces live in `groups/group_*.json`
+(`fit.planes[].normal` + `d`). Analysis parameters (virtual axes, beam-on-target
+points, drawing offsets) are derived with a declarative recipe — no point cloud
+required at this stage.
 
 ```bash
 cloudet reduce <project> --recipe recipe.json -o geometry.json
+cloudet migrate <project> [--dry-run]
 ```
 
 Offset sign convention: positive `distance_mm` moves the plane along its
@@ -131,7 +133,7 @@ Example recipe (tracker walls → beam axis ∩ target):
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "units": "mm",
   "faces": {
     "tracker_left":  { "from": "group", "name": "G0" },
@@ -139,15 +141,18 @@ Example recipe (tracker walls → beam axis ∩ target):
     "target":        { "from": "group", "name": "G2" }
   },
   "construct": [
-    { "id": "left_in",  "op": "offset", "of": "tracker_left",  "distance_mm": 12.0 },
-    { "id": "front_in", "op": "offset", "of": "tracker_front", "distance_mm": 12.0 },
-    { "id": "beam_axis", "op": "intersect_planes", "a": "left_in", "b": "front_in" },
+    { "id": "left_in",  "op": "offset", "plane": "tracker_left",  "distance_mm": 12.0 },
+    { "id": "front_in", "op": "offset", "plane": "tracker_front", "distance_mm": 12.0 },
+    { "id": "beam_axis", "op": "intersect_planes", "plane_a": "left_in", "plane_b": "front_in" },
     { "id": "beam_on_target", "op": "intersect_line_plane", "line": "beam_axis", "plane": "target" }
   ],
   "export": ["beam_axis", "beam_on_target"],
   "frame": { "axis": "beam_axis", "origin": "beam_on_target", "flip_z": false }
 }
 ```
+
+Legacy v1 recipes (`of`, `a`/`b`, …) and plane `abcd` still load; saves and
+`cloudet migrate` write the current keys only.
 
 Supported construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
 `intersect_line_plane`, `intersect_normal_plane` (source-plane normal ∩ dest plane), `line_from_point_normal`
@@ -162,7 +167,8 @@ Supported construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
 `geometry.json` is the **executed** recipe plus computed entity records (not the
 point cloud). Top-level `planes` / `lines` / `points` are always in **survey**
 coordinates. Each record includes provenance (`scanned` | `offset` | `intersection`
-| `constructed`) and parameters (`abcd`, `point`/`direction`, `xyz`, …).
+| `constructed`) and parameters (`normal`/`d`, `point`/`direction`, `xyz`, …;
+entity parent refs use `parents`).
 
 | Key | Contents |
 |-----|----------|
@@ -206,7 +212,7 @@ chosen. They must **not** be used as FRAME axis / origin / yaw. Example:
     {
       "id": "above_xy",
       "op": "offset",
-      "of": "aligned.xy",
+      "plane": "aligned.xy",
       "distance_mm": 10.0
     }
   ]

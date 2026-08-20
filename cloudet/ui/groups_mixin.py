@@ -58,6 +58,7 @@ from cloudet.core.neighbors import (
 )
 from cloudet.fit.picking import PickParams, pick_plane_region
 from cloudet.core.plane import Plane, mad_sigma
+from cloudet.project.schema import plane_from_json, plane_to_json
 from cloudet.core.plyio import read_ply_xyz
 from cloudet.project import (
     SourceInfo,
@@ -1515,7 +1516,7 @@ class GroupsMixin:
             "planes": [
                 {
                     "plane_index": p["plane_index"],
-                    "abcd": p["result"].plane.as_array().tolist(),
+                    **plane_to_json(p["result"].plane),
                     "n_points": p["n_points"],
                     "status": p["result"].status,
                     "reasons": p["result"].reasons,
@@ -1650,7 +1651,9 @@ class GroupsMixin:
         lookup = None if gidx is None else {int(v): i for i, v in enumerate(gidx)}
         planes = []
         for p in fit["planes"]:
-            if not isinstance(p, dict) or "abcd" not in p:
+            if not isinstance(p, dict):
+                continue
+            if "abcd" not in p and not ("normal" in p and "d" in p):
                 continue
             entry = dict(p)
             pi = int(entry.get("plane_index", 0))
@@ -1896,7 +1899,7 @@ class GroupsMixin:
                 item.setFont(0, f)
             if g["fit"] is not None:
                 for p in g["fit"]["planes"]:
-                    abcd = p["abcd"]
+                    abcd = plane_from_json(p).as_array()
                     # When Align Z is active, rewrite the plane equation into the
                     # current view frame so n,d match what the user sees.
                     if self._view_frame is not None:
@@ -1996,7 +1999,7 @@ class GroupsMixin:
                     g = self._get_group(data[1])
                     p = self._find_plane(g, data[2])
                     if p is not None:
-                        abcd = p["abcd"]
+                        abcd = plane_from_json(p).as_array()
                         if self._view_frame is not None:
                             plane = Plane.from_array(abcd)
                             plane = self._view_frame.apply_plane(plane)
