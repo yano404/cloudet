@@ -1,5 +1,13 @@
 """Project directory I/O (the pipeline's on-disk contract).
 
+Naming convention for this package
+----------------------------------
+* ``load_*`` / ``save_*`` — project-domain objects (settings, groups, caches,
+  manifest). Prefer these names in new code.
+* ``read_*`` / ``write_*`` — raw file formats (PLY) and legacy aliases for
+  manifest I/O. ``read_manifest`` / ``write_manifest`` remain as aliases of
+  ``load_manifest`` / ``save_manifest``.
+
 Layout::
 
     <project>/
@@ -38,8 +46,11 @@ from cloudet.core.plyio import write_ply_xyz
 __all__ = [
     "SourceInfo",
     "PickerSettings",
+    "CloudetSettings",
     "FittedPlane",
     "save_group",
+    "save_manifest",
+    "load_manifest",
     "write_manifest",
     "read_manifest",
     "load_group_indices",
@@ -91,6 +102,10 @@ class PickerSettings:
             self.view = ViewSettings()
 
 
+# Preferred alias (settings schema / file format unchanged).
+CloudetSettings = PickerSettings
+
+
 def save_settings(project_dir: str | Path, settings: PickerSettings) -> Path:
     path = Path(project_dir) / "settings.json"
     doc = {
@@ -140,7 +155,7 @@ def load_settings(project_dir: str | Path, warn=print) -> PickerSettings:
     )
 
 
-def write_manifest(
+def save_manifest(
     project_dir: str | Path,
     source: SourceInfo,
     detection: PickParams,
@@ -161,12 +176,17 @@ def write_manifest(
     return path
 
 
-def read_manifest(project_dir: str | Path) -> dict | None:
+def load_manifest(project_dir: str | Path) -> dict | None:
     path = Path(project_dir) / "manifest.json"
     if not path.exists():
         return None
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+# Legacy aliases (prefer load_manifest / save_manifest).
+write_manifest = save_manifest
+read_manifest = load_manifest
 
 
 def _jsonable_fit_summary(fit_summary: dict | None) -> dict | None:

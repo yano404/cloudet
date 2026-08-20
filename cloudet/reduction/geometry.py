@@ -201,15 +201,15 @@ def plane_from_line_point(line: Line, point: np.ndarray) -> Plane:
     return Plane(n, -float(n @ p))
 
 
-def plane_from_two_lines(a: Line, b: Line) -> Plane:
+def plane_from_two_lines(line_a: Line, line_b: Line) -> Plane:
     """Plane containing two non-skew lines.
 
     Parallel lines must be coplanar; intersecting lines must meet. Skew or
     collinear lines are an error.
     """
-    d1 = a.direction
-    d2 = b.direction
-    w = b.point - a.point
+    d1 = line_a.direction
+    d2 = line_b.direction
+    w = line_b.point - line_a.point
     cross = np.cross(d1, d2)
     cross_norm = float(cross @ cross)
 
@@ -219,7 +219,7 @@ def plane_from_two_lines(a: Line, b: Line) -> Plane:
         if sep_norm < _PARALLEL_EPS:
             raise ValueError("lines are collinear; no unique plane")
         n = sep / np.sqrt(sep_norm)
-        return Plane(n, -float(n @ a.point))
+        return Plane(n, -float(n @ line_a.point))
 
     triple = float(w @ cross)
     if abs(triple) > _PARALLEL_EPS * max(1.0, float(np.linalg.norm(w))):
@@ -235,7 +235,7 @@ def plane_from_two_lines(a: Line, b: Line) -> Plane:
     if abs(denom) < _PARALLEL_EPS:
         raise ValueError("lines do not define a unique plane")
     t = (a12 * b2 - a22 * b1) / denom
-    pt = a.point + t * d1
+    pt = line_a.point + t * d1
     return Plane(n, -float(n @ pt))
 
 
@@ -356,10 +356,10 @@ def axis_arrow_points(line: Line, length_mm: float) -> np.ndarray:
     return np.stack([origin, origin + float(length_mm) * d])
 
 
-def distance_points(a, b) -> float:
+def distance_points(point_a, point_b) -> float:
     """Euclidean distance between two points (mm)."""
-    pa = np.asarray(a, dtype=np.float64).reshape(3)
-    pb = np.asarray(b, dtype=np.float64).reshape(3)
+    pa = np.asarray(point_a, dtype=np.float64).reshape(3)
+    pb = np.asarray(point_b, dtype=np.float64).reshape(3)
     return float(np.linalg.norm(pb - pa))
 
 
@@ -375,14 +375,14 @@ def distance_point_line(point, line: Line) -> float:
     return float(np.linalg.norm(np.cross(p - line.point, line.direction)))
 
 
-def angle_planes_deg(p1: Plane, p2: Plane) -> float:
+def angle_planes_deg(plane_a: Plane, plane_b: Plane) -> float:
     """Smallest angle between two planes, in degrees in ``[0, 90]``."""
-    return float(np.degrees(p1.angle_to(p2)))
+    return float(np.degrees(plane_a.angle_to(plane_b)))
 
 
-def angle_lines_deg(a: Line, b: Line) -> float:
+def angle_lines_deg(line_a: Line, line_b: Line) -> float:
     """Smallest angle between two line directions, in degrees in ``[0, 90]``."""
-    c = float(np.clip(abs(float(a.direction @ b.direction)), 0.0, 1.0))
+    c = float(np.clip(abs(float(line_a.direction @ line_b.direction)), 0.0, 1.0))
     return float(np.degrees(np.arccos(c)))
 
 

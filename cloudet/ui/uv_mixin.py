@@ -24,11 +24,11 @@ from PySide6.QtWidgets import (
 
 from cloudet.core.array_backend import resolve_compute_backend
 from cloudet.fit.mainplane import MainPlaneParams, extract_main_plane
-from cloudet.fit.multiplane import _bimodality_flag
+from cloudet.fit.multiplane import bimodality_flag
 from cloudet.fit.pipeline import residual_uv_map
 from cloudet.core.plane import Plane, mad_sigma
 from cloudet.ui.constants import FIT_MAX_THRESHOLD_MM
-from cloudet.ui.plane_labels import _plane_id_token, _plane_label
+from cloudet.ui.plane_labels import plane_id_token, plane_label
 from cloudet.ui.uv_plot import _UVSelectViewBox, _rdbu_r_colormap
 from cloudet.ui.widgets import UI_STYLE, _make_collapsible_card
 
@@ -777,7 +777,7 @@ class UvMixin:
                 self._reduction_fill_bind_combo()
                 self._show_uv_for_selection()
                 self._status(
-                    f"removed {g['name']}/{_plane_label(removed)} "
+                    f"removed {g['name']}/{plane_label(removed)} "
                     "(selection refit); earlier planes kept"
                 )
                 return
@@ -846,7 +846,7 @@ class UvMixin:
 
         mad = float(res.fit.stats_inliers["mad_sigma"])
         bimodal = bool(
-            _bimodality_flag(
+            bimodality_flag(
                 res.plane.signed_distances(subset[res.main_mask]),
                 mad,
             )
@@ -903,7 +903,7 @@ class UvMixin:
             f"({n_sel:,} pts) → mad {mad*1e3:.0f} µm  |  {res.status}"
             + (" BIMODAL" if bimodal else "")
             + f"  |  {self._fit_timing_status(timing)}"
-            + f"  |  import as {g['name']}_{_plane_id_token(entry)}  |  fit.log"
+            + f"  |  import as {g['name']}_{plane_id_token(entry)}  |  fit.log"
         )
         self._sync_action_states()
 
@@ -1155,7 +1155,7 @@ class UvMixin:
         if p is None:
             self._clear_uv_plot("No planes in fit.")
             return
-        title = f"{g['name']} / {_plane_label(p)}"
+        title = f"{g['name']} / {plane_label(p)}"
         # Restore this plane's rectangle (and keep any selection refit).
         self._restore_uv_rect_from_plane(p)
         if p.get("selection_refit") is None and self._uv_map_mode == "refit":

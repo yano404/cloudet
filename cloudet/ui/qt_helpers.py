@@ -22,13 +22,17 @@ def _qt_message_filter(mode, context, message: str) -> None:
     sys.stderr.write(message + "\n")
 
 
-def _install_qt_message_filter() -> None:
+def install_qt_message_filter() -> None:
     """Hide the known-harmless macOS QTreeWidget accessibility warning."""
     global _QT_MSG_PREV, _QT_MSG_FILTER_INSTALLED
     if _QT_MSG_FILTER_INSTALLED:
         return
     _QT_MSG_PREV = qInstallMessageHandler(_qt_message_filter)
     _QT_MSG_FILTER_INSTALLED = True
+
+
+# Backward-compatible alias.
+_install_qt_message_filter = install_qt_message_filter
 
 
 # vtkOutputWindow only borrows the Python wrappers, so they must outlive the call.

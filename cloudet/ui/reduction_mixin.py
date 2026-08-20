@@ -89,7 +89,7 @@ from cloudet.ui.constants import (
     RD_RECIPE_TO_GUI_OP,
     RD_SELECTED_RING,
 )
-from cloudet.ui.plane_labels import _plane_id_token, _plane_label
+from cloudet.ui.plane_labels import plane_id_token, plane_label
 from cloudet.ui.widgets import UI_STYLE, _line_tube_mesh, _make_collapsible_card, _reset_combo, _reset_tree_widget
 
 
@@ -687,7 +687,7 @@ class ReductionMixin:
             for p in planes:
                 pi = int(p.get("plane_index", 0))
                 key = f"{g['id']}:{pi}"
-                label = f"{g['name']}/{_plane_label(p)}"
+                label = f"{g['name']}/{plane_label(p)}"
                 combo.addItem(label, key)
         if keep:
             idx = combo.findData(keep)
@@ -1256,7 +1256,7 @@ class ReductionMixin:
         p = next((x for x in planes if int(x.get("plane_index", 0)) == pi), None)
         if p is None:
             raise ValueError(f"no plane_index={pi} on {g['name']}")
-        alias = self.rd_id_edit.text().strip() or f"{g['name']}_{_plane_id_token(p)}"
+        alias = self.rd_id_edit.text().strip() or f"{g['name']}_{plane_id_token(p)}"
         plane = Plane.from_array(p["abcd"])
         quality = {
             "status": p.get("status"),

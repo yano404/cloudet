@@ -2,11 +2,36 @@
 
 Centralizes GUI labels, recipe op names, construct operand schemas, and
 measure definitions so form↔step translation stays in one place.
+
+Recipe operand keys (``OperandField.step_key``) are part of the on-disk
+``recipe.json`` schema (``version: 1``). Do not rename them without a
+migration. See ``RECIPE_OPERAND_KEYS`` below for the glossary.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+# ---------------------------------------------------------------------------
+# Recipe JSON glossary (version 1) — keys appear in construct[] steps.
+# Widget names (rd_*) are GUI-only and are *not* written to recipe.json.
+# ---------------------------------------------------------------------------
+RECIPE_OPERAND_KEYS: dict[str, str] = {
+    "of": "Source plane for offset (the plane being moved).",
+    "a": "First operand (plane, line, or point depending on the op).",
+    "b": "Second operand (same kind rules as a).",
+    "c": "Third plane for intersect_three_planes.",
+    "line": "Axis / line operand.",
+    "plane": "Plane operand (or normal source when paired with point).",
+    "point": "Point operand.",
+    "axis": "Rotation axis (line) for rotate_line_about_line.",
+    "src": "Source plane whose normal is cast (intersect_normal_plane).",
+    "dst": "Destination plane hit by the normal ray (intersect_normal_plane).",
+}
+RECIPE_SCALAR_KEYS: dict[str, str] = {
+    "distance_mm": "Signed offset distance along the Hesse unit normal (mm).",
+    "angle_deg": "Rotation angle about the axis; right-hand rule (degrees).",
+}
 
 
 @dataclass(frozen=True)
@@ -146,8 +171,8 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         "axis",
         "line",
         operands=(
-            OperandField("a", "point", "rd_pp_a", "Point A"),
-            OperandField("b", "point", "rd_pp_b", "Point B"),
+            OperandField("a", "point", "rd_2pt_a", "Point A"),
+            OperandField("b", "point", "rd_2pt_b", "Point B"),
         ),
         missing_msg="2 points → axis needs two points",
         operands_must_differ=True,
@@ -183,8 +208,8 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         "plane",
         "plane",
         operands=(
-            OperandField("plane", "plane", "rd_pp_plane", "Plane"),
-            OperandField("point", "point", "rd_pp_point", "Point"),
+            OperandField("plane", "plane", "rd_pfp_plane", "Plane"),
+            OperandField("point", "point", "rd_pfp_point", "Point"),
         ),
         missing_msg="plane + point → plane needs a plane and a point",
         hint="Plane parallel to the source, passing through the point.",

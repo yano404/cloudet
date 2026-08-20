@@ -21,7 +21,7 @@ import numpy as np
 
 from cloudet.fit.mainplane import MainPlaneParams, MainPlaneResult, extract_main_plane
 
-__all__ = ["MultiPlaneParams", "extract_planes"]
+__all__ = ["MultiPlaneParams", "extract_planes", "bimodality_flag"]
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ class MultiPlaneParams:
     accept_suspect: bool = True  # suspect planes are recorded (flagged), fail stops
 
 
-def _bimodality_flag(signed_residuals: np.ndarray, mad_sigma: float) -> bool:
+def bimodality_flag(signed_residuals: np.ndarray, mad_sigma: float) -> bool:
     """Crude bimodality check: is there a second mode beyond 3*sigma?
 
     Detects a straddled pair of surfaces: the histogram of signed
@@ -61,6 +61,10 @@ def _bimodality_flag(signed_residuals: np.ndarray, mad_sigma: float) -> bool:
         if hist[c] == hist[lo:hi].max() and hist[c] >= hist[max(c - 3, 0):c + 1].min() + 0:
             return True
     return False
+
+
+# Backward-compatible alias.
+_bimodality_flag = bimodality_flag
 
 
 def extract_planes(
@@ -115,7 +119,7 @@ def extract_planes(
         mask[np.flatnonzero(remaining)] = res.main_mask
 
         r_signed = res.plane.signed_distances(points[mask])
-        bimodal = _bimodality_flag(
+        bimodal = bimodality_flag(
             r_signed, res.fit.stats_inliers["mad_sigma"]
         )
 

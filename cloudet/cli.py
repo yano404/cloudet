@@ -88,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _run_app(args: argparse.Namespace) -> int:
     try:
-        from cloudet.app_window import run_picker_qt
+        from cloudet.app_window import run_cloudet_qt
     except ImportError as e:
         print(
             f"error: the Qt UI requires PySide6 + pyvista + pyvistaqt ({e})\n"
@@ -96,7 +96,7 @@ def _run_app(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    run_picker_qt(args.project_dir, args.cloud)
+    run_cloudet_qt(args.project_dir, cloud_path=args.cloud)
     return 0
 
 
