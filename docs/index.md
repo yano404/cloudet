@@ -1,5 +1,9 @@
 # cloudet
 
+<p align="center">
+  <img src="assets/cloudet-wordmark.svg" alt="cloudet" width="360">
+</p>
+
 Tool for reducing detector positions and relative geometry from 3D point clouds
 (e.g. FARO Quantum-S), aimed at nuclear-physics detector surveys.
 

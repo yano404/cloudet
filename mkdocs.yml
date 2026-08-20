@@ -8,6 +8,8 @@ watch:
 
 theme:
   name: material
+  logo: assets/cloudet-wordmark.svg
+  favicon: assets/cloudet-icon.svg
   palette:
     - scheme: default
       primary: indigo

@@ -43,6 +43,7 @@ from cloudet.reduction import ReductionSession
 from cloudet.ui.app_common import AppCommonMixin
 from cloudet.ui.frame_mixin import FrameMixin
 from cloudet.ui.groups_mixin import GroupsMixin
+from cloudet.ui.icons import app_icon
 from cloudet.ui.qt_helpers import install_qt_message_filter, route_vtk_messages_to_file
 from cloudet.ui.reduction_mixin import ReductionMixin
 from cloudet.ui.render_mixin import RenderMixin
@@ -157,6 +158,9 @@ def run_cloudet_qt(project_dir: str, cloud_path: str | None = None) -> None:
     """Launch the cloudet Qt application."""
     install_qt_message_filter()
     app = QApplication.instance() or QApplication([])
+    icon = app_icon()
+    app.setWindowIcon(icon)
     win = CloudetAppWindow(project_dir, cloud_path=cloud_path)
+    win.setWindowIcon(icon)
     win.show()
     app.exec()

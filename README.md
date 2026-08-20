@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/cloudet-wordmark.svg" alt="cloudet" width="420">
+</p>
+
 # cloudet
 
 日本語版は [README.ja.md](README.ja.md) を参照。

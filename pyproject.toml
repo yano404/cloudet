@@ -33,3 +33,6 @@ cloudet = "cloudet.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["cloudet*"]
+
+[tool.setuptools.package-data]
+cloudet = ["ui/assets/*"]
