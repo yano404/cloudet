@@ -119,6 +119,10 @@ in **survey** coordinates:
 When the recipe has `frame`, the output includes `aligned` coordinates
 alongside the survey-frame data.
 
+A sibling **`geometry_summary.json`** is also written (CLI and GUI): names and
+coordinates only, preferring the aligned frame when present, otherwise survey.
+If recipe `export` is non-empty, only those ids are listed.
+
 ## Interactive reduction (GUI)
 
 The right-hand docks are tabbed: **Residuals** / **Reduction** / **Measure**.

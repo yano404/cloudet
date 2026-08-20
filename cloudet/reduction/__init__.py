@@ -34,12 +34,15 @@ from cloudet.reduction.session import (
     ReductionSession,
     build_frame_spec,
     export_reduction_result,
+    geometry_summary_dict,
+    geometry_summary_path,
     load_recipe,
     normalize_frame_spec,
     preview_construct_step,
     run_reduction,
     scanned_plane_record,
     write_geometry_json,
+    write_geometry_summary_json,
     write_recipe_json,
 )
 
@@ -65,6 +68,8 @@ __all__ = [
     "build_frame_spec",
     "export_reduction_result",
     "form_values_from_step",
+    "geometry_summary_dict",
+    "geometry_summary_path",
     "is_aligned_axis_id",
     "is_aligned_id",
     "is_aligned_origin_id",
@@ -79,5 +84,6 @@ __all__ = [
     "transform_record",
     "with_aligned_copy",
     "write_geometry_json",
+    "write_geometry_summary_json",
     "write_recipe_json",
 ]

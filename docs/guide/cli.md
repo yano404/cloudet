@@ -25,6 +25,9 @@ cloudet reduce <project_dir> --recipe recipe.json [-o geometry.json]
 | `--recipe PATH` | Recipe JSON file |
 | `-o PATH` | Output geometry.json path (default: `geometry.json` in project dir) |
 
+Also writes a sibling `geometry_summary.json` (slim names + coordinates;
+aligned frame when available).
+
 ### Migrate on-disk JSON
 
 ```bash

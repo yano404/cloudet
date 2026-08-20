@@ -187,6 +187,28 @@ has `frame`. In the GUI, check **Also write aligned-frame coordinates** and
 set FRAME **axis** and **origin** (Align Z is not required for export).
 The GUI also writes a sibling `geometry_recipe.json` for replay.
 
+#### `geometry_summary.json` (slim companion)
+
+Export also writes a sibling **`geometry_summary.json`** next to `geometry.json`
+(CLI and GUI). It keeps only entity **names** and coordinates — no recipe echo,
+provenance, or parents — preferring the **aligned** frame when present,
+otherwise survey. Only ids listed in recipe `export` are included (when that
+list is non-empty). Example:
+
+```json
+{
+  "units": "mm",
+  "frame": "aligned",
+  "planes": {},
+  "lines": {
+    "beam_axis": { "point": [0.0, 0.0, 0.0], "direction": [0.0, 0.0, 1.0] }
+  },
+  "points": {
+    "beam_on_target": { "xyz": [0.0, 0.0, 0.0] }
+  }
+}
+```
+
 #### Aligned triad operands (`aligned.origin` / axes / planes)
 
 When `recipe.frame` sets `axis` and `origin`, construct steps may reference
