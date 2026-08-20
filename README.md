@@ -4,7 +4,7 @@
 
 # cloudet
 
-日本語版は [README.ja.md](README.ja.md) を参照。
+English | [日本語](README.ja.md)
 
 Tool for reducing detector positions and relative geometry from 3D point clouds (e.g. FARO Quantum-S), aimed at nuclear-physics detector surveys.
 
