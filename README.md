@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/cloudet-wordmark.svg" alt="cloudet" width="420">
+</p>
+
 # cloudet
 
 日本語版は [README.ja.md](README.ja.md) を参照。
@@ -21,13 +25,13 @@ Tool for reducing detector positions and relative geometry from 3D point clouds 
 
 ```
 cloudet/
-  plane.py          Plane fit core (LSQ / RANSAC / robust iteration / residual stats)
-  plyio.py          PLY I/O (double precision, Open3D-free)
-  neighbors.py      Spatial indexing / display downsampling
-  array_backend.py  Optional CuPy GPU backend (auto fallback to NumPy)
-  settings_apply.py Settings apply classification (detection vs display)
   app_window.py     Qt app entrypoint (→ ui.main_window)
   cli.py            cloudet [project] [--cloud ...] | reduce | version
+  core/             Shared types, I/O, and spatial indexing
+    plane.py        Plane fit core (LSQ / RANSAC / robust iteration / residual stats)
+    plyio.py        PLY I/O (double precision, Open3D-free)
+    neighbors.py    Spatial indexing / display downsampling
+    array_backend.py  Optional CuPy GPU backend (auto fallback to NumPy)
   fit/              Face extraction and fitting
     picking.py      Click-driven region extraction (GUI-independent)
     mainplane.py    Main plane component extraction (connected components + QC)
@@ -37,13 +41,14 @@ cloudet/
     store.py        manifest / settings / group save
     groups.py       Group loading
     spatial_cache.py  VoxelHashGrid / display cache on disk
+    settings_apply.py  Settings apply classification (detection vs display)
   reduction/        Constructive geometry reduction
     session.py      Recipe-driven session → geometry.json
     ops.py          Shared op metadata (GUI ↔ recipe)
     geometry.py     Offset planes, intersections, rotations
     frame.py        Display-only Align Z pose (axis → +Z, optional yaw)
   ui/
-    main_window.py    CloudetAppWindow + run_picker_qt
+    main_window.py    CloudetAppWindow + run_cloudet_qt
     groups_mixin.py   Groups / Settings dock, pick, fit, tree
     reduction_mixin.py  Reduction + Measure docks
     uv_mixin.py       Residual u–v map dock
@@ -114,12 +119,14 @@ VTK’s own errors and warnings go to `<project_dir>/vtk.log` instead of the ter
 
 ## Geometry reduction
 
-After Fit + save, faces live in `groups/group_*.json` (`fit.planes[].abcd`).
-Analysis parameters (virtual axes, beam-on-target points, drawing offsets)
-are derived with a declarative recipe — no point cloud required at this stage.
+After Fit + save, faces live in `groups/group_*.json`
+(`fit.planes[].normal` + `d`). Analysis parameters (virtual axes, beam-on-target
+points, drawing offsets) are derived with a declarative recipe — no point cloud
+required at this stage.
 
 ```bash
 cloudet reduce <project> --recipe recipe.json -o geometry.json
+cloudet migrate <project> [--dry-run]
 ```
 
 Offset sign convention: positive `distance_mm` moves the plane along its
@@ -130,7 +137,7 @@ Example recipe (tracker walls → beam axis ∩ target):
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "units": "mm",
   "faces": {
     "tracker_left":  { "from": "group", "name": "G0" },
@@ -138,9 +145,9 @@ Example recipe (tracker walls → beam axis ∩ target):
     "target":        { "from": "group", "name": "G2" }
   },
   "construct": [
-    { "id": "left_in",  "op": "offset", "of": "tracker_left",  "distance_mm": 12.0 },
-    { "id": "front_in", "op": "offset", "of": "tracker_front", "distance_mm": 12.0 },
-    { "id": "beam_axis", "op": "intersect_planes", "a": "left_in", "b": "front_in" },
+    { "id": "left_in",  "op": "offset", "plane": "tracker_left",  "distance_mm": 12.0 },
+    { "id": "front_in", "op": "offset", "plane": "tracker_front", "distance_mm": 12.0 },
+    { "id": "beam_axis", "op": "intersect_planes", "plane_a": "left_in", "plane_b": "front_in" },
     { "id": "beam_on_target", "op": "intersect_line_plane", "line": "beam_axis", "plane": "target" }
   ],
   "export": ["beam_axis", "beam_on_target"],
@@ -148,19 +155,24 @@ Example recipe (tracker walls → beam axis ∩ target):
 }
 ```
 
+Legacy v1 recipes (`of`, `a`/`b`, …) and plane `abcd` still load; saves and
+`cloudet migrate` write the current keys only.
+
 Supported construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
 `intersect_line_plane`, `intersect_normal_plane` (source-plane normal ∩ dest plane), `line_from_point_normal`
 (axis through a point along a plane normal), `line_from_two_points`,
 `midpoint_line_planes` (midpoint of the segment cut by two planes),
 `plane_from_plane_point`, `plane_from_line_point`, `plane_from_two_lines`,
-`rotate_plane_about_line` (rigid rotation about any axis; angle in degrees).
+`rotate_plane_about_line`, `rotate_point_about_line`, `rotate_line_about_line`
+(rigid rotation about any axis; angle in degrees, right-hand rule).
 
 #### `geometry.json` (export output)
 
 `geometry.json` is the **executed** recipe plus computed entity records (not the
 point cloud). Top-level `planes` / `lines` / `points` are always in **survey**
 coordinates. Each record includes provenance (`scanned` | `offset` | `intersection`
-| `constructed`) and parameters (`abcd`, `point`/`direction`, `xyz`, …).
+| `constructed`) and parameters (`normal`/`d`, `point`/`direction`, `xyz`, …;
+entity parent refs use `parents`).
 
 | Key | Contents |
 |-----|----------|
@@ -204,7 +216,7 @@ chosen. They must **not** be used as FRAME axis / origin / yaw. Example:
     {
       "id": "above_xy",
       "op": "offset",
-      "of": "aligned.xy",
+      "plane": "aligned.xy",
       "distance_mm": 10.0
     }
   ]

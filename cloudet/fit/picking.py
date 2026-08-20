@@ -26,7 +26,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from cloudet.core.array_backend import DevicePoints, get_context
-from cloudet.fit.mainplane import _inplane_basis, _label_components
+from cloudet.fit.mainplane import inplane_basis, label_components
 from cloudet.core.plane import Plane, fit_plane_lsq, run_ransac
 
 __all__ = ["PickParams", "pick_plane_region"]
@@ -95,7 +95,7 @@ def _slab_candidate_indices(
         mask = xp.abs(pts @ normal + plane.d) <= params.accumulate_threshold_mm
         if inplane_radius_mm is not None and np.isfinite(inplane_radius_mm):
             clicked_g = xp.asarray(clicked, dtype=xp.float64)
-            u, v = _inplane_basis(plane.normal)
+            u, v = inplane_basis(plane.normal)
             u_g = xp.asarray(u, dtype=xp.float64)
             v_g = xp.asarray(v, dtype=xp.float64)
             delta = pts - clicked_g
@@ -135,7 +135,7 @@ def _fit_local_plane(
 
 def _inplane_radius(points: np.ndarray, plane: Plane, clicked: np.ndarray) -> np.ndarray:
     """In-plane radial distance from ``clicked`` for each point."""
-    u, v = _inplane_basis(plane.normal)
+    u, v = inplane_basis(plane.normal)
     clicked = np.asarray(clicked, dtype=np.float64)
     delta = points - clicked
     uu = delta @ u
@@ -160,7 +160,7 @@ def _connected_indices(
     this final pass must stay fine enough to separate coplanar faces.
     """
     pts = points[candidate_idx]
-    u, v = _inplane_basis(plane.normal)
+    u, v = inplane_basis(plane.normal)
     center = pts.mean(axis=0)
     uu = (pts - center) @ u
     vv = (pts - center) @ v
@@ -204,7 +204,7 @@ def _connected_indices(
         vmin_f = float(vv.min())
 
     occupied = counts >= min_pts
-    labels = _label_components(occupied)
+    labels = label_components(occupied)
     if labels.max() == 0:
         return candidate_idx
 

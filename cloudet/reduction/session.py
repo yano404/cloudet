@@ -54,6 +54,14 @@ from cloudet.reduction.frame import (
     is_aligned_plane_id,
 )
 from cloudet.core.plane import Plane
+from cloudet.project.schema import (
+    RECIPE_VERSION,
+    migrate_construct_step,
+    migrate_measure_spec,
+    migrate_recipe,
+    plane_from_json,
+    plane_to_json,
+)
 from cloudet.project import FittedPlane, load_fitted_plane, load_group_doc
 from cloudet.reduction.ops import MEASURE_OPERAND_FIELDS, REDUCTION_OP_BY_RECIPE
 
@@ -91,7 +99,7 @@ def scanned_plane_record(
     """Record dict for a scanned (Groups) plane binding."""
     quality = dict(quality or {})
     return {
-        "abcd": plane.as_array().tolist(),
+        **plane_to_json(plane),
         "provenance": "scanned",
         "group_id": int(group_id),
         "group_name": str(group_name),
@@ -130,7 +138,7 @@ class ReductionResult:
 
     def to_dict(self) -> dict:
         out: dict[str, Any] = {
-            "version": 1,
+            "version": RECIPE_VERSION,
             "units": "mm",
             "source_project": self.source_project,
             "recipe": self.recipe,
@@ -152,11 +160,11 @@ class ReductionResult:
 def load_recipe(path: str | Path) -> dict:
     with open(path, encoding="utf-8") as f:
         doc = json.load(f)
-    if int(doc.get("version", 1)) != 1:
+    if int(doc.get("version", 1)) > RECIPE_VERSION:
         raise ValueError(f"unsupported recipe version {doc.get('version')}")
     if doc.get("units", "mm") != "mm":
         raise ValueError(f"recipe units must be mm, got {doc.get('units')!r}")
-    return doc
+    return migrate_recipe(doc)
 
 
 def _recipe_fingerprint(recipe: dict) -> dict:
@@ -293,9 +301,9 @@ def _run_construct_step(
         return _require_point(store, key, where=where, extra_points=extra_points)
 
     if op == "offset":
-        of = step["of"]
+        plane_id = step["plane"]
         distance = float(step["distance_mm"])
-        src = require_plane(of)
+        src = require_plane(plane_id)
         plane = offset_plane(src, distance)
         _put(
             store,
@@ -303,20 +311,20 @@ def _run_construct_step(
             "plane",
             plane,
             {
-                "abcd": plane.as_array().tolist(),
+                **plane_to_json(plane),
                 "provenance": "offset",
-                "of": of,
+                "parents": plane_id,
                 "distance_mm": distance,
             },
         )
         return
 
     if op == "intersect_planes":
-        a = step["a"]
-        b = step["b"]
+        plane_a = step["plane_a"]
+        plane_b = step["plane_b"]
         line = intersect_planes(
-            require_plane(a),
-            require_plane(b),
+            require_plane(plane_a),
+            require_plane(plane_b),
         )
         _put(
             store,
@@ -327,13 +335,13 @@ def _run_construct_step(
                 "point": line.point.tolist(),
                 "direction": line.direction.tolist(),
                 "provenance": "intersection",
-                "of": [a, b],
+                "parents": [plane_a, plane_b],
             },
         )
         return
 
     if op == "intersect_three_planes":
-        keys = [step["a"], step["b"], step["c"]]
+        keys = [step["plane_a"], step["plane_b"], step["plane_c"]]
         pt = intersect_three_planes(
             *(require_plane(k) for k in keys)
         )
@@ -345,7 +353,7 @@ def _run_construct_step(
             {
                 "xyz": np.asarray(pt, dtype=np.float64).tolist(),
                 "provenance": "intersection",
-                "of": keys,
+                "parents": keys,
             },
         )
         return
@@ -365,14 +373,14 @@ def _run_construct_step(
             {
                 "xyz": np.asarray(pt, dtype=np.float64).tolist(),
                 "provenance": "intersection",
-                "of": [line_id, plane_id],
+                "parents": [line_id, plane_id],
             },
         )
         return
 
     if op == "intersect_normal_plane":
-        src_id = step["src"]
-        dst_id = step["dst"]
+        src_id = step["source_plane"]
+        dst_id = step["destination_plane"]
         src_plane = require_plane(src_id)
         through = step.get("through")
         if through is not None:
@@ -389,7 +397,7 @@ def _run_construct_step(
         record = {
             "xyz": np.asarray(pt, dtype=np.float64).tolist(),
             "provenance": "intersection",
-            "of": [src_id, dst_id],
+            "parents": [src_id, dst_id],
             "op": "intersect_normal_plane",
         }
         if through is not None:
@@ -413,15 +421,15 @@ def _run_construct_step(
                 "point": line.point.tolist(),
                 "direction": line.direction.tolist(),
                 "provenance": "constructed",
-                "of": [point_id, plane_id],
+                "parents": [point_id, plane_id],
                 "op": "line_from_point_normal",
             },
         )
         return
 
     if op == "line_from_two_points":
-        a = step["a"]
-        b = step["b"]
+        a = step["point_a"]
+        b = step["point_b"]
         if a == b:
             raise ValueError(f"{where}: points a and b must differ")
         line = line_from_two_points(
@@ -437,7 +445,7 @@ def _run_construct_step(
                 "point": line.point.tolist(),
                 "direction": line.direction.tolist(),
                 "provenance": "constructed",
-                "of": [a, b],
+                "parents": [a, b],
                 "op": "line_from_two_points",
             },
         )
@@ -445,8 +453,8 @@ def _run_construct_step(
 
     if op == "midpoint_line_planes":
         line_id = step["line"]
-        a = step["a"]
-        b = step["b"]
+        a = step["plane_a"]
+        b = step["plane_b"]
         if a == b:
             raise ValueError(f"{where}: planes a and b must differ")
         line = require_line(line_id)
@@ -463,7 +471,7 @@ def _run_construct_step(
             {
                 "xyz": np.asarray(pt, dtype=np.float64).tolist(),
                 "provenance": "constructed",
-                "of": [line_id, a, b],
+                "parents": [line_id, a, b],
                 "op": "midpoint_line_planes",
                 "ends": [
                     np.asarray(end_a, dtype=np.float64).tolist(),
@@ -486,9 +494,9 @@ def _run_construct_step(
             "plane",
             plane,
             {
-                "abcd": plane.as_array().tolist(),
+                **plane_to_json(plane),
                 "provenance": "constructed",
-                "of": [plane_id, point_id],
+                "parents": [plane_id, point_id],
                 "op": "plane_from_plane_point",
             },
         )
@@ -507,17 +515,17 @@ def _run_construct_step(
             "plane",
             plane,
             {
-                "abcd": plane.as_array().tolist(),
+                **plane_to_json(plane),
                 "provenance": "constructed",
-                "of": [line_id, point_id],
+                "parents": [line_id, point_id],
                 "op": "plane_from_line_point",
             },
         )
         return
 
     if op == "plane_from_two_lines":
-        a = step["a"]
-        b = step["b"]
+        a = step["line_a"]
+        b = step["line_b"]
         if a == b:
             raise ValueError(f"{where}: lines a and b must differ")
         plane = plane_from_two_lines(
@@ -530,9 +538,9 @@ def _run_construct_step(
             "plane",
             plane,
             {
-                "abcd": plane.as_array().tolist(),
+                **plane_to_json(plane),
                 "provenance": "constructed",
-                "of": [a, b],
+                "parents": [a, b],
                 "op": "plane_from_two_lines",
             },
         )
@@ -553,9 +561,9 @@ def _run_construct_step(
             "plane",
             plane,
             {
-                "abcd": plane.as_array().tolist(),
+                **plane_to_json(plane),
                 "provenance": "constructed",
-                "of": [plane_id, line_id],
+                "parents": [plane_id, line_id],
                 "op": "rotate_plane_about_line",
                 "angle_deg": angle_deg,
             },
@@ -579,7 +587,7 @@ def _run_construct_step(
             {
                 "xyz": pt.tolist(),
                 "provenance": "constructed",
-                "of": [point_id, line_id],
+                "parents": [point_id, line_id],
                 "op": "rotate_point_about_line",
                 "angle_deg": angle_deg,
             },
@@ -604,7 +612,7 @@ def _run_construct_step(
                 "point": ln.point.tolist(),
                 "direction": ln.direction.tolist(),
                 "provenance": "constructed",
-                "of": [line_id, axis_id],
+                "parents": [line_id, axis_id],
                 "op": "rotate_line_about_line",
                 "angle_deg": angle_deg,
             },
@@ -634,8 +642,11 @@ def _check_recipe(recipe: dict) -> None:
         raise ValueError("recipe must be an object")
     if "faces" not in recipe and "planes" in recipe:
         raise ValueError("this looks like geometry.json; load a recipe.json instead")
-    if int(recipe.get("version", 1)) != 1:
+    if int(recipe.get("version", 1)) > RECIPE_VERSION:
         raise ValueError(f"unsupported recipe version {recipe.get('version')}")
+    migrated = migrate_recipe(recipe)
+    recipe.clear()
+    recipe.update(migrated)
     if recipe.get("units", "mm") != "mm":
         raise ValueError(f"recipe units must be mm, got {recipe.get('units')!r}")
     faces = recipe.get("faces") or {}
@@ -762,9 +773,16 @@ def _construct_step_schema(op: str) -> tuple[str, tuple[tuple[str, str], ...], t
 
 
 def _parse_construct_step(step, *, where: str) -> dict:
-    """Validate construct-step shape without checking entity availability."""
+    """Validate construct-step shape without checking entity availability.
+
+    Mutates ``step`` in place to v2 operand keys when legacy keys are present.
+    """
     if not isinstance(step, dict):
         raise ValueError(f"{where}: expected object")
+    migrated = migrate_construct_step(step)
+    if migrated is not step:
+        step.clear()
+        step.update(migrated)
     entity_id = step.get("id")
     op = step.get("op")
     if not entity_id:
@@ -905,6 +923,10 @@ def _parse_measure_spec(spec) -> dict:
     """Optional measurement: distances / angles. Not a construct step."""
     if not isinstance(spec, dict):
         raise ValueError("recipe.measures[] must be an object")
+    migrated = migrate_measure_spec(spec)
+    if migrated is not spec:
+        spec.clear()
+        spec.update(migrated)
     op = spec.get("op")
     if op not in _MEASURE_OPS:
         raise ValueError(f"recipe.measures unknown op {op!r}")
@@ -1067,7 +1089,7 @@ def write_recipe_json(path: str | Path, recipe: dict) -> Path:
     return path
 
 
-_REF_KEYS = ("id", "of", "a", "b", "c", "line", "plane", "point", "src", "dst")
+_REF_KEYS = ( "id", "plane", "plane_a", "plane_b", "plane_c", "line", "line_a", "line_b", "point", "point_a", "point_b", "axis", "source_plane", "destination_plane", "parents",)
 
 
 def _rewrite_id_refs(obj: dict, old_id: str, new_id: str) -> None:
@@ -1256,8 +1278,8 @@ class ReductionSession:
         self._construct.append(step)
         self.visible[entity_id] = True
         if step.get("op") == "line_from_two_points":
-            pa = self.point(step["a"])
-            pb = self.point(step["b"])
+            pa = self.point(step["point_a"])
+            pb = self.point(step["point_b"])
             self.anchors[entity_id] = 0.5 * (pa + pb)
             half = 0.5 * float(np.linalg.norm(pb - pa))
             default = float(self.display_default_mm.get("line", 300.0))
@@ -1277,7 +1299,15 @@ class ReductionSession:
                     return entity_id
             except (KeyError, TypeError):
                 pass
-        of = step.get("of") or step.get("a") or step.get("src") or step.get("line")
+        of = (
+            step.get("plane")
+            or step.get("plane_a")
+            or step.get("source_plane")
+            or step.get("line")
+            or step.get("point")
+            or step.get("point_a")
+            or step.get("line_a")
+        )
         if of in self.anchors:
             self.anchors[entity_id] = self.anchors[of].copy()
         elif step.get("plane") in self.anchors:
@@ -1331,7 +1361,7 @@ class ReductionSession:
         )
         if idx is None:
             raise KeyError(f"{entity_id!r} is not a construct step")
-        step = dict(step)
+        step = migrate_construct_step(dict(step))
         step["id"] = entity_id
         if not step.get("op"):
             raise ValueError("construct step needs op")
@@ -1620,20 +1650,20 @@ class ReductionSession:
     def clear_overlay_width_mm(self, entity_id: str) -> None:
         self.display_width_mm.pop(str(entity_id), None)
 
-    def offset(self, entity_id: str, of: str, distance_mm: float) -> str:
+    def offset(self, entity_id: str, plane: str, distance_mm: float) -> str:
         return self.apply_step({
             "id": str(entity_id),
             "op": "offset",
-            "of": of,
+            "plane": plane,
             "distance_mm": float(distance_mm),
         })
 
-    def intersect_planes(self, entity_id: str, a: str, b: str) -> str:
+    def intersect_planes(self, entity_id: str, plane_a: str, plane_b: str) -> str:
         return self.apply_step({
             "id": str(entity_id),
             "op": "intersect_planes",
-            "a": a,
-            "b": b,
+            "plane_a": plane_a,
+            "plane_b": plane_b,
         })
 
     def intersect_line_plane(self, entity_id: str, line: str, plane: str) -> str:
@@ -1644,27 +1674,29 @@ class ReductionSession:
             "plane": plane,
         })
 
-    def intersect_three_planes(self, entity_id: str, a: str, b: str, c: str) -> str:
+    def intersect_three_planes(
+        self, entity_id: str, plane_a: str, plane_b: str, plane_c: str
+    ) -> str:
         return self.apply_step({
             "id": str(entity_id),
             "op": "intersect_three_planes",
-            "a": a,
-            "b": b,
-            "c": c,
+            "plane_a": plane_a,
+            "plane_b": plane_b,
+            "plane_c": plane_c,
         })
 
     def intersect_normal_plane(
         self,
         entity_id: str,
-        src: str,
-        dst: str,
+        source_plane: str,
+        destination_plane: str,
         through: np.ndarray | None = None,
     ) -> str:
         step: dict[str, Any] = {
             "id": str(entity_id),
             "op": "intersect_normal_plane",
-            "src": src,
-            "dst": dst,
+            "source_plane": source_plane,
+            "destination_plane": destination_plane,
         }
         if through is not None:
             step["through"] = np.asarray(through, dtype=np.float64).reshape(3).tolist()
@@ -1678,21 +1710,23 @@ class ReductionSession:
             "plane": plane,
         })
 
-    def line_from_two_points(self, entity_id: str, a: str, b: str) -> str:
+    def line_from_two_points(self, entity_id: str, point_a: str, point_b: str) -> str:
         return self.apply_step({
             "id": str(entity_id),
             "op": "line_from_two_points",
-            "a": a,
-            "b": b,
+            "point_a": point_a,
+            "point_b": point_b,
         })
 
-    def midpoint_line_planes(self, entity_id: str, line: str, a: str, b: str) -> str:
+    def midpoint_line_planes(
+        self, entity_id: str, line: str, plane_a: str, plane_b: str
+    ) -> str:
         return self.apply_step({
             "id": str(entity_id),
             "op": "midpoint_line_planes",
             "line": line,
-            "a": a,
-            "b": b,
+            "plane_a": plane_a,
+            "plane_b": plane_b,
         })
 
     def plane_from_plane_point(self, entity_id: str, plane: str, point: str) -> str:
@@ -1711,12 +1745,12 @@ class ReductionSession:
             "point": point,
         })
 
-    def plane_from_two_lines(self, entity_id: str, a: str, b: str) -> str:
+    def plane_from_two_lines(self, entity_id: str, line_a: str, line_b: str) -> str:
         return self.apply_step({
             "id": str(entity_id),
             "op": "plane_from_two_lines",
-            "a": a,
-            "b": b,
+            "line_a": line_a,
+            "line_b": line_b,
         })
 
     def rotate_plane_about_line(
@@ -1765,7 +1799,7 @@ class ReductionSession:
             raise ValueError("no scanned faces bound")
         ids = list(self._store.keys()) if export is None else list(export)
         out = {
-            "version": 1,
+            "version": RECIPE_VERSION,
             "units": "mm",
             "faces": dict(self._face_specs),
             "construct": [dict(s) for s in self._construct],
@@ -1817,7 +1851,9 @@ class ReductionSession:
         _validate_measure_spec(self, parsed)
         op = parsed["op"]
         if op == "distance_points":
-            value = distance_points(self.point(parsed["a"]), self.point(parsed["b"]))
+            value = distance_points(
+                self.point(parsed["point_a"]), self.point(parsed["point_b"])
+            )
             unit = "mm"
         elif op == "distance_point_plane":
             value = distance_point_plane(
@@ -1830,10 +1866,14 @@ class ReductionSession:
             )
             unit = "mm"
         elif op == "angle_planes":
-            value = angle_planes_deg(self.plane(parsed["a"]), self.plane(parsed["b"]))
+            value = angle_planes_deg(
+                self.plane(parsed["plane_a"]), self.plane(parsed["plane_b"])
+            )
             unit = "deg"
         elif op == "angle_lines":
-            value = angle_lines_deg(self.line(parsed["a"]), self.line(parsed["b"]))
+            value = angle_lines_deg(
+                self.line(parsed["line_a"]), self.line(parsed["line_b"])
+            )
             unit = "deg"
         elif op == "angle_line_plane":
             value = angle_line_plane_deg(

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/cloudet-wordmark.svg" alt="cloudet" width="420">
+</p>
+
 # cloudet
 
 English: [README.md](README.md)
@@ -21,13 +25,13 @@ FARO Quantum-S などで取得した三次元点群から、原子核実験用�
 
 ```
 cloudet/
-  plane.py          平面フィットコア（LSQ / RANSAC / robust 反復・残差統計）
-  plyio.py          PLY 読み書き（double 精度、Open3D 非依存）
-  neighbors.py      空間インデックス / 表示間引き
-  array_backend.py  任意 CuPy GPU バックエンド（無ければ NumPy）
-  settings_apply.py 設定適用の分類（detection vs display）
   app_window.py     Qt アプリのエントリポイント（→ ui.main_window）
   cli.py            cloudet [project] [--cloud ...] | reduce | version
+  core/             共通型・I/O・空間インデックス
+    plane.py        平面フィットコア（LSQ / RANSAC / robust 反復・残差統計）
+    plyio.py        PLY 読み書き（double 精度、Open3D 非依存）
+    neighbors.py    空間インデックス / 表示間引き
+    array_backend.py  任意 CuPy GPU バックエンド（無ければ NumPy）
   fit/              面抽出・フィット
     picking.py      クリック駆動の領域抽出（GUI 非依存）
     mainplane.py    main plane component 抽出（連結成分 + QC）
@@ -37,13 +41,14 @@ cloudet/
     store.py        manifest / settings / group 保存
     groups.py       group 読込
     spatial_cache.py  VoxelHashGrid / 表示キャッシュ
+    settings_apply.py  設定適用の分類（detection vs display）
   reduction/        構築型リダクション
     session.py      レシピ駆動セッション → geometry.json
     ops.py          操作メタデータ（GUI ↔ recipe）
     geometry.py     オフセット平面・交差・回転
     frame.py        表示専用 Align Z 姿勢（軸 → +Z、任意 yaw）
   ui/
-    main_window.py    CloudetAppWindow + run_picker_qt
+    main_window.py    CloudetAppWindow + run_cloudet_qt
     groups_mixin.py   Groups / Settings ドック、ピック、フィット、ツリー
     reduction_mixin.py  Reduction + Measure ドック
     uv_mixin.py       残差 u–v マップ ドック
@@ -114,29 +119,34 @@ VTK 自身のエラー・警告は端末ではなく `<project_dir>/vtk.log` に
 
 ## 位置関係リダクション
 
-Fit + 保存後、面は `groups/group_*.json` の `fit.planes[].abcd` に残ります。
+Fit + 保存後、面は `groups/group_*.json` の `fit.planes[].normal` + `d` に残ります。
 解析用パラメータ（仮想軸、ビーム×標的交点、図面オフセット面）は、宣言的レシピで導出します（この段階では点群不要）。
 
 ```bash
 cloudet reduce <project> --recipe recipe.json -o geometry.json
+cloudet migrate <project> [--dry-run]
 ```
 
 オフセットの符号: 正の `distance_mm` は平面の Hesse 単位法線方向へ移動（Fit と同じ符号規約）。
 反対側（例: 外向き法線に対する「内側」）は負の距離を使います。
+
+旧形式（`abcd`、レシピ v1 の `of` / `a`/`b` など）も読み込み時に変換されます。
+保存と `cloudet migrate` は現行キーのみ書き出します。
 
 対応する construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
 `intersect_line_plane`, `intersect_normal_plane`（元の面の法線 ∩ 先の面）、`line_from_point_normal`
 （点を通り、面の法線方向の軸）、`line_from_two_points`（2点を通る軸）、
 `midpoint_line_planes`（直線を2平面で切った線分の中点）、
 `plane_from_plane_point`, `plane_from_line_point`, `plane_from_two_lines`,
-`rotate_plane_about_line`（任意の軸まわりの剛体回転。角度は度）。
+`rotate_plane_about_line`、`rotate_point_about_line`、`rotate_line_about_line`
+（任意の軸まわりの剛体回転。角度は度、右手系）。
 
 #### `geometry.json`（エクスポート出力）
 
 `geometry.json` はレシピを**実行した結果**に、各 entity の record を載せたものです（点群本体ではありません）。
 トップレベルの `planes` / `lines` / `points` は常に**測量（survey）座標**です。
 各 record には provenance（`scanned` | `offset` | `intersection` | `constructed`）と
-パラメータ（`abcd`, `point`/`direction`, `xyz` など）が入ります。
+パラメータ（`normal`/`d`, `point`/`direction`, `xyz` など。親参照は `parents`）が入ります。
 
 | キー | 内容 |
 |------|------|
@@ -179,7 +189,7 @@ axis / origin / yaw には使えません。例:
     {
       "id": "above_xy",
       "op": "offset",
-      "of": "aligned.xy",
+      "plane": "aligned.xy",
       "distance_mm": 10.0
     }
   ]

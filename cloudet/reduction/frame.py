@@ -312,9 +312,13 @@ class RigidFrame:
 
 def transform_record(kind: str, record: dict, frame: RigidFrame) -> dict:
     """Copy an entity record and rewrite geometric fields into ``frame``."""
+    from cloudet.project.schema import plane_from_json, plane_to_json
+
     rec = copy.deepcopy(record)
-    if kind == "plane" and "abcd" in rec:
-        rec["abcd"] = frame.apply_plane(Plane.from_array(rec["abcd"])).as_array().tolist()
+    if kind == "plane" and ("abcd" in rec or ("normal" in rec and "d" in rec)):
+        plane = frame.apply_plane(plane_from_json(rec))
+        rec.pop("abcd", None)
+        rec.update(plane_to_json(plane))
         return rec
     if kind == "line":
         line = Line(rec["point"], rec["direction"])

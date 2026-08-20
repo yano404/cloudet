@@ -1,0 +1,13 @@
+/* mkdocstrings: indent nested members and keep symbol-type badges readable. */
+div.doc-contents:not(.first) {
+  padding-left: 25px;
+  border-left: 0.05rem solid var(--md-typeset-table-color);
+}
+
+/* Make autodoc headings sit closer to the screenshot-style API pages. */
+h1.doc-heading,
+h2.doc-heading,
+h3.doc-heading,
+h4.doc-heading {
+  font-weight: 600;
+}

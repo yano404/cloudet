@@ -49,7 +49,7 @@ from cloudet.core.array_backend import (
 )
 from cloudet.project.groups import load_groups
 from cloudet.fit.mainplane import MainPlaneParams, extract_main_plane
-from cloudet.fit.multiplane import MultiPlaneParams, _bimodality_flag, extract_planes
+from cloudet.fit.multiplane import MultiPlaneParams, bimodality_flag, extract_planes
 from cloudet.core.neighbors import (
     VoxelHashGrid,
     depth_layers_along_ray,
@@ -58,6 +58,7 @@ from cloudet.core.neighbors import (
 )
 from cloudet.fit.picking import PickParams, pick_plane_region
 from cloudet.core.plane import Plane, mad_sigma
+from cloudet.project.schema import plane_from_json, plane_to_json
 from cloudet.core.plyio import read_ply_xyz
 from cloudet.project import (
     SourceInfo,
@@ -66,10 +67,10 @@ from cloudet.project import (
     load_group_indices,
     load_plane_inlier_indices,
     load_settings,
-    read_manifest,
+    load_manifest,
     save_group,
     save_settings,
-    write_manifest,
+    save_manifest,
 )
 from cloudet.project.spatial_cache import load_display_xyz, load_voxel_grid, save_display_xyz, save_voxel_grid
 from cloudet.project.settings_apply import classify_settings_apply
@@ -78,7 +79,7 @@ from cloudet.ui.constants import (
     FIT_MAX_THRESHOLD_MM,
     SETTINGS_HELP_DEFAULT,
 )
-from cloudet.ui.plane_labels import _plane_id_token, _plane_label
+from cloudet.ui.plane_labels import plane_id_token, plane_label
 from cloudet.ui.qt_helpers import route_vtk_messages_to_file
 from cloudet.ui.widgets import UI_STYLE, _make_collapsible_card, _reset_tree_widget, group_color
 
@@ -1014,10 +1015,10 @@ class GroupsMixin:
         self.grid = None
 
         # Prefer the cloud recorded in the new project's manifest when present.
-        manifest = read_manifest(self.project_dir)
+        manifest = load_manifest(self.project_dir)
         src = (manifest or {}).get("source", {}).get("path", "")
         if src:
-            self.pcd_edit_path = src
+            self.cloud_edit_path = src
             self.cloud_label.setText(Path(src).name)
             self.cloud_label.setToolTip(src)
 
@@ -1031,12 +1032,12 @@ class GroupsMixin:
             "Point clouds (*.ply);;All files (*)",
         )
         if path:
-            self.pcd_edit_path = path
+            self.cloud_edit_path = path
             self.cloud_label.setText(Path(path).name)
             self.cloud_label.setToolTip(path)
 
     def _load_cloud(self):
-        path = getattr(self, "pcd_edit_path", "").strip()
+        path = getattr(self, "cloud_edit_path", "").strip()
         if not path:
             raise ValueError("no cloud file selected (Browse...)")
         if not os.path.exists(path):
@@ -1044,7 +1045,7 @@ class GroupsMixin:
         self._status(f"loading {path} ...")
         QApplication.processEvents()
         self.full_points = read_ply_xyz(path)
-        self.pcd_path = path
+        self.cloud_path = path
         self.cloud_label.setText(Path(path).name)
         self.cloud_label.setToolTip(path)
         self.grid = None
@@ -1068,7 +1069,7 @@ class GroupsMixin:
 
     def _source_cloud_path(self) -> str:
         return str(
-            getattr(self, "pcd_path", "") or getattr(self, "pcd_edit_path", "") or ""
+            getattr(self, "cloud_path", "") or getattr(self, "cloud_edit_path", "") or ""
         ).strip()
 
     def _ensure_grid(self) -> VoxelHashGrid:
@@ -1504,7 +1505,7 @@ class GroupsMixin:
                 "mask": res.main_mask,
                 "n_points": res.n_main,
                 "bimodal": bool(
-                    _bimodality_flag(
+                    bimodality_flag(
                         res.plane.signed_distances(pts[res.main_mask]),
                         res.fit.stats_inliers["mad_sigma"],
                     )
@@ -1515,7 +1516,7 @@ class GroupsMixin:
             "planes": [
                 {
                     "plane_index": p["plane_index"],
-                    "abcd": p["result"].plane.as_array().tolist(),
+                    **plane_to_json(p["result"].plane),
                     "n_points": p["n_points"],
                     "status": p["result"].status,
                     "reasons": p["result"].reasons,
@@ -1622,12 +1623,12 @@ class GroupsMixin:
                 detection=self.settings.detection,
                 fit_summary=g["fit"],
             )
-        write_manifest(
+        save_manifest(
             self.project_dir,
             SourceInfo(
-                path=self.pcd_path,
+                path=self.cloud_path,
                 n_points=len(self.full_points),
-                size_bytes=os.path.getsize(self.pcd_path) if self.pcd_path else None,
+                size_bytes=os.path.getsize(self.cloud_path) if self.cloud_path else None,
             ),
             self.settings.detection,
             n_groups=len(self.groups),
@@ -1650,7 +1651,9 @@ class GroupsMixin:
         lookup = None if gidx is None else {int(v): i for i, v in enumerate(gidx)}
         planes = []
         for p in fit["planes"]:
-            if not isinstance(p, dict) or "abcd" not in p:
+            if not isinstance(p, dict):
+                continue
+            if "abcd" not in p and not ("normal" in p and "d" in p):
                 continue
             entry = dict(p)
             pi = int(entry.get("plane_index", 0))
@@ -1672,7 +1675,7 @@ class GroupsMixin:
     def _load_all(self):
         if len(self.full_points) == 0:
             raise ValueError("load the source cloud first")
-        manifest = read_manifest(self.project_dir)
+        manifest = load_manifest(self.project_dir)
         if manifest is not None:
             src_n = manifest.get("source", {}).get("n_points")
             if src_n is not None and src_n != len(self.full_points):
@@ -1795,7 +1798,7 @@ class GroupsMixin:
             keep = [p for p in planes if int(p.get("plane_index", 0)) not in pis]
             if not gone:
                 continue
-            labels.extend(f"{g['name']}/{_plane_label(p)}" for p in gone)
+            labels.extend(f"{g['name']}/{plane_label(p)}" for p in gone)
             last_gid = gid
             if keep:
                 g["fit"]["planes"] = keep
@@ -1896,14 +1899,14 @@ class GroupsMixin:
                 item.setFont(0, f)
             if g["fit"] is not None:
                 for p in g["fit"]["planes"]:
-                    abcd = p["abcd"]
+                    abcd = plane_from_json(p).as_array()
                     # When Align Z is active, rewrite the plane equation into the
                     # current view frame so n,d match what the user sees.
                     if self._view_frame is not None:
                         plane = Plane.from_array(abcd)
                         plane = self._view_frame.apply_plane(plane)
                         abcd = plane.as_array()
-                    label = _plane_label(p)
+                    label = plane_label(p)
                     nxyz = (
                         f"n=({abcd[0]:+.4f}, {abcd[1]:+.4f}, {abcd[2]:+.4f})  "
                         f"d={abcd[3]:+.3f}"
@@ -1916,7 +1919,7 @@ class GroupsMixin:
                     if "selection_refit" in (p.get("reasons") or []):
                         src = p.get("source_plane_index")
                         src_p = self._find_plane(g, src) if src is not None else None
-                        src_label = _plane_label(src_p) if src_p is not None else (
+                        src_label = plane_label(src_p) if src_p is not None else (
                             f"p{src}" if src is not None else "selection"
                         )
                         quality += f"  ·  from {src_label}"
@@ -1996,7 +1999,7 @@ class GroupsMixin:
                     g = self._get_group(data[1])
                     p = self._find_plane(g, data[2])
                     if p is not None:
-                        abcd = p["abcd"]
+                        abcd = plane_from_json(p).as_array()
                         if self._view_frame is not None:
                             plane = Plane.from_array(abcd)
                             plane = self._view_frame.apply_plane(plane)
@@ -2019,9 +2022,9 @@ class GroupsMixin:
             for other in (g.get("fit") or {}).get("planes") or []:
                 if other is p:
                     continue
-                if _plane_label(other) == new_name:
+                if plane_label(other) == new_name:
                     self.tree.blockSignals(True)
-                    item.setText(0, _plane_label(p))
+                    item.setText(0, plane_label(p))
                     self.tree.blockSignals(False)
                     self._status(f"name {new_name!r} already used on {g['name']}")
                     return

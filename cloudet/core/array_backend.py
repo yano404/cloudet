@@ -31,7 +31,7 @@ _cupy_probe_reason: str | None = None
 
 
 def cupy_unavailable_reason() -> str | None:
-    """Human-readable reason when :func:`cupy_available` is False."""
+    """Human-readable reason when [`cupy_available`][cloudet.core.array_backend.cupy_available] is False."""
     if _cupy_probe_ok is None:
         cupy_available()
     return _cupy_probe_reason

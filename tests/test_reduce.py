@@ -14,7 +14,7 @@ from cloudet.project import (
     load_fitted_plane,
     load_group_docs,
     save_group,
-    write_manifest,
+    save_manifest,
 )
 from cloudet.reduction import load_recipe, run_reduction, write_geometry_json
 
@@ -59,7 +59,7 @@ def _make_project(tmp_path):
             detection=params,
             fit_summary=_fit_planes(plane.as_array()),
         )
-    write_manifest(
+    save_manifest(
         tmp_path,
         SourceInfo(path="/data/scan.ply", n_points=100),
         params,
@@ -146,7 +146,7 @@ def test_reduction_beam_on_target(tmp_path):
 
     out = write_geometry_json(tmp_path / "geometry.json", result)
     doc = json.loads(out.read_text())
-    assert doc["version"] == 1
+    assert doc["version"] == 2
     assert doc["units"] == "mm"
     assert doc["export"] == ["beam_axis", "beam_on_target"]
     assert "sha256" in doc["recipe"]
@@ -259,11 +259,11 @@ def test_reduction_session_line_from_two_points():
     recipe = sess.to_recipe()
     step = recipe["construct"][-1]
     assert step["op"] == "line_from_two_points"
-    assert step["a"] == "p0"
-    assert step["b"] == "p1"
+    assert step["point_a"] == "p0"
+    assert step["point_b"] == "p1"
     sess.rename("p0", "origin")
     live = [s for s in sess.to_recipe()["construct"] if s["id"] == "chord"][0]
-    assert live["a"] == "origin"
+    assert live["point_a"] == "origin"
     with pytest.raises(ValueError, match="must differ"):
         sess.line_from_two_points("bad", "p1", "p1")
 
@@ -281,8 +281,8 @@ def test_reduction_session_intersect_normal_plane():
     rec = sess.record_of("hit")
     assert rec["op"] == "intersect_normal_plane"
     step = [s for s in sess.to_recipe()["construct"] if s["id"] == "hit"][0]
-    assert step["src"] == "src"
-    assert step["dst"] == "dst"
+    assert step["source_plane"] == "src"
+    assert step["destination_plane"] == "dst"
     with pytest.raises(ValueError, match="must differ"):
         sess.intersect_normal_plane("bad", "src", "src")
 
@@ -330,7 +330,7 @@ def test_reduction_session_midpoint_line_planes():
     assert step["line"] == "axis"
     sess.rename("z0", "near")
     live = [s for s in sess.to_recipe()["construct"] if s["id"] == "mid"][0]
-    assert live["a"] == "near"
+    assert live["plane_a"] == "near"
     with pytest.raises(ValueError, match="must differ"):
         sess.midpoint_line_planes("bad", "axis", "z10", "z10")
 
@@ -355,7 +355,7 @@ def test_reduction_session_rename_and_remove():
     assert "tracker_left" not in sess.ids()
     recipe = sess.to_recipe()
     assert "left_wall" in recipe["faces"]
-    assert recipe["construct"][0]["of"] == "left_wall"
+    assert recipe["construct"][0]["plane"] == "left_wall"
 
     sess.rename("beam_axis", "axis")
     live = [s for s in sess.to_recipe()["construct"] if s["id"] == "hit"][0]

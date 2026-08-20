@@ -25,7 +25,7 @@ def test_build_construct_step_offset():
     assert step == {
         "id": "wall_in",
         "op": "offset",
-        "of": "wall",
+        "plane": "wall",
         "distance_mm": 12.5,
     }
 
@@ -84,8 +84,8 @@ def test_build_construct_step_intersect_normal_plane():
     assert step == {
         "id": "hit",
         "op": "intersect_normal_plane",
-        "src": "wall",
-        "dst": "target",
+        "source_plane": "wall",
+        "destination_plane": "target",
     }
     gui_key, operands, scalars = form_values_from_step(step)
     assert gui_key == "intersect_normal_plane"
@@ -101,3 +101,18 @@ def test_page_index_follows_tuple_order():
         for field in op.operands:
             assert field.label
             assert field.widget.startswith("rd_")
+
+
+def test_operand_widget_keys_are_unique():
+    widgets = [field.widget for op in REDUCTION_OPS for field in op.operands]
+    widgets += [field.widget for op in REDUCTION_OPS for field in op.scalars]
+    assert len(widgets) == len(set(widgets))
+
+
+def test_recipe_operand_glossary_covers_all_step_keys():
+    from cloudet.reduction.ops import RECIPE_OPERAND_KEYS, RECIPE_SCALAR_KEYS
+
+    keys = {field.step_key for op in REDUCTION_OPS for field in op.operands}
+    scalars = {field.step_key for op in REDUCTION_OPS for field in op.scalars}
+    assert keys <= set(RECIPE_OPERAND_KEYS)
+    assert scalars <= set(RECIPE_SCALAR_KEYS)

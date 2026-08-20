@@ -28,7 +28,13 @@ import numpy as np
 from cloudet.core.array_backend import DevicePoints, get_context
 from cloudet.core.plane import FitResult, Plane, robust_fit_plane, run_ransac
 
-__all__ = ["MainPlaneParams", "MainPlaneResult", "extract_main_plane"]
+__all__ = [
+    "MainPlaneParams",
+    "MainPlaneResult",
+    "extract_main_plane",
+    "inplane_basis",
+    "label_components",
+]
 
 
 @dataclass(frozen=True)
@@ -71,7 +77,7 @@ class MainPlaneResult:
         return int(np.count_nonzero(self.main_mask))
 
 
-def _inplane_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def inplane_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     a = np.array([1.0, 0.0, 0.0])
     if abs(normal @ a) > 0.9:
         a = np.array([0.0, 1.0, 0.0])
@@ -81,7 +87,7 @@ def _inplane_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return u, v
 
 
-def _label_components(occupied: np.ndarray) -> np.ndarray:
+def label_components(occupied: np.ndarray) -> np.ndarray:
     """4-connectivity labelling of a boolean grid. Returns int labels, 0 = empty.
 
     Vectorised max-label propagation: a per-cell Python BFS was the picker's
@@ -159,7 +165,7 @@ def _connectivity_main_mask(
 ) -> tuple[np.ndarray, dict, list[str]]:
     """In-plane grid connectivity: return ``main_mask`` on full ``points``."""
     n = len(points)
-    u, v = _inplane_basis(normal)
+    u, v = inplane_basis(normal)
     n_in = int(np.count_nonzero(inlier_mask))
     ctx = (
         device_points.ctx
@@ -203,7 +209,7 @@ def _connectivity_main_mask(
         np.add.at(counts, (iu_np, iv_np), 1)
 
     occupied = counts >= params.min_points_per_cell
-    labels = _label_components(occupied)
+    labels = label_components(occupied)
     n_components = int(labels.max())
     diag = {"n_components": n_components}
 
