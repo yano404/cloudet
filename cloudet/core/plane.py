@@ -362,9 +362,10 @@ def ransac_plane_open3d(
 ) -> tuple[Plane, np.ndarray]:
     """Plane RANSAC via Open3D's ``segment_plane`` (selector only).
 
-    Same interface as :func:`ransac_plane`. Note that Open3D refits the
-    returned plane on its inliers internally; here the plane is used
-    only as a seed for :func:`robust_fit_plane`, so both backends feed
+    Same interface as [`ransac_plane`][cloudet.core.plane.ransac_plane].
+    Note that Open3D refits the returned plane on its inliers internally;
+    here the plane is used only as a seed for
+    [`robust_fit_plane`][cloudet.core.plane.robust_fit_plane], so both backends feed
     the identical final estimator. Requires open3d to be installed.
     """
     try:
@@ -432,8 +433,9 @@ def run_ransac(
     """Dispatch plane RANSAC to the selected backend.
 
     Both backends are selectors only; the final plane always comes from
-    :func:`robust_fit_plane` (orthogonal least squares), so the backend
-    choice affects only which points seed the refit.
+    [`robust_fit_plane`][cloudet.core.plane.robust_fit_plane] (orthogonal
+    least squares), so the backend choice affects only which points seed
+    the refit.
 
     ``seeded`` prefers GPU scoring when CuPy is available (independent of
     the caller's ``compute_backend`` when a device buffer is absent).

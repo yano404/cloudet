@@ -1,0 +1,103 @@
+site_name: cloudet
+site_description: Detector positioning from 3D point clouds
+repo_url: https://github.com/yano404/cloudet
+
+watch:
+  - cloudet
+  - docs
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.tracking
+    - toc.follow
+    - content.code.copy
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            docstring_style: numpy
+            docstring_section_style: table
+            filters:
+              - "!^_"
+            heading_level: 1
+            inherited_members: true
+            members_order: source
+            merge_init_into_class: true
+            parameter_headings: true
+            separate_signature: true
+            show_bases: true
+            show_if_no_docstring: true
+            show_root_full_path: true
+            show_root_heading: true
+            show_signature_annotations: true
+            show_source: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            signature_crossrefs: true
+            summary: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - User Guide:
+      - GUI Workflow: guide/gui.md
+      - Geometry Reduction: guide/reduction.md
+      - CLI Reference: guide/cli.md
+  - API Reference:
+      - core:
+          - Overview: api/core.md
+          - plane: api/core-plane.md
+          - plyio: api/core-plyio.md
+          - neighbors: api/core-neighbors.md
+          - array_backend: api/core-array-backend.md
+      - fit:
+          - Overview: api/fit.md
+          - picking: api/fit-picking.md
+          - mainplane: api/fit-mainplane.md
+          - multiplane: api/fit-multiplane.md
+          - pipeline: api/fit-pipeline.md
+      - reduction:
+          - Overview: api/reduction.md
+          - session: api/reduction-session.md
+          - ops: api/reduction-ops.md
+          - geometry: api/reduction-geometry.md
+          - frame: api/reduction-frame.md
+      - project:
+          - Overview: api/project.md
+          - store: api/project-store.md
+          - groups: api/project-groups.md
+          - spatial_cache: api/project-spatial-cache.md
+          - settings_apply: api/project-settings-apply.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+extra_css:
+  - stylesheets/mkdocstrings.css

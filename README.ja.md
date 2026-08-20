@@ -21,13 +21,13 @@ FARO Quantum-S などで取得した三次元点群から、原子核実験用�
 
 ```
 cloudet/
-  plane.py          平面フィットコア（LSQ / RANSAC / robust 反復・残差統計）
-  plyio.py          PLY 読み書き（double 精度、Open3D 非依存）
-  neighbors.py      空間インデックス / 表示間引き
-  array_backend.py  任意 CuPy GPU バックエンド（無ければ NumPy）
-  settings_apply.py 設定適用の分類（detection vs display）
   app_window.py     Qt アプリのエントリポイント（→ ui.main_window）
   cli.py            cloudet [project] [--cloud ...] | reduce | version
+  core/             共通型・I/O・空間インデックス
+    plane.py        平面フィットコア（LSQ / RANSAC / robust 反復・残差統計）
+    plyio.py        PLY 読み書き（double 精度、Open3D 非依存）
+    neighbors.py    空間インデックス / 表示間引き
+    array_backend.py  任意 CuPy GPU バックエンド（無ければ NumPy）
   fit/              面抽出・フィット
     picking.py      クリック駆動の領域抽出（GUI 非依存）
     mainplane.py    main plane component 抽出（連結成分 + QC）
@@ -37,6 +37,7 @@ cloudet/
     store.py        manifest / settings / group 保存
     groups.py       group 読込
     spatial_cache.py  VoxelHashGrid / 表示キャッシュ
+    settings_apply.py  設定適用の分類（detection vs display）
   reduction/        構築型リダクション
     session.py      レシピ駆動セッション → geometry.json
     ops.py          操作メタデータ（GUI ↔ recipe）
@@ -129,7 +130,8 @@ cloudet reduce <project> --recipe recipe.json -o geometry.json
 （点を通り、面の法線方向の軸）、`line_from_two_points`（2点を通る軸）、
 `midpoint_line_planes`（直線を2平面で切った線分の中点）、
 `plane_from_plane_point`, `plane_from_line_point`, `plane_from_two_lines`,
-`rotate_plane_about_line`（任意の軸まわりの剛体回転。角度は度）。
+`rotate_plane_about_line`、`rotate_point_about_line`、`rotate_line_about_line`
+（任意の軸まわりの剛体回転。角度は度、右手系）。
 
 #### `geometry.json`（エクスポート出力）
 

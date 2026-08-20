@@ -136,7 +136,7 @@ class VoxelHashGrid:
         order: np.ndarray,
         validate_range: bool = True,
     ) -> "VoxelHashGrid":
-        """Rebuild from arrays produced by :meth:`index_arrays` (no re-index).
+        """Rebuild from arrays produced by [`index_arrays`][cloudet.core.neighbors.VoxelHashGrid.index_arrays] (no re-index).
 
         ``validate_range`` scans every index; skip it when loading a trusted
         cache so a 60 M-point memmap is not read twice.
