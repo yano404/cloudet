@@ -7,6 +7,7 @@ import pyvista as pv
 
 from cloudet.core.neighbors import display_xyz
 from cloudet.core.plane import Plane
+from cloudet.project.schema import plane_from_json
 
 
 class RenderMixin:
@@ -98,7 +99,7 @@ class RenderMixin:
         center = np.asarray(basis["center"], dtype=np.float64)
         lo = np.asarray(basis["lo"], dtype=np.float64).copy()
         hi = np.asarray(basis["hi"], dtype=np.float64).copy()
-        n_ax = np.asarray(Plane.from_array(p["abcd"]).normal, dtype=np.float64)
+        n_ax = np.asarray(plane_from_json(p).normal, dtype=np.float64)
         n_ax = n_ax / max(float(np.linalg.norm(n_ax)), 1e-12)
         if float(np.dot(np.cross(u_ax, v_ax), n_ax)) < 0:
             v_ax = -v_ax

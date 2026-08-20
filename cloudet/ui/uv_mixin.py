@@ -27,6 +27,7 @@ from cloudet.fit.mainplane import MainPlaneParams, extract_main_plane
 from cloudet.fit.multiplane import bimodality_flag
 from cloudet.fit.pipeline import residual_uv_map
 from cloudet.core.plane import Plane, mad_sigma
+from cloudet.project.schema import plane_from_json, plane_to_json
 from cloudet.ui.constants import FIT_MAX_THRESHOLD_MM
 from cloudet.ui.plane_labels import plane_id_token, plane_label
 from cloudet.ui.uv_plot import _UVSelectViewBox, _rdbu_r_colormap
@@ -278,7 +279,7 @@ class UvMixin:
                 )
                 local = np.asarray(samples["local_idx"][sel], dtype=np.int64)
                 pts = self.full_points[g["indices"]][local]
-                plane = Plane.from_array(rf["abcd"])
+                plane = plane_from_json(rf)
                 r_sel = plane.signed_distances(pts)
                 rf["residual_hist"] = self._residual_hist_from_r(
                     r_sel, threshold_mm=thr, mad_mm=float(rf["mad_sigma_mm"])
@@ -295,7 +296,7 @@ class UvMixin:
         *,
         lock_basis: dict | None = None,
     ):
-        plane = Plane.from_array(plane_entry["abcd"])
+        plane = plane_from_json(plane_entry)
         bins = self._uv_bins_value()
         basis = lock_basis if lock_basis is not None else plane_entry.get("uv_basis")
         kw = {}
@@ -370,7 +371,7 @@ class UvMixin:
         if local is None or len(local) == 0 or self.full_points.size == 0:
             return None
         pts = np.asarray(self.full_points[g["indices"]][local], dtype=np.float64)
-        plane = Plane.from_array(plane_entry["abcd"])
+        plane = plane_from_json(plane_entry)
         if basis is not None and basis.get("basis") == "minrect":
             u = np.asarray(basis["u"], dtype=np.float64)
             v = np.asarray(basis["v"], dtype=np.float64)
@@ -575,7 +576,7 @@ class UvMixin:
         if len(g.get("indices", [])) == 0:
             return
         pts = self.full_points[g["indices"]][local]
-        plane = Plane.from_array(rf["abcd"])
+        plane = plane_from_json(rf)
         r = plane.signed_distances(pts)
         rf["uv"] = self._binned_uv_mean(
             samples["u"][sel],
@@ -838,7 +839,7 @@ class UvMixin:
                 compute_backend=self.settings.detection.compute_backend,
             ),
             clicked=None,
-            coarse_plane=np.asarray(p["abcd"], dtype=np.float64),
+            coarse_plane=plane_from_json(p).as_array(),
         )
         t_fit = time.perf_counter()
         if res.n_main < 50:
@@ -855,7 +856,7 @@ class UvMixin:
         next_index = max(int(x.get("plane_index", 0)) for x in planes) + 1
         entry = {
             "plane_index": next_index,
-            "abcd": res.plane.as_array().tolist(),
+            **plane_to_json(res.plane),
             "n_points": int(res.n_main),
             "status": res.status,
             "reasons": list(res.reasons) + ["selection_refit"],
@@ -1127,7 +1128,7 @@ class UvMixin:
         if self.full_points.size == 0 or n_idx == 0:
             return None
         pts = self.full_points[g["indices"]]
-        plane = Plane.from_array(plane_entry["abcd"])
+        plane = plane_from_json(plane_entry)
         mad = float(plane_entry["mad_sigma_mm"])
         thr = max(3.0 * mad, 0.05)
         inlier = plane_entry.get("inlier_local")

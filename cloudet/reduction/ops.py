@@ -4,8 +4,9 @@ Centralizes GUI labels, recipe op names, construct operand schemas, and
 measure definitions so form↔step translation stays in one place.
 
 Recipe operand keys (``OperandField.step_key``) are part of the on-disk
-``recipe.json`` schema (``version: 1``). Do not rename them without a
-migration. See ``RECIPE_OPERAND_KEYS`` below for the glossary.
+``recipe.json`` schema (``version: 2``). Legacy v1 keys are accepted on
+load via ``cloudet.project.schema.migrate_recipe``. See
+``RECIPE_OPERAND_KEYS`` below for the glossary.
 """
 
 from __future__ import annotations
@@ -13,20 +14,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # ---------------------------------------------------------------------------
-# Recipe JSON glossary (version 1) — keys appear in construct[] steps.
+# Recipe JSON glossary (version 2) — keys appear in construct[] steps.
 # Widget names (rd_*) are GUI-only and are *not* written to recipe.json.
 # ---------------------------------------------------------------------------
 RECIPE_OPERAND_KEYS: dict[str, str] = {
-    "of": "Source plane for offset (the plane being moved).",
-    "a": "First operand (plane, line, or point depending on the op).",
-    "b": "Second operand (same kind rules as a).",
-    "c": "Third plane for intersect_three_planes.",
+    "plane": "Plane operand (offset source, intersections, normals, …).",
+    "plane_a": "First plane operand.",
+    "plane_b": "Second plane operand.",
+    "plane_c": "Third plane for intersect_three_planes.",
     "line": "Axis / line operand.",
-    "plane": "Plane operand (or normal source when paired with point).",
+    "line_a": "First line operand (plane_from_two_lines, angle_lines).",
+    "line_b": "Second line operand.",
     "point": "Point operand.",
+    "point_a": "First point operand (line_from_two_points, distance_points).",
+    "point_b": "Second point operand.",
     "axis": "Rotation axis (line) for rotate_line_about_line.",
-    "src": "Source plane whose normal is cast (intersect_normal_plane).",
-    "dst": "Destination plane hit by the normal ray (intersect_normal_plane).",
+    "source_plane": "Plane whose normal is cast (intersect_normal_plane).",
+    "destination_plane": "Plane hit by the normal ray (intersect_normal_plane).",
 }
 RECIPE_SCALAR_KEYS: dict[str, str] = {
     "distance_mm": "Signed offset distance along the Hesse unit normal (mm).",
@@ -92,7 +96,7 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         "Apply offset",
         "offset",
         "plane",
-        operands=(OperandField("of", "plane", "rd_offset_plane", "Plane"),),
+        operands=(OperandField("plane", "plane", "rd_offset_plane", "Plane"),),
         scalars=(
             ScalarField(
                 "distance_mm",
@@ -113,8 +117,8 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         "axis",
         "line",
         operands=(
-            OperandField("a", "plane", "rd_p2_a", "Plane A"),
-            OperandField("b", "plane", "rd_p2_b", "Plane B"),
+            OperandField("plane_a", "plane", "rd_p2_a", "Plane A"),
+            OperandField("plane_b", "plane", "rd_p2_b", "Plane B"),
         ),
         missing_msg="Intersect planes needs 2 planes",
         operands_must_differ=True,
@@ -140,9 +144,9 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         "corner",
         "point",
         operands=(
-            OperandField("a", "plane", "rd_p3_a", "Plane A"),
-            OperandField("b", "plane", "rd_p3_b", "Plane B"),
-            OperandField("c", "plane", "rd_p3_c", "Plane C"),
+            OperandField("plane_a", "plane", "rd_p3_a", "Plane A"),
+            OperandField("plane_b", "plane", "rd_p3_b", "Plane B"),
+            OperandField("plane_c", "plane", "rd_p3_c", "Plane C"),
         ),
         missing_msg="3 planes → point needs 3 planes",
     ),
@@ -171,8 +175,8 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         "axis",
         "line",
         operands=(
-            OperandField("a", "point", "rd_2pt_a", "Point A"),
-            OperandField("b", "point", "rd_2pt_b", "Point B"),
+            OperandField("point_a", "point", "rd_2pt_a", "Point A"),
+            OperandField("point_b", "point", "rd_2pt_b", "Point B"),
         ),
         missing_msg="2 points → axis needs two points",
         operands_must_differ=True,
@@ -190,8 +194,8 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         "point",
         operands=(
             OperandField("line", "line", "rd_mp_line", "Axis"),
-            OperandField("a", "plane", "rd_mp_a", "Plane A"),
-            OperandField("b", "plane", "rd_mp_b", "Plane B"),
+            OperandField("plane_a", "plane", "rd_mp_a", "Plane A"),
+            OperandField("plane_b", "plane", "rd_mp_b", "Plane B"),
         ),
         missing_msg="midpoint needs 1 axis and 2 planes",
         operands_must_differ=True,
@@ -236,8 +240,8 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         "plane",
         "plane",
         operands=(
-            OperandField("a", "line", "rd_l2p_a", "Axis A"),
-            OperandField("b", "line", "rd_l2p_b", "Axis B"),
+            OperandField("line_a", "line", "rd_l2p_a", "Axis A"),
+            OperandField("line_b", "line", "rd_l2p_b", "Axis B"),
         ),
         missing_msg="2 lines → plane needs two axes",
         operands_must_differ=True,
@@ -339,8 +343,8 @@ REDUCTION_OPS: tuple[ReductionOpDef, ...] = (
         "point",
         "point",
         operands=(
-            OperandField("src", "plane", "rd_np_src", "Normal from"),
-            OperandField("dst", "plane", "rd_np_dst", "Hit plane"),
+            OperandField("source_plane", "plane", "rd_np_src", "Normal from"),
+            OperandField("destination_plane", "plane", "rd_np_dst", "Hit plane"),
         ),
         missing_msg="Normal ∩ plane needs a source plane and a destination plane",
         operands_must_differ=True,
@@ -357,8 +361,8 @@ MEASURE_OPS: tuple[MeasureOpDef, ...] = (
         "distance_points",
         "Distance (point - point)",
         (
-            MeasureOperandDef("a", "point", "Point A"),
-            MeasureOperandDef("b", "point", "Point B"),
+            MeasureOperandDef("point_a", "point", "Point A"),
+            MeasureOperandDef("point_b", "point", "Point B"),
         ),
     ),
     MeasureOpDef(
@@ -381,16 +385,16 @@ MEASURE_OPS: tuple[MeasureOpDef, ...] = (
         "angle_planes",
         "Angle (plane - plane)",
         (
-            MeasureOperandDef("a", "plane", "Plane A"),
-            MeasureOperandDef("b", "plane", "Plane B"),
+            MeasureOperandDef("plane_a", "plane", "Plane A"),
+            MeasureOperandDef("plane_b", "plane", "Plane B"),
         ),
     ),
     MeasureOpDef(
         "angle_lines",
         "Angle (line - line)",
         (
-            MeasureOperandDef("a", "line", "Line A"),
-            MeasureOperandDef("b", "line", "Line B"),
+            MeasureOperandDef("line_a", "line", "Line A"),
+            MeasureOperandDef("line_b", "line", "Line B"),
         ),
     ),
     MeasureOpDef(

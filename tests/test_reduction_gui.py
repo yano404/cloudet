@@ -210,7 +210,7 @@ def test_gui_form_step_roundtrip(gui):
     gui._reduction_load_step_into_form(step)
     roundtrip = gui._reduction_step_from_form("left_in")
     assert roundtrip["op"] == step["op"]
-    assert roundtrip["of"] == step["of"]
+    assert roundtrip["plane"] == step["plane"]
     assert float(roundtrip["distance_mm"]) == float(step["distance_mm"])
 
 
@@ -288,8 +288,8 @@ def test_normal_plane_form_roundtrip(gui):
     gui._reduction_load_step_into_form(step)
     assert gui._reduction_current_op() == "intersect_normal_plane"
     roundtrip = gui._reduction_step_from_form("hit")
-    assert roundtrip["src"] == "target"
-    assert roundtrip["dst"] == "far"
+    assert roundtrip["source_plane"] == "target"
+    assert roundtrip["destination_plane"] == "far"
     assert gui._reduction_combo_id(gui.rd_np_src) == "target"
     assert gui._reduction_combo_id(gui.rd_np_dst) == "far"
 

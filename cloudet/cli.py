@@ -4,15 +4,18 @@ Primary entry (GUI-first)::
 
     cloudet [project_dir] [--cloud <file>]
     cloudet reduce <project> --recipe recipe.json [-o geometry.json]
+    cloudet migrate <project> [--recipe FILE] [--geometry FILE] [--dry-run]
     cloudet version
 
 Interactive pick / Fit / residual QC / save all live in the app.
 ``reduce`` derives analysis geometry from saved fits + a recipe.
+``migrate`` rewrites legacy recipe / geometry / group JSON keys in place.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -32,6 +35,7 @@ def build_app_parser() -> argparse.ArgumentParser:
             "  cloudet --cloud scan.ply\n"
             "  cloudet ~/surveys/run1 --cloud scan.ply\n"
             "  cloudet reduce ~/surveys/run1 --recipe recipe.json -o geometry.json\n"
+            "  cloudet migrate ~/surveys/run1 --dry-run\n"
             "  cloudet version\n"
         ),
     )
@@ -81,6 +85,37 @@ def build_reduce_parser() -> argparse.ArgumentParser:
     return p
 
 
+def build_migrate_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="cloudet migrate",
+        description=(
+            "Rewrite legacy on-disk JSON to the current schema: recipe operand "
+            "keys (v2), plane records (normal+d), and entity parents. Always "
+            "scans <project>/groups/group_*.json; optionally migrates recipe "
+            "and geometry files."
+        ),
+    )
+    p.add_argument("project_dir", help="project directory containing groups/")
+    p.add_argument(
+        "--recipe",
+        default=None,
+        metavar="FILE",
+        help="recipe JSON to migrate (default: geometry_recipe.json / recipe.json under project if present)",
+    )
+    p.add_argument(
+        "--geometry",
+        default=None,
+        metavar="FILE",
+        help="geometry.json to migrate (default: geometry.json under project if present)",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report files that would change without writing",
+    )
+    return p
+
+
 def build_parser() -> argparse.ArgumentParser:
     """App parser (default entry). Kept for callers/tests."""
     return build_app_parser()
@@ -123,6 +158,34 @@ def _run_reduce(argv: list[str]) -> int:
     return 0
 
 
+def _run_migrate(argv: list[str]) -> int:
+    from cloudet.project.schema import migrate_project
+
+    args = build_migrate_parser().parse_args(argv)
+    project = Path(args.project_dir)
+    if not project.is_dir():
+        print(f"error: project directory not found: {project}", file=sys.stderr)
+        return 1
+    try:
+        changed = migrate_project(
+            project,
+            recipe_path=args.recipe,
+            geometry_path=args.geometry,
+            dry_run=args.dry_run,
+        )
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    if not changed:
+        print("nothing to migrate")
+        return 0
+    verb = "would update" if args.dry_run else "updated"
+    print(f"{verb} {len(changed)} file(s):")
+    for path in changed:
+        print(f"  {path}")
+    return 0
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
@@ -136,6 +199,9 @@ def main(argv=None) -> int:
 
     if argv and argv[0] == "reduce":
         return _run_reduce(argv[1:])
+
+    if argv and argv[0] == "migrate":
+        return _run_migrate(argv[1:])
 
     args = build_app_parser().parse_args(argv)
     return _run_app(args)

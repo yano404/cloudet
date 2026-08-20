@@ -1,6 +1,15 @@
 """Saved project layout (manifest, groups, spatial cache)."""
 
 from cloudet.project.groups import load_groups
+from cloudet.project.schema import (
+    RECIPE_VERSION,
+    migrate_geometry,
+    migrate_group_doc,
+    migrate_project,
+    migrate_recipe,
+    plane_from_json,
+    plane_to_json,
+)
 from cloudet.project.spatial_cache import (
     load_display_xyz,
     load_voxel_grid,
@@ -28,6 +37,7 @@ from cloudet.project.store import (
 __all__ = [
     "CloudetSettings",
     "FittedPlane",
+    "RECIPE_VERSION",
     "SourceInfo",
     "ViewSettings",
     "load_display_xyz",
@@ -40,7 +50,13 @@ __all__ = [
     "load_plane_inlier_indices",
     "load_settings",
     "load_voxel_grid",
+    "migrate_geometry",
+    "migrate_group_doc",
+    "migrate_project",
+    "migrate_recipe",
+    "plane_from_json",
     "plane_inlier_indices_path",
+    "plane_to_json",
     "save_display_xyz",
     "save_group",
     "save_manifest",

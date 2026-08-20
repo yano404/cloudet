@@ -25,7 +25,7 @@ def test_build_construct_step_offset():
     assert step == {
         "id": "wall_in",
         "op": "offset",
-        "of": "wall",
+        "plane": "wall",
         "distance_mm": 12.5,
     }
 
@@ -84,8 +84,8 @@ def test_build_construct_step_intersect_normal_plane():
     assert step == {
         "id": "hit",
         "op": "intersect_normal_plane",
-        "src": "wall",
-        "dst": "target",
+        "source_plane": "wall",
+        "destination_plane": "target",
     }
     gui_key, operands, scalars = form_values_from_step(step)
     assert gui_key == "intersect_normal_plane"

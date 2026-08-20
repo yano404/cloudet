@@ -1,20 +1,26 @@
 # Geometry Reduction
 
-After Fit + save, faces live in `groups/group_*.json` (`fit.planes[].abcd`).
-Analysis parameters — virtual axes, beam-on-target points, drawing offsets —
-are derived with a declarative recipe (no point cloud required).
+After Fit + save, faces live in `groups/group_*.json`
+(`fit.planes[].normal` + `d`). Analysis parameters — virtual axes,
+beam-on-target points, drawing offsets — are derived with a declarative
+recipe (no point cloud required).
 
 ## CLI usage
 
 ```bash
 cloudet reduce <project> --recipe recipe.json -o geometry.json
+cloudet migrate <project> [--recipe FILE] [--geometry FILE] [--dry-run]
 ```
+
+`cloudet migrate` rewrites legacy keys (`abcd`, recipe v1 operands) to the
+current schema. Load paths also accept the old form and normalize in memory;
+new saves write v2 only.
 
 ## Recipe format
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "units": "mm",
   "faces": {
     "tracker_left":  { "from": "group", "name": "G0" },
@@ -22,9 +28,9 @@ cloudet reduce <project> --recipe recipe.json -o geometry.json
     "target":        { "from": "group", "name": "G2" }
   },
   "construct": [
-    { "id": "left_in",  "op": "offset", "of": "tracker_left",  "distance_mm": 12.0 },
-    { "id": "front_in", "op": "offset", "of": "tracker_front", "distance_mm": 12.0 },
-    { "id": "beam_axis", "op": "intersect_planes", "a": "left_in", "b": "front_in" },
+    { "id": "left_in",  "op": "offset", "plane": "tracker_left",  "distance_mm": 12.0 },
+    { "id": "front_in", "op": "offset", "plane": "tracker_front", "distance_mm": 12.0 },
+    { "id": "beam_axis", "op": "intersect_planes", "plane_a": "left_in", "plane_b": "front_in" },
     { "id": "beam_on_target", "op": "intersect_line_plane", "line": "beam_axis", "plane": "target" }
   ],
   "export": ["beam_axis", "beam_on_target"],
@@ -32,20 +38,22 @@ cloudet reduce <project> --recipe recipe.json -o geometry.json
 }
 ```
 
-## Recipe operand keys (version 1)
+Legacy v1 recipes (`of`, `a`/`b`/`c`, `src`/`dst`) still load; they are
+migrated to the keys above.
 
-Construct steps use short JSON keys. These are part of the on-disk schema —
-do not rename them without a recipe migration. Meaning by key:
+## Recipe operand keys (version 2)
+
+Construct steps use explicit JSON keys aligned with the Python API.
+Meaning by key:
 
 | Key | Meaning |
 |-----|---------|
-| `of` | Source plane for `offset` |
-| `a` / `b` / `c` | First / second / third operand (kind depends on the op) |
-| `line` | Axis or line operand |
-| `plane` | Plane operand |
-| `point` | Point operand |
+| `plane` | Plane operand (`offset`, intersections, …) |
+| `plane_a` / `plane_b` / `plane_c` | Ordered plane operands |
+| `point` / `point_a` / `point_b` | Point operands |
+| `line` / `line_a` / `line_b` | Line / axis operands |
 | `axis` | Rotation axis for `rotate_line_about_line` |
-| `src` / `dst` | Normal source / hit plane for `intersect_normal_plane` |
+| `source_plane` / `destination_plane` | Normal source / hit plane for `intersect_normal_plane` |
 | `distance_mm` | Signed offset along the Hesse normal (mm) |
 | `angle_deg` | Rotation angle, right-hand rule (degrees) |
 

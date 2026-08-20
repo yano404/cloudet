@@ -25,6 +25,29 @@ cloudet reduce <project_dir> --recipe recipe.json [-o geometry.json]
 | `--recipe PATH` | Recipe JSON file |
 | `-o PATH` | Output geometry.json path (default: `geometry.json` in project dir) |
 
+### Migrate on-disk JSON
+
+```bash
+cloudet migrate <project_dir> [--recipe FILE] [--geometry FILE] [--dry-run]
+```
+
+Rewrites legacy schema keys to the current form:
+
+- group `fit.planes[]`: `abcd` → `normal` + `d`
+- recipe construct/measures: v1 operand keys → v2 (`plane`, `plane_a`, …)
+- geometry entity records: `abcd` / provenance `of` → `normal`/`d` / `parents`
+
+Always scans `<project>/groups/group_*.json`. Without `--recipe` / `--geometry`,
+also migrates `geometry_recipe.json` / `recipe.json` / `geometry.json` under the
+project when present. `--dry-run` lists files that would change without writing.
+
+| Argument | Description |
+|----------|-------------|
+| `project_dir` | Project directory |
+| `--recipe PATH` | Optional recipe JSON path |
+| `--geometry PATH` | Optional geometry.json path |
+| `--dry-run` | Report only |
+
 ### Version
 
 ```bash

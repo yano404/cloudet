@@ -56,6 +56,7 @@ from cloudet.reduction.geometry import (
     project_point_to_plane,
 )
 from cloudet.core.plane import Plane
+from cloudet.project.schema import plane_from_json
 from cloudet.reduction import (
     export_reduction_result,
     load_recipe,
@@ -1257,7 +1258,7 @@ class ReductionMixin:
         if p is None:
             raise ValueError(f"no plane_index={pi} on {g['name']}")
         alias = self.rd_id_edit.text().strip() or f"{g['name']}_{plane_id_token(p)}"
-        plane = Plane.from_array(p["abcd"])
+        plane = plane_from_json(p)
         quality = {
             "status": p.get("status"),
             "mad_sigma_mm": p.get("mad_sigma_mm"),
@@ -1530,7 +1531,7 @@ class ReductionMixin:
             raise KeyError(
                 f"faces.{alias}: no plane_index={plane_index} on {g['name']}"
             )
-        plane = Plane.from_array(p["abcd"])
+        plane = plane_from_json(p)
         record = scanned_plane_record(
             plane,
             group_id=int(g["id"]),

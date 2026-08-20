@@ -83,6 +83,7 @@ nav:
       - project:
           - Overview: api/project.md
           - store: api/project-store.md
+          - schema: api/project-schema.md
           - groups: api/project-groups.md
           - spatial_cache: api/project-spatial-cache.md
           - settings_apply: api/project-settings-apply.md
