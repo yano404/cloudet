@@ -6,23 +6,23 @@
 
 [English](README.md) | 日本語
 
-FARO Quantum-S などで取得した三次元点群から、原子核実験用検出器の位置・位置関係をリダクションするツールです。
+FARO Quantum-S などで取得した三次元点群から、原子核実験用検出器の位置と相対的な幾何関係をリダクションするツールです。
 
 ## 設計方針
 
-- **既定の抽出: 1クリック = 連結した1つの物理面 = 1 group = 1平面式**。
-  クリック点を種に面内へ成長させ、範囲は連結性で決まる（半径では打ち切らない）。
-  種の法線は必ず誤差を含む前提で、蓄積 → 再フィット → 再蓄積を収束まで反復する
-  （20° 傾いた種からでも面全体を復元することを確認済み）。
-  近接平行面の分離は例外モード（GUI「Extract multiple planes (p0, p1, …)」）
-- **加えて:** 円筒（ダクト等。Fit kind = `cylinder`、円周上の 3 点シード）と
-  平面円（マーカー穴。Residuals の UV 選択 → **Fit circle on selection**、任意で Fix Φ）。
-  円の中心は支持平面上に固定。詳細は [位置関係リダクション案内](docs/guide/reduction.md)。
-- 計算コア（`cloudet/`）は numpy のみ依存、GUI と完全分離、単体テストで検証
-- RANSAC は点の選別のみに使い、最終平面は常に直交最小二乗（`robust_fit_plane`: フィット → strict 再選別 → 収束まで反復）。円筒・円も直径ベース（`diameter_mm`）の API
-- 統計は inlier（打ち切り）と全点の両方を報告し、打ち切りに頑健な `mad_sigma` を併記
-- 乱数はシード固定で再現可能
-- 単位は mm、平面は Hesse 標準形 `n·x + d = 0`（`|n|=1`、符号規約あり）
+- **既定では、1 クリックで連結した 1 つの物理面を抽出し、1 group、1 平面式として扱います。**
+  クリックした点をシードとして面内に領域を成長させます。抽出範囲は連結性で決まり、半径では打ち切りません。
+  シードの法線には誤差があることを前提とし、蓄積 → 再フィット → 再蓄積を収束するまで反復します
+  （約 20° 傾いたシードからでも面全体を復元できることを確認済みです）。
+  近接する平行面の分離には、例外的に **Extract multiple planes (p0, p1, …)** を使用します。
+- **cylinder と平面上の circle にも対応しています。** cylinder はダクトやパイプなどを対象とし、Fit kind = `cylinder` を選んで円周上の 3 点をシードにします。
+  circle はマーカー穴などを対象とし、Residuals の u–v マップで選択して **Fit circle on selection** を実行します。必要に応じて Fix Φ も使用できます。
+  circle の中心は、支持する Groups の plane 上に固定されます。詳細は [幾何リダクションのガイド](docs/guide/reduction.md)を参照してください。
+- 計算コア（`cloudet/`）が依存するのは NumPy のみです。GUI から完全に分離されており、単体テストで検証しています。
+- RANSAC は点の選別にのみ使用し、最終的な plane は必ず直交最小二乗法で求めます（`robust_fit_plane`: フィット → strict 再選別 → 収束するまで反復）。cylinder と circle も、直径ベース（`diameter_mm`）の API を使用します。
+- 統計量は inlier（打ち切り後）と全点の両方について報告し、打ち切りに頑健な `mad_sigma` も併記します。
+- 乱数シードを固定し、再現性を確保しています。
+- 単位は mm です。plane は Hesse 標準形 `n·x + d = 0`（`|n|=1`）で表し、符号規約を定めています。
 
 ## 使い方
 
@@ -40,11 +40,11 @@ cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
 cloudet reduce ~/surveys/proj1 --recipe recipe.json -o geometry.json
 ```
 
-`[gpu]` は `cupy-cuda12x[ctk]`（カーネルコンパイル用 CUDA ヘッダ）を入れます。ヘッダ無しで CuPy だけ入っている場合、`auto` では NumPy に自動フォールバックします。
+`[gpu]` extra を指定すると、カーネルのコンパイルに必要な CUDA ヘッダを含む `cupy-cuda12x[ctk]` がインストールされます。CUDA ヘッダなしで CuPy だけがインストールされている場合、`auto` モードでは NumPy に自動的にフォールバックします。
 
-### GPU（任意・NVIDIA + CUDA 12.x）
+### GPU（任意、NVIDIA + CUDA 12.x）
 
-3D **表示**はもともと VTK/OpenGL で GPU を使います。任意の **CuPy** で、大点群の Fit・残差 u–v マップ・表示用 voxel 間引きを加速できます。
+3D **表示**は VTK/OpenGL 経由で GPU を使います。任意で **CuPy** を入れると、大規模点群の Fit・残差 u–v マップ・表示用 voxel のダウンサンプリングを高速化できます。
 
 ```bat
 pip install -e ".[dev,gpu]"
@@ -53,12 +53,12 @@ python -c "import cupy as cp; print(cp.cuda.runtime.getDeviceProperties(0)['name
 cloudet --cloud C:\path\to\scan.ply
 ```
 
-Settings → **Compute backend**: `auto`（CuPy が使えるとき）/ `numpy` / `cupy`。  
-**Display downsampling method** の `auto` も CuPy を Open3D より優先します。
+Settings → **Compute backend** では、`auto`（利用可能なら CuPy）、`numpy`、`cupy` を選択できます。
+**Display downsampling method** が `auto` の場合も、CuPy がインストールされていれば Open3D より優先されます。
 
-CuPy なし（Mac 等）でも従来どおり NumPy のみで動作します。約 5 万点未満は `auto` でも CPU のままです。`CLOUDET_COMPUTE_BACKEND=numpy` で CPU 固定も可能です。
+CuPy は必須ではありません。Mac などの CPU のみの環境でも、NumPy を使用して動作します。約 5 万点未満の点群は、`auto` モードでも CPU で処理します。`CLOUDET_COMPUTE_BACKEND=numpy` を設定すれば、常に CPU を使用できます。
 
-プロジェクト構成:
+プロジェクトの構成は次のとおりです。
 
 ```text
 <project>/
@@ -73,39 +73,39 @@ CuPy なし（Mac 等）でも従来どおり NumPy のみで動作します。�
   vtk.log          # GUI 利用時
 ```
 
-Qt UI: PROJECT で出力フォルダを指定 / SOURCE で点群を Load /
-`P` pick / overlap only `>` farther and `<` nearer /
-`M` append toggle / `F` fit active / `V` show only active / `Ctrl+S` save groups /
-ツリーで rename・表示切替、平面 / 円筒 / 円ごとの品質を確認。
-Fit kind は **plane**（既定）または **cylinder**（円周上 3 点シード。Esc でクリア）。
-Fit 後は右ドック Residuals: 平面は **u–v**、円筒は **s–z**、および符号付き残差ヒストグラム。
-Cmd/Ctrl+ドラッグで矩形選択（ハンドルで調整可）。ズーム／パン対応。
-平面マップでは **Fit circle on selection**（任意で Fix Φ）で `cir0`, `cir1`, … を追加。
-Refit selection でその点だけの平面を p1, p2, … として追加（元の平面は残る）。
-Reduction → **Import from Groups** で平面・円筒軸（→ 直線）・円中心（→ 点）を取り込める。
-Clear refit で追加平面フィットだけ消せる。平面 / 円筒 / 円を選ぶと表示が切り替わる。
-Groups タブでも depth ナビボタンを使える。
-詳細: [GUI 案内](docs/guide/gui.md)、[リダクション案内](docs/guide/reduction.md)。
-VTK 自身のエラー・警告は端末ではなく `<project_dir>/vtk.log` に出る
-（`CLOUDET_VTK_LOG=0` で PyVista 既定の挙動に戻す。別の値はログ出力先として使う）。
+Qt UI では、PROJECT で出力フォルダを指定し、SOURCE で点群を Load します。
+`P` で pick、点が重なる箇所では `>` で奥側、`<` で手前側の点を選択できます。
+`M` で append の切り替え、`F` でアクティブな group の Fit、`V` でアクティブな group のみ表示、`Ctrl+S` で groups を保存します。
+ツリーでは rename と表示の切り替えができ、plane、cylinder、circle ごとの品質を確認できます。
+Fit kind は **plane**（既定）または **cylinder** です。cylinder では円周上の 3 点をシードにし、Esc でクリアします。
+Fit 後、右ドックの Residuals には、plane の **u–v** マップまたは cylinder の **s–z** マップと、符号付き残差のヒストグラムが表示されます（ダクトでは µm または mm スケール）。
+Cmd/Ctrl+ドラッグで矩形選択でき、ハンドルで範囲を調整できます。ズームとパンにも対応しています。
+plane マップでは、**Fit circle on selection** を実行すると `cir0`, `cir1`, … が追加されます。必要に応じて Fix Φ も使用できます。
+Refit selection を実行すると、選択した点だけを使った追加の plane が、同じ group に p1, p2, … として追加されます。元の plane は残ります。
+Reduction → **Import from Groups** では、plane、cylinder の軸（→ line）、circle の中心（→ point）を取り込めます。
+Clear refit では追加の plane フィットだけを削除できます。plane、cylinder、circle を選ぶと、対応する表示に切り替わります。
+Groups タブにも、depth を移動するナビゲーションボタンがあります。
+詳細は [GUI ガイド](docs/guide/gui.md)と[幾何リダクションのガイド](docs/guide/reduction.md)を参照してください。
+VTK 自身が出力するエラーと警告は、端末ではなく `<project_dir>/vtk.log` に記録されます
+（`CLOUDET_VTK_LOG=0` を設定すると PyVista の既定の動作に戻り、それ以外の値はログの出力先として使用されます）。
 
 ## 位置関係リダクション
 
-Fit + 保存後、面は `groups/group_*.json` の `fit.planes[].normal` + `d` に残ります
-（任意で `fit.cylinders[]` / `fit.circles[]` と直径 `diameter_mm`）。
-解析用パラメータ（仮想軸、ビーム×標的交点、図面オフセット面）は、宣言的レシピで導出します（この段階では点群不要）。
-レシピの詳細・円筒／円の bind は [docs/guide/reduction.md](docs/guide/reduction.md)。
-サンプル（tracker 平面、マーカー円、ダクト∩壁）: [examples/recipes/](examples/recipes/)。
+Fit して保存すると、face は `groups/group_*.json` の `fit.planes[].normal` と `d` に記録されます
+（必要に応じて `fit.cylinders[]`、`fit.circles[]`、直径 `diameter_mm` も記録されます）。
+仮想軸、ビームと標的の交点、図面上のオフセット面などの解析用パラメータは、宣言的な recipe から導出します。この段階では点群は不要です。
+recipe の詳細と cylinder／circle の bind については、[docs/guide/reduction.md](docs/guide/reduction.md)を参照してください。
+tracker plane、マーカー circle、ダクトと壁の交差を扱うサンプル recipe は [examples/recipes/](examples/recipes/) にあります。
 
 ```bash
 cloudet reduce <project> --recipe recipe.json -o geometry.json
 cloudet migrate <project> [--dry-run]
 ```
 
-オフセットの符号: 正の `distance_mm` は平面の Hesse 単位法線方向へ移動（Fit と同じ符号規約）。
-反対側（例: 外向き法線に対する「内側」）は負の距離を使います。
+オフセットの符号規約では、正の `distance_mm` で plane を Hesse 単位法線の向きに移動します。Fit と同じ符号規約です。
+反対側へ移動する場合、たとえば外向き法線に対して「内側」へ移動する場合は、負の距離を指定します。
 
-レシピ例（tracker 壁 → ビーム軸 ∩ 標的）:
+recipe の例（tracker の壁 → ビーム軸と標的の交点）:
 
 ```json
 {
@@ -127,43 +127,43 @@ cloudet migrate <project> [--dry-run]
 }
 ```
 
-旧形式（`abcd`、レシピ v1 の `of` / `a`/`b` など）も読み込み時に変換されます。
-保存と `cloudet migrate` は現行キーのみ書き出します。
+旧形式の plane `abcd` や recipe v1 の `of`、`a`、`b` なども読み込めます。
+保存時と `cloudet migrate` の実行時には、現行のキーだけを書き出します。
 
-対応する construct ops: `offset`, `intersect_planes`, `intersect_three_planes`,
-`intersect_line_plane`, `intersect_normal_plane`（元の面の法線 ∩ 先の面）、`line_from_point_normal`
-（点を通り、面の法線方向の軸）、`line_from_two_points`（2点を通る軸）、
-`midpoint_line_planes`（直線を2平面で切った線分の中点）、
+対応している construct ops は、`offset`、`intersect_planes`、`intersect_three_planes`、
+`intersect_line_plane`、`intersect_normal_plane`（元の plane の法線と移動先の plane との交点）、`line_from_point_normal`
+（指定した point を通り、plane の法線方向に延びる軸）、`line_from_two_points`（2 点を通る軸）、
+`midpoint_line_planes`（line を 2 つの plane で切った線分の中点）、
 `plane_from_plane_point`, `plane_from_line_point`, `plane_from_two_lines`,
 `rotate_plane_about_line`、`rotate_point_about_line`、`rotate_line_about_line`
-（任意の軸まわりの剛体回転。角度は度、右手系）。
+です。回転操作は任意の軸まわりの剛体回転で、角度の単位は度、回転方向は右手系です。
 
 #### `geometry.json`（エクスポート出力）
 
-`geometry.json` はレシピを**実行した結果**に、各 entity の record を載せたものです（点群本体ではありません）。
-トップレベルの `planes` / `lines` / `points` は常に**測量（survey）座標**です。
+`geometry.json` には、recipe の**実行結果**と、計算された各 entity の record が格納されます。点群本体は含まれません。
+トップレベルの `planes`、`lines`、`points` は、常に**測量（survey）座標**で表されます。
 各 record には provenance（`scanned` | `offset` | `intersection` | `constructed`）と
-パラメータ（`normal`/`d`, `point`/`direction`, `xyz` など。親参照は `parents`）が入ります。
+パラメータ（`normal`/`d`、`point`/`direction`、`xyz` など）が格納され、親 entity は `parents` で参照します。
 
 | キー | 内容 |
 |------|------|
-| `recipe` | `{ "sha256", "echo" }` — 再現用にレシピ全文 |
+| `recipe` | `{ "sha256", "echo" }` — 再現用に recipe 全文を保存 |
 | `export` | 解析対象 id のリスト（メタデータ。全 entity は別途列挙） |
-| `frame` | 任意。Align Z 姿勢（`axis`, `origin`, `flip_z`, 任意で `yaw_*`） |
+| `frame` | 任意。Align Z の姿勢（`axis`, `origin`, `flip_z`、必要に応じて `yaw_*`） |
 | `aligned` | 任意。aligned 座標系の `{ planes, lines, points }` |
-| `measures` | 任意。pin した測定（再計算済み `value` / `unit`） |
+| `measures` | 任意。固定した測定値（再計算済みの `value` / `unit`） |
 
-**aligned の書き出し:** `cloudet reduce` はレシピに `frame` があれば `aligned` と
-`frame` を付けます。GUI では **Also write aligned-frame coordinates** にチェックし、
-FRAME の **Axis** と **Origin** を設定してください（Export に Align Z は不要）。
-GUI は同じフォルダに `geometry_recipe.json` も書きます。
+**aligned 座標の書き出し:** `cloudet reduce` は、recipe に `frame` があれば `aligned` と
+`frame` を追加します。GUI では **Also write aligned-frame coordinates** にチェックを入れ、
+FRAME の **Axis** と **Origin** を設定してください。エクスポートのために Align Z を実行する必要はありません。
+GUI は、同じフォルダに再実行用の `geometry_recipe.json` も書き出します。
 
-#### `geometry_summary.json`（薄いサマリ）
+#### `geometry_summary.json`（簡易サマリ）
 
-エクスポート時、`geometry.json` の隣に **`geometry_summary.json`** も書きます
-（CLI / GUI）。レシピ echo・provenance・parents は含めず、entity の**名前と座標**
-だけです。`aligned` があればその座標を優先し、なければ survey です。
-レシピの `export` が空でなければ、その id だけを含めます。例:
+エクスポート時には、`geometry.json` と同じフォルダに **`geometry_summary.json`** も書き出します
+（CLI / GUI）。recipe の echo、provenance、parents は含まず、entity の**名前と座標**
+だけを記録します。`aligned` があればその座標を優先し、なければ survey 座標を使用します。
+recipe の `export` が空でなければ、指定された id だけを含めます。例:
 
 ```json
 {
@@ -179,19 +179,19 @@ GUI は同じフォルダに `geometry_recipe.json` も書きます。
 }
 ```
 
-#### aligned triad オペランド（原点 / 軸 / 平面）
+#### aligned triad のオペランド（原点 / 軸 / plane）
 
-`recipe.frame` で `axis` と `origin` を設定すると、construct から次の仮想 id が
-使えます（`_store` には入らず、`geometry.json` にも行として出ません）:
+`recipe.frame` で `axis` と `origin` を設定すると、construct から次の仮想 id を
+参照できます。これらは `_store` には格納されず、`geometry.json` にも独立した record として出力されません。
 
 | id | 種類 | 幾何 |
 |----|------|------|
-| `aligned.origin` | 点 | FRAME 原点 |
-| `aligned.x` / `aligned.y` / `aligned.z` | 直線 | 原点を通る +X / +Y / +Z |
-| `aligned.yz` / `aligned.zx` / `aligned.xy` | 平面 | 原点を通り、法線が +X / +Y / +Z |
+| `aligned.origin` | point | FRAME の Origin |
+| `aligned.x` / `aligned.y` / `aligned.z` | line | Origin を通る +X / +Y / +Z |
+| `aligned.yz` / `aligned.zx` / `aligned.xy` | plane | Origin を通り、法線が +X / +Y / +Z |
 
-GUI では FRAME の Axis/Origin 選択後に、種類に合うコンボへ出ます。FRAME の
-axis / origin / yaw には使えません。例:
+GUI では、FRAME の Axis と Origin を選択すると、種類の一致するコンボボックスにこれらのオペランドが表示されます。FRAME の
+Axis、Origin、yaw には使用できません。例:
 
 ```json
 {
@@ -214,56 +214,56 @@ axis / origin / yaw には使えません。例:
 }
 ```
 
-出力 `geometry.json` は planes / lines / points と provenance を含みます。
+出力される `geometry.json` には、planes、lines、points、provenance が含まれます。
 
-任意のトップレベル `frame` は Align Z のメタデータだけです（`axis` 直線 id、
-`origin` 点 id、`flip_z`、任意で `yaw_line` または `yaw_plane` と `yaw_to`
-（`x` / `-x` / `y` / `-y`）。直線の向きまたは平面法線の XY 射影で Z まわりを
-決めます。construct のステップではなく、測量座標は変わりません。
-`cloudet reduce` もトップレベルは測量のまま書き、`frame` があるときは
-`aligned` コピーと姿勢を足します。
-GUI は Load recipe / Load All でその選択を復元しますが、**Align Z は自動ではかけません**。
+トップレベルの任意の `frame` は、Align Z のメタデータです。`axis` に line の id、
+`origin` に point の id、`flip_z` を指定し、必要に応じて `yaw_line` または `yaw_plane` と `yaw_to`
+（`x` / `-x` / `y` / `-y`）も指定します。line の向きまたは plane の法線を XY 平面に射影し、Z 軸まわりの向きを
+決定します。`frame` は construct のステップではなく、測量座標を変更しません。
+`cloudet reduce` もトップレベルには測量座標を書き出し、`frame` がある場合は
+`aligned` 座標のコピーと姿勢を追加します。
+GUI は Load recipe / Load All で選択内容を復元しますが、**Align Z は自動では実行しません**。
 
-### 対話的リダクション（GUI）
+### GUI での対話的リダクション
 
-右側ドックは **Residuals** / **Reduction** / **Measure** のタブです。
+右側のドックには、**Residuals**、**Reduction**、**Measure** のタブがあります。
 
-**Reduction** で幾何を構築します:
+**Reduction** では、次の手順で幾何を構築します。
 
-1. まず **操作を選択** — その操作の入力だけ出る（面 / 軸の選択、オフセットスライダーなど）。
-   **Import from Groups** で平面・円筒軸・円中心を取り込む
-2. **Offset**: 面を選び、スライダーで距離をプレビュー（緑）→ Apply で確定
-3. 交差系: 必要な面・軸を選んで Apply。
-   **Normal ∩ plane → point** は元の面のオーバーレイ位置から法線を別の面に当てた交点です。
-4. Entities で表示切替後、**Save recipe…** / **Export geometry…**
-5. **FRAME**（表示専用）: Axis（直線）と Origin（点）を選び **Align Z**。
-   軸を `(0, 0, 1)` に、原点を `(0, 0, 0)` に移す最小回転を使います。
-   任意の **XY** で、**直線**または**平面法線**（水平成分のみ）を ±X / ±Y に
-   載せます。XY を空にすれば最小回転のままです。**Survey** で測量座標の表示に戻します。
-   Groups・レシピの構築結果・Fit は測量のままです。pick も元の点群から行います。
-   Axis/Origin 設定後は、対応するオペランドと Entities 最下部に
+1. まず操作を選択します。選択した操作に必要な入力項目だけが表示されます（plane／axis の選択、オフセットスライダーなど）。
+   **Import from Groups** で plane、cylinder の軸、circle の中心を取り込みます。
+2. **Offset** では plane を選び、距離スライダーを動かして緑色の表示をプレビューし、Apply で確定します。
+3. 交差を求める操作では、必要な plane や axis を選択して Apply を実行します。
+   **Normal ∩ plane → point** は、元の plane のオーバーレイ位置から法線を延ばし、別の plane との交点を求める操作です。
+4. Entities で表示を切り替え、**Save recipe…** または **Export geometry…** を実行します。
+5. 表示専用の **FRAME** では、Axis（line）と Origin（point）を選択し、**Align Z** を実行します。
+   Axis を `(0, 0, 1)` に合わせ、Origin を `(0, 0, 0)` に移す最小回転を使用します。
+   任意の **XY** を指定すると、**line** または **plane の法線**の水平成分を ±X / ±Y に
+   合わせられます。XY を空にすると、最小回転だけを適用します。**Survey** を押すと、測量座標での表示に戻ります。
+   Groups、recipe の construct 結果、Fit は測量座標のままです。pick も元の点群に対して行います。
+   Axis と Origin の設定後は、対応するオペランドのコンボボックスと Entities の末尾に
    **aligned origin** / **X/Y/Z axis** / **YZ/ZX/XY plane** が出ます
-   （表示切替のみ。rename/delete 不可）。3D では原点が球、軸が RGB 矢印
-   （+X 赤 / +Y 緑 / +Z 青）、平面が同色のパッチです。
-6. **Also write aligned-frame coordinates** ON かつ FRAME の **Axis/Origin** 設定後、
-   **Export geometry…** で測量座標に加え `aligned` と `frame` を書けます（Export に
-   Align Z は不要）。`cloudet reduce` もレシピに `frame` があれば同じです。
-   Load recipe は `recipe.frame` から FRAME の選択を戻します。3D 表示を合わせる
-   ときだけ Align Z を押してください。
+   （表示の切り替えのみ可能で、rename と delete はできません）。3D 表示では、Origin は球、axis は RGB の矢印
+   （+X は赤、+Y は緑、+Z は青）、plane は対応する色のパッチで表されます。
+6. **Also write aligned-frame coordinates** にチェックを入れ、FRAME の **Axis** と **Origin** を設定してから
+   **Export geometry…** を実行すると、測量座標に加えて `aligned` と `frame` を書き出せます。エクスポートのために
+   Align Z を実行する必要はありません。`cloudet reduce` でも、recipe に `frame` があれば同様に出力されます。
+   Load recipe は `recipe.frame` から FRAME の選択内容を復元します。3D 表示を aligned 座標に合わせる
+   場合にだけ Align Z を押してください。
 
-**Measure** で、構築したエンティティの距離・角度を読みます:
+**Measure** では、構築した entity 間の距離と角度を確認できます。
 
-- Distance (point - point / point - plane / point - line) と
-  Angle (plane - plane / line - line / line - plane)
-- 距離は符号なし（mm）
-- line–plane の角は、直線が面に平行なら 0°
-- **Add measurement** で `recipe.measures` と `geometry.json` に残る（値は再計算）
-- 距離は 3D にティールの線分
+- Distance（point - point / point - plane / point - line）と
+  Angle（plane - plane / line - line / line - plane）に対応しています。
+- 距離は符号なしで、単位は mm です。
+- line–plane の角度は、line が plane に平行な場合に 0° となります。
+- **Add measurement** を実行すると、測定が `recipe.measures` と `geometry.json` に保存されます。値は再計算されます。
+- 距離の測定箇所は、3D 表示にティール色の線分で示されます。
 
-## 段階計画
+## ロードマップ
 
 1. [完了] コア
 2. [完了] GUI picker（Fit / 残差 QC / 保存）
-3. [完了] 構築型リダクション（レシピ → geometry.json; CLI + GUI）
-4. [完了] 円筒・円フィット（Groups + Reduction 取り込み; Fix Φ / `diameter_mm`）
-5. [未] より高機能なレシピ編集、検出器剛体 pose ヘルパ
+3. [完了] 構築型リダクション（recipe → geometry.json、CLI + GUI）
+4. [完了] cylinder と circle の Fit（Groups + Reduction への取り込み、Fix Φ / `diameter_mm`）
+5. [未完了] recipe 編集機能の強化、検出器の剛体 pose を扱う helper
