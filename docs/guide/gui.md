@@ -16,6 +16,8 @@ cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
   groups/
     group_000.ply / .json / _indices.npy
     group_000_p0_indices.npy   # inliers used to fit p0 (optional)
+    group_000_cyl0_indices.npy # cylinder inliers (optional)
+    group_000_cir0_indices.npy # circle inliers (optional)
     ...
   vtk.log          # VTK warnings (when using the GUI)
 ```

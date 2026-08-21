@@ -21,6 +21,8 @@ Layout::
         group_000_indices.npy  indices into the source cloud (plain npy)
         group_000_p0_indices.npy  optional: inliers used to fit plane p0
         group_000_p1_indices.npy  optional: inliers used to fit plane p1
+        group_000_cyl0_indices.npy  optional: inliers used to fit cylinder 0
+        group_000_cir0_indices.npy  optional: inliers used to fit circle 0
 
 Reproducibility rule: everything needed to interpret the groups is baked
 into manifest.json / group json at save time; nothing depends on the
@@ -63,7 +65,11 @@ __all__ = [
     "load_manifest",
     "load_group_indices",
     "load_plane_inlier_indices",
+    "load_cylinder_inlier_indices",
+    "load_circle_inlier_indices",
     "plane_inlier_indices_path",
+    "cylinder_inlier_indices_path",
+    "circle_inlier_indices_path",
     "load_group_doc",
     "load_group_docs",
     "load_group_fit",
@@ -312,9 +318,10 @@ def save_group(
 ) -> Path:
     """Write one group (ply + json + optional indices.npy). Returns json path.
 
-    When ``fit_summary["planes"]`` carries ``inlier_local`` (indices into
-    ``indices``) or ``inlier_source`` (indices into the source cloud), each
-    plane is also written as ``group_{id:03d}_p{k}_indices.npy``.
+    When ``fit_summary`` planes / cylinders / circles carry ``inlier_local``
+    (indices into ``indices``) or ``inlier_source`` (indices into the source
+    cloud), each entity is also written as
+    ``group_{id:03d}_{p|cyl|cir}{k}_indices.npy``.
     """
     groups_dir = Path(project_dir) / "groups"
     groups_dir.mkdir(parents=True, exist_ok=True)
@@ -339,7 +346,7 @@ def save_group(
         "clicked": None if clicked is None else np.asarray(clicked).tolist(),
         "color": None if color is None else np.asarray(color).tolist(),
         "detection": None if detection is None else asdict(detection),
-        "fit": _write_plane_inlier_files(project_dir, group_id, indices, fit_summary),
+        "fit": _write_fit_inlier_files(project_dir, group_id, indices, fit_summary),
         "software": {"cloudet": cloudet.__version__},
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
@@ -366,6 +373,26 @@ def plane_inlier_indices_path(
     )
 
 
+def cylinder_inlier_indices_path(
+    project_dir: str | Path, group_id: int, cylinder_index: int
+) -> Path:
+    return (
+        Path(project_dir)
+        / "groups"
+        / f"group_{int(group_id):03d}_cyl{int(cylinder_index)}_indices.npy"
+    )
+
+
+def circle_inlier_indices_path(
+    project_dir: str | Path, group_id: int, circle_index: int
+) -> Path:
+    return (
+        Path(project_dir)
+        / "groups"
+        / f"group_{int(group_id):03d}_cir{int(circle_index)}_indices.npy"
+    )
+
+
 def load_plane_inlier_indices(
     project_dir: str | Path, group_id: int, plane_index: int
 ) -> np.ndarray | None:
@@ -376,59 +403,157 @@ def load_plane_inlier_indices(
     return np.load(path)
 
 
-def _write_plane_inlier_files(
+def load_cylinder_inlier_indices(
+    project_dir: str | Path, group_id: int, cylinder_index: int
+) -> np.ndarray | None:
+    """Indices into the source cloud used to fit one cylinder (int64 npy)."""
+    path = cylinder_inlier_indices_path(project_dir, group_id, cylinder_index)
+    if not path.exists():
+        return None
+    return np.load(path)
+
+
+def load_circle_inlier_indices(
+    project_dir: str | Path, group_id: int, circle_index: int
+) -> np.ndarray | None:
+    """Indices into the source cloud used to fit one circle (int64 npy)."""
+    path = circle_inlier_indices_path(project_dir, group_id, circle_index)
+    if not path.exists():
+        return None
+    return np.load(path)
+
+
+def _source_inliers_from_entry(
+    src: dict,
+    group_indices: np.ndarray | None,
+    *,
+    label: str,
+) -> np.ndarray | None:
+    """Resolve source-cloud inlier indices from ``inlier_source`` / ``inlier_local``."""
+    source = src.get("inlier_source")
+    local = src.get("inlier_local")
+    if source is not None:
+        return np.asarray(source, dtype=np.int64)
+    if local is not None and group_indices is not None:
+        gidx = np.asarray(group_indices, dtype=np.int64)
+        loc = np.asarray(local, dtype=np.int64)
+        if loc.size and (loc.min() < 0 or loc.max() >= len(gidx)):
+            raise ValueError(f"{label}: inlier_local out of range for group indices")
+        return gidx[loc]
+    return None
+
+
+def _write_kind_inlier_files(
+    *,
+    project_dir: Path,
+    group_id: int,
+    group_indices: np.ndarray | None,
+    summary_entries: list,
+    src_entries: list,
+    index_key: str,
+    path_fn,
+    label_kind: str,
+    written: set[str],
+) -> None:
+    for i, entry in enumerate(summary_entries):
+        if not isinstance(entry, dict):
+            continue
+        idx_i = int(entry.get(index_key, i))
+        src = (
+            src_entries[i]
+            if i < len(src_entries) and isinstance(src_entries[i], dict)
+            else {}
+        )
+        path = path_fn(project_dir, group_id, idx_i)
+        label = f"group {group_id} {label_kind}{idx_i}"
+        idx = _source_inliers_from_entry(src, group_indices, label=label)
+        if idx is None:
+            if path.exists():
+                path.unlink()
+            entry.pop("inlier_indices_file", None)
+            entry.pop("inlier_n", None)
+            continue
+        np.save(path, idx)
+        written.add(path.name)
+        entry["inlier_indices_file"] = path.name
+        entry["inlier_n"] = int(len(idx))
+        if "n_points" not in entry:
+            entry["n_points"] = int(len(idx))
+
+
+def _cleanup_kind_inlier_files(
+    groups_dir: Path, group_id: int, kind_token: str, written: set[str]
+) -> None:
+    """Remove stale ``group_XXX_{kind}*_indices.npy`` not rewritten this save."""
+    prefix = f"group_{int(group_id):03d}_{kind_token}"
+    for leftover in groups_dir.glob(f"{prefix}*_indices.npy"):
+        if leftover.name not in written:
+            leftover.unlink()
+
+
+def _write_fit_inlier_files(
     project_dir: str | Path,
     group_id: int,
     group_indices: np.ndarray | None,
     fit_summary: dict | None,
 ) -> dict | None:
-    """Persist per-plane inliers next to the group; return JSON-safe fit."""
+    """Persist per-entity inliers next to the group; return JSON-safe fit."""
     summary = _jsonable_fit_summary(fit_summary)
     if not summary:
         return summary
     groups_dir = Path(project_dir) / "groups"
     groups_dir.mkdir(parents=True, exist_ok=True)
     gidx = None if group_indices is None else np.asarray(group_indices, dtype=np.int64)
-    src_planes = (fit_summary or {}).get("planes") or []
+    raw = fit_summary or {}
     written: set[str] = set()
+
     if isinstance(summary.get("planes"), list):
-        for i, entry in enumerate(summary["planes"]):
-            pi = int(entry.get("plane_index", i))
-            src = (
-                src_planes[i]
-                if i < len(src_planes) and isinstance(src_planes[i], dict)
-                else {}
-            )
-            local = src.get("inlier_local")
-            source = src.get("inlier_source")
-            path = plane_inlier_indices_path(project_dir, group_id, pi)
-            if source is not None:
-                idx = np.asarray(source, dtype=np.int64)
-            elif local is not None and gidx is not None:
-                loc = np.asarray(local, dtype=np.int64)
-                if loc.size and (loc.min() < 0 or loc.max() >= len(gidx)):
-                    raise ValueError(
-                        f"group {group_id} p{pi}: inlier_local out of range "
-                        "for group indices"
-                    )
-                idx = gidx[loc]
-            else:
-                if path.exists():
-                    path.unlink()
-                entry.pop("inlier_indices_file", None)
-                entry.pop("inlier_n", None)
-                continue
-            np.save(path, idx)
-            written.add(path.name)
-            entry["inlier_indices_file"] = path.name
-            entry["inlier_n"] = int(len(idx))
-            if "n_points" not in entry:
-                entry["n_points"] = int(len(idx))
-    prefix = f"group_{int(group_id):03d}_p"
-    for leftover in groups_dir.glob(f"{prefix}*_indices.npy"):
-        if leftover.name not in written:
-            leftover.unlink()
+        _write_kind_inlier_files(
+            project_dir=Path(project_dir),
+            group_id=group_id,
+            group_indices=gidx,
+            summary_entries=summary["planes"],
+            src_entries=list(raw.get("planes") or []),
+            index_key="plane_index",
+            path_fn=plane_inlier_indices_path,
+            label_kind="p",
+            written=written,
+        )
+    _cleanup_kind_inlier_files(groups_dir, group_id, "p", written)
+
+    if isinstance(summary.get("cylinders"), list):
+        _write_kind_inlier_files(
+            project_dir=Path(project_dir),
+            group_id=group_id,
+            group_indices=gidx,
+            summary_entries=summary["cylinders"],
+            src_entries=list(raw.get("cylinders") or []),
+            index_key="cylinder_index",
+            path_fn=cylinder_inlier_indices_path,
+            label_kind="cyl",
+            written=written,
+        )
+    _cleanup_kind_inlier_files(groups_dir, group_id, "cyl", written)
+
+    if isinstance(summary.get("circles"), list):
+        _write_kind_inlier_files(
+            project_dir=Path(project_dir),
+            group_id=group_id,
+            group_indices=gidx,
+            summary_entries=summary["circles"],
+            src_entries=list(raw.get("circles") or []),
+            index_key="circle_index",
+            path_fn=circle_inlier_indices_path,
+            label_kind="cir",
+            written=written,
+        )
+    _cleanup_kind_inlier_files(groups_dir, group_id, "cir", written)
+
     return summary
+
+
+# Backward-compatible alias (tests / older call sites).
+_write_plane_inlier_files = _write_fit_inlier_files
 
 
 @dataclass(frozen=True)
@@ -493,7 +618,7 @@ def load_group_fit(
 ) -> dict | None:
     """Restore ``fit`` (planes, cylinders, circles) from a saved group JSON.
 
-    Attaches plane inlier arrays when ``group_*_p*_indices.npy`` files exist.
+    Attaches inlier arrays when ``group_*_{p|cyl|cir}*_indices.npy`` exist.
     Returns None when the group has no usable fit entities.
     """
     doc = load_group_doc(project_dir, group_id)
@@ -506,6 +631,20 @@ def load_group_fit(
     gidx = None if group_indices is None else np.asarray(group_indices, dtype=np.int64)
     lookup = None if gidx is None else {int(v): i for i, v in enumerate(gidx)}
 
+    def _attach_inliers(entry: dict, src: np.ndarray | None) -> None:
+        if src is None:
+            return
+        src = np.asarray(src, dtype=np.int64)
+        entry["inlier_source"] = src
+        entry["inlier_n"] = int(len(src))
+        if lookup is not None:
+            local = np.array(
+                [lookup[int(s)] for s in src if int(s) in lookup],
+                dtype=np.int64,
+            )
+            if len(local) == len(src):
+                entry["inlier_local"] = local
+
     planes: list[dict] = []
     raw_planes = fit.get("planes")
     if isinstance(raw_planes, list):
@@ -516,18 +655,7 @@ def load_group_fit(
                 continue
             entry = dict(p)
             pi = int(entry.get("plane_index", 0))
-            src = load_plane_inlier_indices(project_dir, group_id, pi)
-            if src is not None:
-                src = np.asarray(src, dtype=np.int64)
-                entry["inlier_source"] = src
-                entry["inlier_n"] = int(len(src))
-                if lookup is not None:
-                    local = np.array(
-                        [lookup[int(s)] for s in src if int(s) in lookup],
-                        dtype=np.int64,
-                    )
-                    if len(local) == len(src):
-                        entry["inlier_local"] = local
+            _attach_inliers(entry, load_plane_inlier_indices(project_dir, group_id, pi))
             planes.append(entry)
 
     cylinders: list[dict] = []
@@ -540,6 +668,10 @@ def load_group_fit(
             continue
         entry = dict(c)
         entry.update(cylinder_to_json(cyl))
+        ci = int(entry.get("cylinder_index", 0))
+        _attach_inliers(
+            entry, load_cylinder_inlier_indices(project_dir, group_id, ci)
+        )
         cylinders.append(entry)
 
     circles: list[dict] = []
@@ -552,6 +684,8 @@ def load_group_fit(
             continue
         entry = dict(c)
         entry.update(circle_to_json(cir))
+        ci = int(entry.get("circle_index", 0))
+        _attach_inliers(entry, load_circle_inlier_indices(project_dir, group_id, ci))
         circles.append(entry)
 
     if not planes and not cylinders and not circles:
