@@ -51,7 +51,8 @@ After Fit, the right dock shows:
 
 Use `Cmd/Ctrl+drag` for rectangle selection to refit a subset.
 Refit adds extra planes (p1, p2, …) on the same group.
-Import them into Reduction as `G6_p1`.
+Import them into Reduction as `G6_p1`. Cylinder axes and circle centers
+import the same way (`G6_cyl0`, `G6_cir0`).
 
 ## VTK logging
 

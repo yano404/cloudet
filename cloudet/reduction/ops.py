@@ -409,8 +409,8 @@ MEASURE_OPS: tuple[MeasureOpDef, ...] = (
 
 # bind is GUI-only import action (not a construct op)
 GUI_BIND_OP_KEY = "bind"
-GUI_BIND_MENU_LABEL = "Import plane from Groups"
-GUI_BIND_APPLY_LABEL = "Import plane"
+GUI_BIND_MENU_LABEL = "Import from Groups"
+GUI_BIND_APPLY_LABEL = "Import"
 GUI_BIND_PAGE_INDEX = 0
 
 GUI_TO_RECIPE_OP = {op.gui_key: op.recipe_op for op in REDUCTION_OPS}

@@ -14,6 +14,8 @@ Groups may also store **cylinders** and **circles** (`fit.cylinders[]` /
 1. Fit kind = **plane** (pick / Fit) — supporting plane + UV residual map  
 2. Residuals → select rim → optional **Fix Φ** / **Φ (mm)** beside the button →
    **Fit circle on selection** — appends `cir0`, `cir1`, …  
+   The supporting Groups plane is **locked**; only the in-plane center
+   (and free Φ) are estimated, so the center lies on that face.
 
 There is no separate Fit kind=`circle`; marker holes have no circumference
 points, so circles are always added from the UV selection. Recipe still binds
@@ -61,6 +63,11 @@ In the recipe, bind them as faces with `"kind": "cylinder"`
   "diameter_fixed": true
 }
 ```
+
+In the GUI **Reduction** dock, **Import** lists fitted planes, cylinders, and
+circles from Groups. Cylinder axes become line entities (`G3_cyl0`); circle
+centers become point entities (`G3_cir0`). The same kinds load from
+`recipe.json` / `cloudet reduce`.
 
 ## CLI usage
 

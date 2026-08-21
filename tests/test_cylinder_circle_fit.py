@@ -407,6 +407,44 @@ def test_robust_fit_circle_free_and_fixed():
     assert np.linalg.norm(fixed.circle.center[:2]) < 1.0
 
 
+def test_robust_fit_circle_locks_provided_plane():
+    """UV / Groups face: center must stay on the given plane (no plane re-fit)."""
+    from cloudet.core.plane import Plane
+
+    true_d = 50.0
+    # Tilted support plane; points have small out-of-plane noise so a re-fit
+    # would drift the normal if it were allowed.
+    n = np.array([0.2, -0.1, 1.0], dtype=np.float64)
+    n = n / np.linalg.norm(n)
+    plane = Plane(n, -3.0)
+    origin = -plane.d * plane.normal
+    # Build an orthonormal UV on the locked plane.
+    tmp = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    u = np.cross(n, tmp)
+    u = u / np.linalg.norm(u)
+    v = np.cross(n, u)
+    rng = np.random.default_rng(7)
+    theta = rng.uniform(0, 2 * np.pi, size=180)
+    r = 0.5 * true_d
+    xy = np.column_stack([r * np.cos(theta), r * np.sin(theta)])
+    pts = origin + xy[:, 0:1] * u + xy[:, 1:2] * v
+    pts = pts + rng.normal(0.0, 0.15, size=pts.shape) * n  # out-of-plane only
+    pts = pts + rng.normal(0.0, 0.05, size=pts.shape)  # tiny isotropic
+
+    res = robust_fit_circle(
+        pts,
+        threshold=0.8,
+        seed=0,
+        plane=plane,
+        diameter_mm=true_d,
+        diameter_fixed=True,
+        ransac_iterations=400,
+    )
+    assert abs(float(res.circle.normal @ plane.normal)) > 0.999
+    assert abs(float(plane.signed_distances(res.circle.center.reshape(1, 3))[0])) < 1e-9
+    assert res.circle.diameter_mm == pytest.approx(true_d)
+
+
 def test_recipe_binds_cylinder_and_circle(tmp_path):
     from cloudet.reduction import ReductionSession
 

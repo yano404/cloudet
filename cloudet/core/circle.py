@@ -4,8 +4,13 @@ Circle model: center ``c``, plane unit normal ``n``, diameter ``Φ`` (mm).
 Residual is the distance in the plane from ``c`` to the projected point,
 minus ``Φ/2`` (plus a small out-of-plane penalty when scoring 3D points).
 
+When a supporting ``plane`` is given (UV / Groups face), it is **locked**:
+only the in-plane center (and free diameter) are estimated, so the center
+lies on that face by construction. If omitted, a plane is estimated once
+from the points and then locked the same way.
+
 API / JSON use **diameter_mm**. With ``diameter_fixed``, only the center
-(and optionally the supporting plane) is estimated.
+is estimated on the locked plane.
 """
 
 from __future__ import annotations
@@ -268,7 +273,12 @@ def robust_fit_circle(
     seed: int = 0,
     min_inlier_fraction: float = 0.05,
 ) -> CircleFitResult:
-    """Fit a circle: supporting plane + 2D circle (free or fixed diameter)."""
+    """Fit a circle on a locked supporting plane (2D center ± free diameter).
+
+    ``plane`` (or ``init.plane`` / a one-shot robust plane fit) is fixed for
+    the whole refine; the center is always ``origin + u·c_u + v·c_v`` on that
+    plane.
+    """
     pts = np.asarray(points, dtype=np.float64)
     if pts.ndim != 2 or pts.shape[1] != 3:
         raise ValueError("points must have shape (N, 3)")
@@ -302,8 +312,11 @@ def robust_fit_circle(
         )
         n_ransac = ransac_iterations
     else:
+        # Project seed center onto the locked plane.
+        seed_c = np.asarray(init.center, dtype=np.float64).reshape(3)
+        seed_c = seed_c - plane.signed_distances(seed_c.reshape(1, 3))[0] * plane.normal
         cir0 = Circle(
-            center=init.center,
+            center=seed_c,
             normal=plane.normal,
             diameter_mm=float(diameter_mm)
             if (fixed and diameter_mm is not None)
@@ -318,6 +331,7 @@ def robust_fit_circle(
     thresh = float(threshold) if threshold is not None else None
     converged = False
     u, v = _uv_basis(plane.normal)
+    origin = -plane.d * plane.normal
 
     for it in range(int(max_iterations)):
         if int(np.count_nonzero(mask)) < 3:
@@ -325,13 +339,6 @@ def robust_fit_circle(
             status = "fail"
             break
         inliers = pts[mask]
-        # Refit plane lightly on inliers
-        try:
-            plane = fit_plane_lsq(inliers)
-        except ValueError:
-            pass
-        u, v = _uv_basis(plane.normal)
-        origin = -plane.d * plane.normal
         xy = _to_uv(inliers, origin, u, v)
         try:
             c_xy, r = fit_circle_2d_lsq(
