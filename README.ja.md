@@ -101,6 +101,8 @@ CuPy なし（Mac 等）でも従来どおり NumPy のみで動作します。�
   groups/
     group_000.ply / .json / _indices.npy
     group_000_p0_indices.npy   # p0 の fit に使った inlier（任意）
+    group_000_cyl0_indices.npy # 円筒 inlier（任意）
+    group_000_cir0_indices.npy # 円 inlier（任意）
     ...
   vtk.log          # GUI 利用時
 ```

@@ -676,3 +676,104 @@ def test_load_fitted_circle_by_index(tmp_path):
     assert r0.circle.diameter_mm == pytest.approx(40.0)
     assert r1.circle.diameter_mm == pytest.approx(55.0)
     assert r1.circle_index == 1
+
+
+def test_cylinder_circle_inlier_indices_roundtrip(tmp_path):
+    """Cylinder / circle inliers persist like plane ``*_p*_indices.npy``."""
+    from cloudet.project.store import (
+        load_circle_inlier_indices,
+        load_cylinder_inlier_indices,
+        load_group_fit,
+    )
+
+    pts = _cylinder_cloud(n=120, seed=9)
+    group_idx = np.arange(500, 620, dtype=np.int64)
+    local_cyl = np.array([2, 5, 9, 11, 40], dtype=np.int64)
+    local_cir = np.array([1, 3, 7], dtype=np.int64)
+    cyl = Cylinder(
+        point=[0, 0, 0],
+        direction=[0, 0, 1],
+        diameter_mm=80.0,
+        diameter_fixed=True,
+    )
+    cir = Circle(
+        center=[0, 0, 0],
+        normal=[0, 0, 1],
+        diameter_mm=50.0,
+        diameter_fixed=True,
+    )
+    params = PickParams()
+    save_group(
+        tmp_path,
+        3,
+        "mixed",
+        pts,
+        group_idx,
+        None,
+        None,
+        detection=params,
+        fit_summary={
+            "planes": [],
+            "cylinders": [
+                {
+                    "cylinder_index": 0,
+                    **cylinder_to_json(cyl),
+                    "n_points": 5,
+                    "status": "ok",
+                    "inlier_local": local_cyl,
+                }
+            ],
+            "circles": [
+                {
+                    "circle_index": 0,
+                    **circle_to_json(cir),
+                    "n_points": 3,
+                    "status": "ok",
+                    "support_plane_index": 0,
+                    "inlier_local": local_cir,
+                }
+            ],
+        },
+    )
+    src_cyl = load_cylinder_inlier_indices(tmp_path, 3, 0)
+    src_cir = load_circle_inlier_indices(tmp_path, 3, 0)
+    assert src_cyl is not None and src_cir is not None
+    assert np.array_equal(src_cyl, group_idx[local_cyl])
+    assert np.array_equal(src_cir, group_idx[local_cir])
+
+    doc = json.loads((tmp_path / "groups" / "group_003.json").read_text())
+    assert doc["fit"]["cylinders"][0]["inlier_indices_file"] == (
+        "group_003_cyl0_indices.npy"
+    )
+    assert doc["fit"]["circles"][0]["inlier_indices_file"] == (
+        "group_003_cir0_indices.npy"
+    )
+    assert "inlier_local" not in doc["fit"]["cylinders"][0]
+
+    restored = load_group_fit(tmp_path, 3, group_idx)
+    assert restored is not None
+    assert np.array_equal(restored["cylinders"][0]["inlier_local"], local_cyl)
+    assert np.array_equal(restored["circles"][0]["inlier_local"], local_cir)
+    assert np.array_equal(
+        restored["cylinders"][0]["inlier_source"], group_idx[local_cyl]
+    )
+
+    # Drop circle and re-save: leftover cir npy is removed; cyl kept.
+    save_group(
+        tmp_path,
+        3,
+        "mixed",
+        pts,
+        group_idx,
+        None,
+        None,
+        detection=params,
+        fit_summary={
+            "planes": [],
+            "cylinders": [
+                doc["fit"]["cylinders"][0] | {"inlier_source": src_cyl}
+            ],
+        },
+    )
+    assert (tmp_path / "groups" / "group_003_cyl0_indices.npy").exists()
+    assert not (tmp_path / "groups" / "group_003_cir0_indices.npy").exists()
