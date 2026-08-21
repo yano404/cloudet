@@ -1,0 +1,71 @@
+{
+  "version": 2,
+  "units": "mm",
+  "faces": {
+    "face_a": {
+      "from": "group",
+      "name": "G0",
+      "kind": "plane",
+      "plane_index": 0
+    },
+    "marker_a": {
+      "from": "group",
+      "name": "G0",
+      "kind": "circle",
+      "circle_index": 0,
+      "diameter_mm": 20.5,
+      "diameter_fixed": true
+    },
+    "marker_b": {
+      "from": "group",
+      "name": "G0",
+      "kind": "circle",
+      "circle_index": 1,
+      "diameter_mm": 20.5,
+      "diameter_fixed": true
+    },
+    "face_b": {
+      "from": "group",
+      "name": "G1",
+      "kind": "plane",
+      "plane_index": 0
+    },
+    "marker_c": {
+      "from": "group",
+      "name": "G1",
+      "kind": "circle",
+      "circle_index": 0,
+      "diameter_mm": 20.5,
+      "diameter_fixed": true
+    }
+  },
+  "construct": [
+    {
+      "id": "baseline_ab",
+      "op": "line_from_two_points",
+      "point_a": "marker_a",
+      "point_b": "marker_b"
+    },
+    {
+      "id": "span_ac",
+      "op": "line_from_two_points",
+      "point_a": "marker_a",
+      "point_b": "marker_c"
+    }
+  ],
+  "export": ["marker_a", "marker_b", "marker_c", "baseline_ab", "span_ac"],
+  "measures": [
+    {
+      "id": "dist_ab",
+      "op": "distance_points",
+      "point_a": "marker_a",
+      "point_b": "marker_b"
+    },
+    {
+      "id": "dist_ac",
+      "op": "distance_points",
+      "point_a": "marker_a",
+      "point_b": "marker_c"
+    }
+  ]
+}
