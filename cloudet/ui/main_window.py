@@ -83,11 +83,15 @@ class CloudetAppWindow(
         self._pick_layers: list[dict] = []
         self._pick_layer_i: int = 0
         self._pick_replace_gid: int | None = None
+        # Cylinder 3-point circumference seeds (survey XYZ), length 0–2 while pending.
+        self._cyl_seed_points: list[np.ndarray] = []
         self._settings_dirty: bool = False
         self._settings_help_targets: dict = {}
         self._status_default: str = "Ready"
         self._active_plane_index: int = 0
-        self._tree_focus: str = "group"  # "group" | "plane"
+        self._active_circle_index: int = 0
+        self._active_cylinder_index: int = 0
+        self._tree_focus: str = "group"  # "group" | "plane" | "circle" | "cylinder"
         self._uv_glw = None
         self._uv_plot = None
         self._hist_plot = None

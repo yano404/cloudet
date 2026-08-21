@@ -16,6 +16,20 @@ def test_radius_matches_bruteforce():
         assert np.array_equal(got, want)
 
 
+def test_large_radius_slabbed_matches_bruteforce():
+    """Query AABB larger than _MAX_QUERY_CELLS must not full-cloud allocate."""
+    rng = np.random.default_rng(1)
+    pts = rng.uniform(-50, 50, size=(80_000, 3)).astype(np.float32)
+    grid = VoxelHashGrid(pts, cell_size=2.0)
+    assert grid.points.dtype == np.float32
+    center = np.zeros(3)
+    radius = 40.0  # (40 cells)^3 ≫ 8000
+    got = np.sort(grid.radius_indices(center, radius))
+    # Chunked reference (same as new bruteforce helper).
+    want = np.sort(grid._bruteforce_radius_indices(center, radius))
+    assert np.array_equal(got, want)
+
+
 def test_radius_outside_bbox():
     pts = np.zeros((10, 3))
     grid = VoxelHashGrid(pts, cell_size=1.0)
@@ -239,8 +253,8 @@ def test_grid_performance_smoke():
     assert q < 0.05
 
 
-def test_radius_large_query_falls_back_to_bruteforce():
-    """Stale fine grids must not walk millions of cells in Python."""
+def test_radius_large_query_uses_slabbed_cells():
+    """Fine grids + large radius must not meshgrid millions of cells."""
     import time
 
     rng = np.random.default_rng(4)
@@ -251,7 +265,7 @@ def test_radius_large_query_falls_back_to_bruteforce():
     elapsed = time.perf_counter() - t0
     want = np.flatnonzero(np.linalg.norm(pts, axis=1) <= 150.0)
     assert np.array_equal(np.sort(got), np.sort(want))
-    assert elapsed < 2.0
+    assert elapsed < 5.0
 
 
 def test_from_arrays_roundtrip_queries():

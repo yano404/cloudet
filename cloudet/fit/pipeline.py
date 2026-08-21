@@ -1,7 +1,8 @@
 """Residual u–v map helpers used by the Qt residual QC dock.
 
 Bins signed plane residuals onto an in-plane (u, v) grid aligned to the
-face's minimum-area bounding rectangle.
+face's minimum-area bounding rectangle. Also bins cylinder radial
+residuals onto an unrolled (s, z) grid (arc length × axial).
 """
 
 from __future__ import annotations
@@ -9,9 +10,10 @@ from __future__ import annotations
 import numpy as np
 
 from cloudet.core.array_backend import get_context
+from cloudet.core.cylinder import Cylinder
 from cloudet.core.plane import Plane
 
-__all__ = ["residual_uv_map"]
+__all__ = ["residual_uv_map", "residual_cylinder_map"]
 
 
 def _seed_inplane_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -277,4 +279,93 @@ def residual_uv_map(
     if return_points:
         out["u"] = uu
         out["v"] = vv
+    return out
+
+
+def _cylinder_tangent_frame(direction: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Unit axis ``u`` and orthonormal tangential ``(e1, e2)``."""
+    u = np.asarray(direction, dtype=np.float64).reshape(3)
+    nu = float(np.linalg.norm(u))
+    if not np.isfinite(nu) or nu == 0.0:
+        raise ValueError("cylinder direction must be finite and non-zero")
+    u = u / nu
+    tmp = np.array([1.0, 0.0, 0.0]) if abs(u[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    e1 = np.cross(u, tmp)
+    e1 = e1 / np.linalg.norm(e1)
+    e2 = np.cross(u, e1)
+    return u, e1, e2
+
+
+def residual_cylinder_map(
+    points: np.ndarray,
+    cylinder: Cylinder,
+    mask: np.ndarray | None = None,
+    bins: int = 200,
+    *,
+    return_points: bool = False,
+    max_points: int = 200_000,
+    seed: int = 0,
+) -> dict:
+    """Bin signed radial residuals on an unrolled cylinder (s, z) grid.
+
+    ``s = r·θ`` (mm) is arc length about the axis (θ ∈ (−π, π], seam at ±πr);
+    ``z`` is the axial coordinate along ``cylinder.direction``. Color is the
+    signed residual ``ρ − r`` (outside positive).
+
+    Return keys mirror ``residual_uv_map`` so the Residuals dock can reuse
+    the same image/histogram path (``u`` ↔ s, ``v`` ↔ z).
+    """
+    pts_all = np.asarray(points, dtype=np.float64)
+    if mask is not None:
+        pts_all = pts_all[np.asarray(mask, dtype=bool)]
+    if len(pts_all) < 3:
+        raise ValueError("need at least 3 points for cylinder residual map")
+
+    if len(pts_all) > int(max_points):
+        rng = np.random.default_rng(int(seed))
+        pts = pts_all[
+            rng.choice(len(pts_all), size=int(max_points), replace=False)
+        ]
+    else:
+        pts = pts_all
+
+    u, e1, e2 = _cylinder_tangent_frame(cylinder.direction)
+    p0 = np.asarray(cylinder.point, dtype=np.float64).reshape(3)
+    radius = float(cylinder.radius_mm)
+    w = pts - p0
+    zz = w @ u
+    x1 = w @ e1
+    x2 = w @ e2
+    rho = np.sqrt(np.maximum(x1 * x1 + x2 * x2, 0.0))
+    r = rho - radius
+    theta = np.arctan2(x2, x1)
+    ss = radius * theta
+
+    counts, se, ze = np.histogram2d(ss, zz, bins=int(bins))
+    sums, _, _ = np.histogram2d(ss, zz, bins=[se, ze], weights=r)
+    with np.errstate(invalid="ignore"):
+        mean_map = np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
+
+    lo = np.array([ss.min(), zz.min(), r.min()], dtype=np.float64)
+    hi = np.array([ss.max(), zz.max(), r.max()], dtype=np.float64)
+    out = {
+        "mean": mean_map,
+        "counts": counts,
+        "u_edges": se,  # s (mm)
+        "v_edges": ze,  # z (mm)
+        "r": r,
+        "u_axis": e1,  # tangential reference at θ=0
+        "v_axis": u,  # axial
+        "center": p0,
+        "extents_uvn": (lo, hi),
+        "n_used": int(len(r)),
+        "kind": "cylinder",
+        "radius_mm": radius,
+        "direction": u,
+        "e1": e1,
+        "e2": e2,
+    }
+    if return_points:
+        out["u"] = ss
+        out["v"] = zz
     return out

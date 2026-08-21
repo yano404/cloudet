@@ -30,9 +30,16 @@ _DISPLAY_WORK_CAP = 8_000_000
 
 
 def _as_xyz(points: np.ndarray) -> np.ndarray:
-    points = np.asarray(points, dtype=np.float64)
+    """Validate ``(N, 3)`` without promoting the whole cloud to float64.
+
+    Survey clouds are often float32; copying 300M+ points to float64 roughly
+    doubles RAM and is the usual cause of pick-time memory spikes.
+    """
+    points = np.asarray(points)
     if points.ndim != 2 or points.shape[1] != 3:
         raise ValueError("points must have shape (N, 3)")
+    if points.dtype.kind not in "f":
+        points = np.asarray(points, dtype=np.float64)
     return points
 
 
@@ -187,10 +194,51 @@ class VoxelHashGrid:
         return max(float(radius_mm), 1.0)
 
     def _bruteforce_radius_indices(self, center: np.ndarray, radius: float) -> np.ndarray:
-        d2 = np.einsum(
-            "ij,ij->i", self.points - center, self.points - center, optimize=True
-        )
-        return np.flatnonzero(d2 <= radius * radius)
+        """Full-cloud radius filter in chunks (never allocates ``(N, 3)``)."""
+        center = np.asarray(center, dtype=np.float64).reshape(3)
+        r2 = float(radius) * float(radius)
+        parts: list[np.ndarray] = []
+        n = len(self.points)
+        for i in range(0, n, _INDEX_CHUNK):
+            sl = np.asarray(self.points[i : i + _INDEX_CHUNK], dtype=np.float64)
+            d2 = np.einsum("ij,ij->i", sl - center, sl - center, optimize=True)
+            hit = np.flatnonzero(d2 <= r2)
+            if hit.size:
+                parts.append(hit + i)
+        if not parts:
+            return np.empty(0, dtype=np.int64)
+        return np.concatenate(parts)
+
+    def _radius_indices_slabbed(
+        self, center: np.ndarray, radius: float, lo: np.ndarray, hi: np.ndarray
+    ) -> np.ndarray:
+        """Walk the query AABB in slabs so we never meshgrid huge cell blocks."""
+        center = np.asarray(center, dtype=np.float64).reshape(3)
+        r2 = float(radius) * float(radius)
+        span = hi - lo + 1
+        axis = int(np.argmax(span))
+        parts: list[np.ndarray] = []
+        other = float(np.prod(span) / max(int(span[axis]), 1))
+        step = max(1, int(_MAX_QUERY_CELLS // max(other, 1.0)))
+        for s0 in range(int(lo[axis]), int(hi[axis]) + 1, step):
+            s1 = min(s0 + step - 1, int(hi[axis]))
+            lo2 = lo.copy()
+            hi2 = hi.copy()
+            lo2[axis] = s0
+            hi2[axis] = s1
+            cand = self._collect_cell_candidates(lo2, hi2)
+            if len(cand) == 0:
+                continue
+            pts = np.asarray(self.points[cand], dtype=np.float64)
+            d2 = np.einsum(
+                "ij,ij->i", pts - center, pts - center, optimize=True
+            )
+            keep = cand[d2 <= r2]
+            if keep.size:
+                parts.append(keep)
+        if not parts:
+            return np.empty(0, dtype=np.int64)
+        return np.concatenate(parts)
 
     def _collect_cell_candidates(
         self, lo: np.ndarray, hi: np.ndarray
@@ -243,15 +291,17 @@ class VoxelHashGrid:
 
         n_cells = int(np.prod(hi - lo + 1))
         if n_cells > _MAX_QUERY_CELLS:
-            return self._bruteforce_radius_indices(center, radius)
+            # Never allocate ``(N, 3)`` against the full survey cloud.
+            return self._radius_indices_slabbed(center, radius, lo, hi)
 
         cand = self._collect_cell_candidates(lo, hi)
         if len(cand) == 0:
             return cand
+        pts = np.asarray(self.points[cand], dtype=np.float64)
         d2 = np.einsum(
             "ij,ij->i",
-            self.points[cand] - center,
-            self.points[cand] - center,
+            pts - center,
+            pts - center,
             optimize=True,
         )
         return cand[d2 <= radius * radius]

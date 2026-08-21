@@ -17,6 +17,8 @@ from typing import Any
 
 import numpy as np
 
+from cloudet.core.circle import Circle
+from cloudet.core.cylinder import Cylinder
 from cloudet.core.plane import Plane
 
 __all__ = [
@@ -29,6 +31,10 @@ __all__ = [
     "migrate_group_doc",
     "plane_to_json",
     "plane_from_json",
+    "cylinder_to_json",
+    "cylinder_from_json",
+    "circle_to_json",
+    "circle_from_json",
     "recipe_needs_migrate",
     "geometry_needs_migrate",
     "group_doc_needs_migrate",
@@ -77,6 +83,54 @@ def plane_from_json(rec: dict | list | np.ndarray) -> Plane:
     if "abcd" in rec:
         return Plane.from_array(rec["abcd"])
     raise ValueError("plane record needs normal+d or abcd")
+
+
+def cylinder_to_json(cyl: Cylinder) -> dict[str, Any]:
+    """Serialize a cylinder (axis + diameter_mm)."""
+    return {
+        "point": np.asarray(cyl.point, dtype=np.float64).tolist(),
+        "direction": np.asarray(cyl.direction, dtype=np.float64).tolist(),
+        "diameter_mm": float(cyl.diameter_mm),
+        "diameter_fixed": bool(cyl.diameter_fixed),
+    }
+
+
+def cylinder_from_json(rec: dict) -> Cylinder:
+    """Load a cylinder from point/direction/diameter_mm."""
+    if not isinstance(rec, dict):
+        raise TypeError(f"cylinder record must be dict, got {type(rec).__name__}")
+    if "point" not in rec or "direction" not in rec or "diameter_mm" not in rec:
+        raise ValueError("cylinder record needs point, direction, diameter_mm")
+    return Cylinder(
+        point=np.asarray(rec["point"], dtype=np.float64),
+        direction=np.asarray(rec["direction"], dtype=np.float64),
+        diameter_mm=float(rec["diameter_mm"]),
+        diameter_fixed=bool(rec.get("diameter_fixed", False)),
+    )
+
+
+def circle_to_json(cir: Circle) -> dict[str, Any]:
+    """Serialize a circle (center + normal + diameter_mm)."""
+    return {
+        "center": np.asarray(cir.center, dtype=np.float64).tolist(),
+        "normal": np.asarray(cir.normal, dtype=np.float64).tolist(),
+        "diameter_mm": float(cir.diameter_mm),
+        "diameter_fixed": bool(cir.diameter_fixed),
+    }
+
+
+def circle_from_json(rec: dict) -> Circle:
+    """Load a circle from center/normal/diameter_mm."""
+    if not isinstance(rec, dict):
+        raise TypeError(f"circle record must be dict, got {type(rec).__name__}")
+    if "center" not in rec or "normal" not in rec or "diameter_mm" not in rec:
+        raise ValueError("circle record needs center, normal, diameter_mm")
+    return Circle(
+        center=np.asarray(rec["center"], dtype=np.float64),
+        normal=np.asarray(rec["normal"], dtype=np.float64),
+        diameter_mm=float(rec["diameter_mm"]),
+        diameter_fixed=bool(rec.get("diameter_fixed", False)),
+    )
 
 
 def _rename_keys(obj: dict, mapping: dict[str, str]) -> dict:
@@ -213,6 +267,11 @@ def migrate_group_doc(doc: dict) -> dict:
             fit_out["planes"] = [
                 migrate_plane_record(p) if isinstance(p, dict) else p for p in planes
             ]
+        # cylinders / circles already use diameter_mm; keep as-is if present
+        for key in ("cylinders", "circles"):
+            items = fit_out.get(key)
+            if isinstance(items, list):
+                fit_out[key] = [dict(x) if isinstance(x, dict) else x for x in items]
         # Legacy single-plane abcd on fit itself.
         if "abcd" in fit_out:
             plane = Plane.from_array(fit_out.pop("abcd"))

@@ -3,6 +3,10 @@
 from cloudet.project.groups import load_groups
 from cloudet.project.schema import (
     RECIPE_VERSION,
+    circle_from_json,
+    circle_to_json,
+    cylinder_from_json,
+    cylinder_to_json,
     migrate_geometry,
     migrate_group_doc,
     migrate_project,
@@ -18,9 +22,13 @@ from cloudet.project.spatial_cache import (
 )
 from cloudet.project.store import (
     CloudetSettings,
+    FittedCircle,
+    FittedCylinder,
     FittedPlane,
     SourceInfo,
     ViewSettings,
+    load_fitted_circle,
+    load_fitted_cylinder,
     load_fitted_plane,
     load_group_doc,
     load_group_docs,
@@ -36,11 +44,19 @@ from cloudet.project.store import (
 
 __all__ = [
     "CloudetSettings",
+    "FittedCircle",
+    "FittedCylinder",
     "FittedPlane",
     "RECIPE_VERSION",
     "SourceInfo",
     "ViewSettings",
+    "circle_from_json",
+    "circle_to_json",
+    "cylinder_from_json",
+    "cylinder_to_json",
     "load_display_xyz",
+    "load_fitted_circle",
+    "load_fitted_cylinder",
     "load_fitted_plane",
     "load_group_doc",
     "load_group_docs",

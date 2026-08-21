@@ -119,7 +119,8 @@ VTK 自身のエラー・警告は端末ではなく `<project_dir>/vtk.log` に
 
 ## 位置関係リダクション
 
-Fit + 保存後、面は `groups/group_*.json` の `fit.planes[].normal` + `d` に残ります。
+Fit + 保存後、面は `groups/group_*.json` の `fit.planes[].normal` + `d` に残ります
+（任意で `fit.cylinders[]` / `fit.circles[]` と直径 `diameter_mm`）。
 解析用パラメータ（仮想軸、ビーム×標的交点、図面オフセット面）は、宣言的レシピで導出します（この段階では点群不要）。
 
 ```bash

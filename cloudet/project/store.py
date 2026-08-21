@@ -38,9 +38,15 @@ import numpy as np
 
 import cloudet
 from cloudet.fit.picking import PickParams
+from cloudet.core.circle import Circle
+from cloudet.core.cylinder import Cylinder
 from cloudet.core.plane import Plane
 from cloudet.core.plyio import write_ply_xyz
 from cloudet.project.schema import (
+    circle_from_json,
+    circle_to_json,
+    cylinder_from_json,
+    cylinder_to_json,
     migrate_group_doc,
     plane_from_json,
     plane_to_json,
@@ -50,6 +56,8 @@ __all__ = [
     "SourceInfo",
     "CloudetSettings",
     "FittedPlane",
+    "FittedCylinder",
+    "FittedCircle",
     "save_group",
     "save_manifest",
     "load_manifest",
@@ -59,6 +67,8 @@ __all__ = [
     "load_group_doc",
     "load_group_docs",
     "load_fitted_plane",
+    "load_fitted_cylinder",
+    "load_fitted_circle",
     "load_settings",
     "save_settings",
 ]
@@ -181,42 +191,108 @@ def load_manifest(project_dir: str | Path) -> dict | None:
 
 
 def _jsonable_fit_summary(fit_summary: dict | None) -> dict | None:
-    """Drop GUI-only numpy caches; keep plane equations for reduction."""
+    """Drop GUI-only numpy caches; keep plane/cylinder/circle equations."""
     if not fit_summary:
         return fit_summary
+    out: dict = {}
+
     planes = fit_summary.get("planes")
-    if not isinstance(planes, list):
-        return fit_summary
-    keep = (
-        "plane_index",
-        "normal",
-        "d",
-        "abcd",  # accepted on input; rewritten below
+    if isinstance(planes, list):
+        keep = (
+            "plane_index",
+            "normal",
+            "d",
+            "abcd",  # accepted on input; rewritten below
+            "n_points",
+            "status",
+            "reasons",
+            "bimodal",
+            "mad_sigma_mm",
+            "threshold_mm",
+            "source_plane_index",
+            "n_selected",
+            "name",
+            "inlier_indices_file",
+            "inlier_n",
+        )
+        out_planes = []
+        for p in planes:
+            if not isinstance(p, dict):
+                continue
+            entry = {k: p[k] for k in keep if k in p}
+            try:
+                plane = plane_from_json(entry)
+            except (KeyError, TypeError, ValueError):
+                continue
+            entry.update(plane_to_json(plane))
+            entry.pop("abcd", None)
+            out_planes.append(entry)
+        out["planes"] = out_planes
+
+    cyl_keep = (
+        "cylinder_index",
+        "point",
+        "direction",
+        "diameter_mm",
+        "diameter_fixed",
         "n_points",
         "status",
         "reasons",
-        "bimodal",
         "mad_sigma_mm",
         "threshold_mm",
-        "source_plane_index",
-        "n_selected",
         "name",
         "inlier_indices_file",
         "inlier_n",
     )
-    out_planes = []
-    for p in planes:
-        if not isinstance(p, dict):
-            continue
-        entry = {k: p[k] for k in keep if k in p}
-        try:
-            plane = plane_from_json(entry)
-        except (KeyError, TypeError, ValueError):
-            continue
-        entry.update(plane_to_json(plane))
-        entry.pop("abcd", None)
-        out_planes.append(entry)
-    return {"planes": out_planes}
+    cylinders = fit_summary.get("cylinders")
+    if isinstance(cylinders, list):
+        out_cyl = []
+        for c in cylinders:
+            if not isinstance(c, dict):
+                continue
+            entry = {k: c[k] for k in cyl_keep if k in c}
+            try:
+                cyl = cylinder_from_json(entry)
+            except (KeyError, TypeError, ValueError):
+                continue
+            entry.update(cylinder_to_json(cyl))
+            out_cyl.append(entry)
+        out["cylinders"] = out_cyl
+
+    cir_keep = (
+        "circle_index",
+        "center",
+        "normal",
+        "diameter_mm",
+        "diameter_fixed",
+        "n_points",
+        "status",
+        "reasons",
+        "mad_sigma_mm",
+        "threshold_mm",
+        "name",
+        "inlier_indices_file",
+        "inlier_n",
+    )
+    circles = fit_summary.get("circles")
+    if isinstance(circles, list):
+        out_cir = []
+        for c in circles:
+            if not isinstance(c, dict):
+                continue
+            entry = {k: c[k] for k in cir_keep if k in c}
+            try:
+                cir = circle_from_json(entry)
+            except (KeyError, TypeError, ValueError):
+                continue
+            entry.update(circle_to_json(cir))
+            out_cir.append(entry)
+        out["circles"] = out_cir
+
+    # Pass through legacy / non-primitive fit payloads unchanged.
+    if not out:
+        return fit_summary
+    return out
 
 
 def save_group(
@@ -305,40 +381,46 @@ def _write_plane_inlier_files(
 ) -> dict | None:
     """Persist per-plane inliers next to the group; return JSON-safe fit."""
     summary = _jsonable_fit_summary(fit_summary)
-    if not summary or not isinstance(summary.get("planes"), list):
+    if not summary:
         return summary
     groups_dir = Path(project_dir) / "groups"
     groups_dir.mkdir(parents=True, exist_ok=True)
     gidx = None if group_indices is None else np.asarray(group_indices, dtype=np.int64)
     src_planes = (fit_summary or {}).get("planes") or []
     written: set[str] = set()
-    for i, entry in enumerate(summary["planes"]):
-        pi = int(entry.get("plane_index", i))
-        src = src_planes[i] if i < len(src_planes) and isinstance(src_planes[i], dict) else {}
-        local = src.get("inlier_local")
-        source = src.get("inlier_source")
-        path = plane_inlier_indices_path(project_dir, group_id, pi)
-        if source is not None:
-            idx = np.asarray(source, dtype=np.int64)
-        elif local is not None and gidx is not None:
-            loc = np.asarray(local, dtype=np.int64)
-            if loc.size and (loc.min() < 0 or loc.max() >= len(gidx)):
-                raise ValueError(
-                    f"group {group_id} p{pi}: inlier_local out of range for group indices"
-                )
-            idx = gidx[loc]
-        else:
-            if path.exists():
-                path.unlink()
-            entry.pop("inlier_indices_file", None)
-            entry.pop("inlier_n", None)
-            continue
-        np.save(path, idx)
-        written.add(path.name)
-        entry["inlier_indices_file"] = path.name
-        entry["inlier_n"] = int(len(idx))
-        if "n_points" not in entry:
-            entry["n_points"] = int(len(idx))
+    if isinstance(summary.get("planes"), list):
+        for i, entry in enumerate(summary["planes"]):
+            pi = int(entry.get("plane_index", i))
+            src = (
+                src_planes[i]
+                if i < len(src_planes) and isinstance(src_planes[i], dict)
+                else {}
+            )
+            local = src.get("inlier_local")
+            source = src.get("inlier_source")
+            path = plane_inlier_indices_path(project_dir, group_id, pi)
+            if source is not None:
+                idx = np.asarray(source, dtype=np.int64)
+            elif local is not None and gidx is not None:
+                loc = np.asarray(local, dtype=np.int64)
+                if loc.size and (loc.min() < 0 or loc.max() >= len(gidx)):
+                    raise ValueError(
+                        f"group {group_id} p{pi}: inlier_local out of range "
+                        "for group indices"
+                    )
+                idx = gidx[loc]
+            else:
+                if path.exists():
+                    path.unlink()
+                entry.pop("inlier_indices_file", None)
+                entry.pop("inlier_n", None)
+                continue
+            np.save(path, idx)
+            written.add(path.name)
+            entry["inlier_indices_file"] = path.name
+            entry["inlier_n"] = int(len(idx))
+            if "n_points" not in entry:
+                entry["n_points"] = int(len(idx))
     prefix = f"group_{int(group_id):03d}_p"
     for leftover in groups_dir.glob(f"{prefix}*_indices.npy"):
         if leftover.name not in written:
@@ -354,6 +436,28 @@ class FittedPlane:
     group_name: str
     plane_index: int
     plane: Plane
+    quality: dict
+
+
+@dataclass(frozen=True)
+class FittedCylinder:
+    """One fitted cylinder loaded from a saved group JSON."""
+
+    group_id: int
+    group_name: str
+    cylinder_index: int
+    cylinder: Cylinder
+    quality: dict
+
+
+@dataclass(frozen=True)
+class FittedCircle:
+    """One fitted circle loaded from a saved group JSON."""
+
+    group_id: int
+    group_name: str
+    circle_index: int
+    circle: Circle
     quality: dict
 
 
@@ -461,5 +565,110 @@ def load_fitted_plane(
         group_name=str(doc.get("name", f"G{doc['group_id']}")),
         plane_index=int(plane_index),
         plane=plane,
+        quality=quality,
+    )
+
+
+def _resolve_group_doc(
+    project_dir: str | Path,
+    *,
+    name: str | None = None,
+    group_id: int | None = None,
+) -> dict:
+    if (name is None) == (group_id is None):
+        raise ValueError("provide exactly one of name= or group_id=")
+    docs = load_group_docs(project_dir)
+    if name is not None:
+        matches = [d for d in docs if str(d.get("name", "")) == name]
+        if not matches:
+            known = [str(d.get("name", f"G{d['group_id']}")) for d in docs]
+            raise KeyError(f"no group named {name!r} (known: {known})")
+        if len(matches) > 1:
+            raise ValueError(f"multiple groups named {name!r}; use group_id=")
+        return matches[0]
+    matches = [d for d in docs if int(d["group_id"]) == int(group_id)]
+    if not matches:
+        raise KeyError(f"no group_id={group_id}")
+    return matches[0]
+
+
+def load_fitted_cylinder(
+    project_dir: str | Path,
+    *,
+    name: str | None = None,
+    group_id: int | None = None,
+    cylinder_index: int = 0,
+) -> FittedCylinder:
+    """Resolve one fitted cylinder by group name or id."""
+    doc = _resolve_group_doc(project_dir, name=name, group_id=group_id)
+    label = f"group {doc.get('name', doc['group_id'])!r}"
+    fit = doc.get("fit") or {}
+    cylinders = fit.get("cylinders")
+    if not isinstance(cylinders, list) or not cylinders:
+        raise ValueError(f"{label}: no fit.cylinders[]; run cylinder Fit then save")
+    try:
+        entry = next(
+            c for c in cylinders if int(c.get("cylinder_index", 0)) == int(cylinder_index)
+        )
+    except StopIteration as e:
+        indices = [int(c.get("cylinder_index", 0)) for c in cylinders]
+        raise KeyError(
+            f"{label}: no cylinder_index={cylinder_index} (have {indices})"
+        ) from e
+    cyl = cylinder_from_json(entry)
+    quality = {
+        "status": entry.get("status"),
+        "mad_sigma_mm": entry.get("mad_sigma_mm"),
+        "threshold_mm": entry.get("threshold_mm"),
+        "reasons": entry.get("reasons", []),
+        "n_points": entry.get("n_points"),
+        "diameter_fixed": bool(entry.get("diameter_fixed", False)),
+    }
+    return FittedCylinder(
+        group_id=int(doc["group_id"]),
+        group_name=str(doc.get("name", f"G{doc['group_id']}")),
+        cylinder_index=int(cylinder_index),
+        cylinder=cyl,
+        quality=quality,
+    )
+
+
+def load_fitted_circle(
+    project_dir: str | Path,
+    *,
+    name: str | None = None,
+    group_id: int | None = None,
+    circle_index: int = 0,
+) -> FittedCircle:
+    """Resolve one fitted circle by group name or id."""
+    doc = _resolve_group_doc(project_dir, name=name, group_id=group_id)
+    label = f"group {doc.get('name', doc['group_id'])!r}"
+    fit = doc.get("fit") or {}
+    circles = fit.get("circles")
+    if not isinstance(circles, list) or not circles:
+        raise ValueError(f"{label}: no fit.circles[]; run circle Fit then save")
+    try:
+        entry = next(
+            c for c in circles if int(c.get("circle_index", 0)) == int(circle_index)
+        )
+    except StopIteration as e:
+        indices = [int(c.get("circle_index", 0)) for c in circles]
+        raise KeyError(
+            f"{label}: no circle_index={circle_index} (have {indices})"
+        ) from e
+    cir = circle_from_json(entry)
+    quality = {
+        "status": entry.get("status"),
+        "mad_sigma_mm": entry.get("mad_sigma_mm"),
+        "threshold_mm": entry.get("threshold_mm"),
+        "reasons": entry.get("reasons", []),
+        "n_points": entry.get("n_points"),
+        "diameter_fixed": bool(entry.get("diameter_fixed", False)),
+    }
+    return FittedCircle(
+        group_id=int(doc["group_id"]),
+        group_name=str(doc.get("name", f"G{doc['group_id']}")),
+        circle_index=int(circle_index),
+        circle=cir,
         quality=quality,
     )

@@ -59,3 +59,6 @@ SETTINGS_HELP_DEFAULT = """
 # GUI fit ceiling (mm). Adaptive robust fit never exceeds this.
 # Residual plot half-range (±) is controlled separately in the DISPLAY card.
 FIT_MAX_THRESHOLD_MM = 0.5
+# Cylinder surfaces (ducts, pipes) need a looser radial tolerance than planes.
+# None → adaptive MAD inside robust_fit_cylinder; RANSAC boot uses the value below.
+CYLINDER_RANSAC_THRESHOLD_MM = 3.0

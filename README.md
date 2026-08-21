@@ -120,7 +120,8 @@ VTK’s own errors and warnings go to `<project_dir>/vtk.log` instead of the ter
 ## Geometry reduction
 
 After Fit + save, faces live in `groups/group_*.json`
-(`fit.planes[].normal` + `d`). Analysis parameters (virtual axes, beam-on-target
+(`fit.planes[].normal` + `d`, and optionally `fit.cylinders[]` /
+`fit.circles[]` with `diameter_mm`). Analysis parameters (virtual axes, beam-on-target
 points, drawing offsets) are derived with a declarative recipe — no point cloud
 required at this stage.
 

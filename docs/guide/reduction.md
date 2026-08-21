@@ -5,6 +5,63 @@ After Fit + save, faces live in `groups/group_*.json`
 beam-on-target points, drawing offsets — are derived with a declarative
 recipe (no point cloud required).
 
+Groups may also store **cylinders** and **circles** (`fit.cylinders[]` /
+`fit.circles[]`) with drawing diameter `diameter_mm` and optional
+`diameter_fixed`.
+
+**Circles on a face (photogrammetry markers):**
+
+1. Fit kind = **plane** (pick / Fit) — supporting plane + UV residual map  
+2. Residuals → select rim → optional **Fix Φ** / **Φ (mm)** beside the button →
+   **Fit circle on selection** — appends `cir0`, `cir1`, …  
+
+There is no separate Fit kind=`circle`; marker holes have no circumference
+points, so circles are always added from the UV selection. Recipe still binds
+with `"kind": "circle"` and optional `"circle_index"`.
+**Cylinder (ducts / pipes):** Fit kind = `cylinder`. Pick is always
+**3-point seed**: click three non-collinear points on the circumference (same
+cross-section works best). That builds the axis from the circumcircle, then
+expands a radial shell and refines. **Esc** clears an in-progress seed.
+Set **Fix diameter Φ** when the drawing diameter is known.
+
+**Cylinder QC:** Residuals dock shows an unrolled **s–z map** (arc length
+`s = r·θ` × axial `z`) colored by signed radial residual `ρ − Φ/2`, plus a
+histogram. Raise **range ±** if the colorbar saturates (duct residuals are
+often larger than plane µm-scale).
+
+Fit polish uses a **geometric** nonlinear refine (minimize `ρ − r`), after an
+algebraic seed — better on partial arcs than algebraic circle alone. Prefer
+**Fix Φ** when the drawing diameter is known.
+
+**Cylinder shell (Settings → Detection):** under **3 CYLINDER SHELL**:
+- **Cylinder shell ± (radial)** — half-thickness of `|ρ − r|` band (`0` = auto
+  `max(6 mm, 0.15·r)`)
+- **Cylinder axial half-length** — half-length along the axis from the pick /
+  seed (`0` = auto `max(40 mm, 1.0·r)`)
+
+Apply settings before picking; shell size does not rebuild the spatial index.
+
+In the recipe, bind them as faces with `"kind": "cylinder"`
+(→ axis **line**) or `"kind": "circle"` (→ center **point**):
+
+```json
+"bore": {
+  "from": "group",
+  "name": "G3",
+  "kind": "cylinder",
+  "diameter_mm": 80.0,
+  "diameter_fixed": true
+},
+"marker_a": {
+  "from": "group",
+  "name": "G3",
+  "kind": "circle",
+  "circle_index": 0,
+  "diameter_mm": 50.0,
+  "diameter_fixed": true
+}
+```
+
 ## CLI usage
 
 ```bash
