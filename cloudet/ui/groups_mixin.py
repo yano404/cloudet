@@ -56,16 +56,26 @@ from cloudet.core.neighbors import (
     display_xyz,
     resolve_display_backend,
 )
-from cloudet.fit.picking import PickParams, pick_plane_region
+from cloudet.fit.picking import (
+    PickParams,
+    pick_cylinder_region,
+    pick_cylinder_region_from_cylinder,
+    pick_plane_region,
+    resolve_cylinder_shell_mm,
+)
 from cloudet.core.plane import Plane, mad_sigma
-from cloudet.project.schema import plane_from_json, plane_to_json
+from cloudet.project.schema import (
+    cylinder_to_json,
+    plane_from_json,
+    plane_to_json,
+)
+from cloudet.core.cylinder import cylinder_from_three_points, robust_fit_cylinder
 from cloudet.core.plyio import read_ply_xyz
 from cloudet.project import (
     SourceInfo,
     ViewSettings,
-    load_group_doc,
+    load_group_fit,
     load_group_indices,
-    load_plane_inlier_indices,
     load_settings,
     load_manifest,
     save_group,
@@ -75,6 +85,7 @@ from cloudet.project import (
 from cloudet.project.spatial_cache import load_display_xyz, load_voxel_grid, save_display_xyz, save_voxel_grid
 from cloudet.project.settings_apply import classify_settings_apply
 from cloudet.ui.constants import (
+    CYLINDER_RANSAC_THRESHOLD_MM,
     DEPTH_TIP,
     FIT_MAX_THRESHOLD_MM,
     SETTINGS_HELP_DEFAULT,
@@ -190,6 +201,55 @@ class GroupsMixin:
         )
         p_lay.addWidget(self.multiplane_cb)
 
+        fit_kind_row = QHBoxLayout()
+        fit_kind_row.addWidget(QLabel("Fit kind"))
+        self.fit_kind_cb = QComboBox()
+        self.fit_kind_cb.addItem("plane", "plane")
+        self.fit_kind_cb.addItem("cylinder", "cylinder")
+        self.fit_kind_cb.setToolTip(
+            "Primitive for pick / Fit on the active group.\n\n"
+            "• plane — planar face pick + UV QC; add marker circles from "
+            "Residuals → Fit circle on selection.\n\n"
+            "• cylinder — click three non-collinear points on the circumference "
+            "(same cross-section works best), then shell expand + refine. "
+            "Optional Fix Φ recommended. Esc clears an in-progress seed."
+        )
+        self.fit_kind_cb.currentIndexChanged.connect(self._sync_fit_kind_widgets)
+        fit_kind_row.addWidget(self.fit_kind_cb, stretch=1)
+        p_lay.addLayout(fit_kind_row)
+
+        self.diam_box = QWidget()
+        diam_box_lay = QVBoxLayout(self.diam_box)
+        diam_box_lay.setContentsMargins(0, 0, 0, 0)
+        diam_box_lay.setSpacing(4)
+        diam_title = QLabel("DIAMETER (cylinder Fit)")
+        diam_title.setObjectName("sectionTitle")
+        diam_box_lay.addWidget(diam_title)
+        self.diameter_fixed_cb = QCheckBox("Fix diameter Φ")
+        self.diameter_fixed_cb.setChecked(False)
+        self.diameter_fixed_cb.setToolTip(
+            "Lock cylinder Φ to the value below (axis only). "
+            "For marker circles, use Fix Φ next to Fit circle on selection "
+            "in the Residuals dock."
+        )
+        self.diameter_fixed_cb.toggled.connect(self._sync_fit_kind_widgets)
+        diam_box_lay.addWidget(self.diameter_fixed_cb)
+        diam_row = QHBoxLayout()
+        diam_row.addWidget(QLabel("Φ (mm)"))
+        self.diameter_mm_spin = QDoubleSpinBox()
+        self.diameter_mm_spin.setRange(0.01, 1.0e6)
+        self.diameter_mm_spin.setDecimals(3)
+        self.diameter_mm_spin.setValue(80.0)
+        self.diameter_mm_spin.setToolTip("Drawing diameter for cylinder Fit (mm)")
+        diam_row.addWidget(self.diameter_mm_spin, stretch=1)
+        diam_box_lay.addLayout(diam_row)
+        cyl_hint = QLabel("Cylinder pick: P ×3 on circumference (Esc clears).")
+        cyl_hint.setObjectName("muted")
+        cyl_hint.setWordWrap(True)
+        diam_box_lay.addWidget(cyl_hint)
+        p_lay.addWidget(self.diam_box)
+        self._sync_fit_kind_widgets()
+
         self.snap_front_cb = QCheckBox("Pick nearer surface")
         self.snap_front_cb.setChecked(True)
         self.snap_front_cb.setToolTip(
@@ -254,9 +314,12 @@ class GroupsMixin:
         groups_hdr.addWidget(self.group_count_label)
         gl.addLayout(groups_hdr)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["group / plane", "n, d", "points", "quality"])
-        self.tree.setColumnWidth(0, 120)
-        self.tree.setColumnWidth(1, 280)
+        self.tree.setHeaderLabels(["name", "geometry", "points", "quality"])
+        self.tree.setColumnWidth(0, 100)
+        self.tree.setColumnWidth(1, 320)
+        self.tree.setToolTip(
+            "Planes: n, d. Circles: Φ and center. Cylinders: Φ and axis."
+        )
         self.tree.setAlternatingRowColors(True)
         self.tree.setMouseTracking(True)
         self.tree.viewport().setMouseTracking(True)
@@ -284,8 +347,9 @@ class GroupsMixin:
         self.delete_btn = QPushButton("Delete")
         self.delete_btn.setObjectName("dangerBtn")
         self.delete_btn.setToolTip(
-            "Delete the selected plane, or the whole group if a group row "
-            "is selected. Backspace does the same. Double-click a name to rename."
+            "Delete the selected plane or circle, or the whole group if a "
+            "group row is selected. Backspace does the same. Double-click a "
+            "name to rename."
         )
         self.delete_btn.clicked.connect(lambda: self._guard(self._delete_active))
         toolbar.addWidget(self.delete_btn, 0, 3)
@@ -640,6 +704,49 @@ class GroupsMixin:
             labeled("Maximum refinement rounds", self.s_maxexp.toolTip()),
             self.s_maxexp,
         )
+
+        cyl_stage = QLabel(
+            "<b>3  CYLINDER SHELL</b>  <small>DUCT / PIPE PICK</small>"
+        )
+        cyl_stage.setObjectName("sectionTitle")
+        det_form.addRow(cyl_stage)
+        self.s_cyl_shell = dspin(
+            float(getattr(d, "cylinder_shell_half_width_mm", 0.0) or 0.0),
+            tip_text=setting_tip(
+                "Cylinder shell ± (radial)",
+                "Half-thickness of the radial band kept around the cylinder "
+                "surface (|ρ − r| ≤ this value). 0 = auto "
+                "(max(6 mm, 0.15·r)).",
+                "Cylinder pick (3-point seed on circumference)",
+                "cylinder_shell_half_width_mm",
+                larger="includes thicker walls / more noise around the duct",
+                smaller="keeps a thinner shell (cleaner but may miss sparse walls)",
+            ),
+        )
+        self.s_cyl_shell.setSuffix(" mm")
+        self.s_cyl_shell.setRange(0.0, 1.0e5)
+        self.s_cyl_axial = dspin(
+            float(getattr(d, "cylinder_axial_half_length_mm", 0.0) or 0.0),
+            tip_text=setting_tip(
+                "Cylinder axial half-length",
+                "Half-length along the axis from the pick / seed anchor. "
+                "0 = auto (max(40 mm, 1.0·r)).",
+                "Cylinder pick (3-point seed on circumference)",
+                "cylinder_axial_half_length_mm",
+                larger="extends the group farther along the duct",
+                smaller="limits the group to a shorter axial segment",
+            ),
+        )
+        self.s_cyl_axial.setSuffix(" mm")
+        self.s_cyl_axial.setRange(0.0, 1.0e5)
+        det_form.addRow(
+            labeled("Cylinder shell ± (radial)", self.s_cyl_shell.toolTip()),
+            self.s_cyl_shell,
+        )
+        det_form.addRow(
+            labeled("Cylinder axial half-length", self.s_cyl_axial.toolTip()),
+            self.s_cyl_axial,
+        )
         settings_body_layout.addWidget(det_card)
 
         # --- Display controls ---
@@ -796,7 +903,8 @@ class GroupsMixin:
         self._settings_controls = [
             self.s_radius, self.s_locthr, self.s_lociter, self.s_minnb, self.s_minin,
             self.s_accthr, self.s_connect, self.s_cell, self.s_expand, self.s_maxexp,
-            self.s_maxinplane, self.s_backend, self.s_compute_backend,
+            self.s_maxinplane, self.s_cyl_shell, self.s_cyl_axial,
+            self.s_backend, self.s_compute_backend,
             self.s_voxel, self.s_maxdisp,
             self.s_ds_backend, self.s_ptsize, self.s_active_pt, self.s_inactive_pt,
         ]
@@ -839,6 +947,8 @@ class GroupsMixin:
             max_expand_rounds=self.s_maxexp.value(),
             max_inplane_radius_mm=None if max_in <= 0 else max_in,
             refine_max_points=self.settings.detection.refine_max_points,
+            cylinder_shell_half_width_mm=float(self.s_cyl_shell.value()),
+            cylinder_axial_half_length_mm=float(self.s_cyl_axial.value()),
         )
 
     def _read_form_view(self) -> ViewSettings:
@@ -955,6 +1065,12 @@ class GroupsMixin:
             self.s_maxexp.setValue(getattr(d, "max_expand_rounds", 40))
             max_in = getattr(d, "max_inplane_radius_mm", None)
             self.s_maxinplane.setValue(float(max_in) if max_in is not None else 0.0)
+            self.s_cyl_shell.setValue(
+                float(getattr(d, "cylinder_shell_half_width_mm", 0.0) or 0.0)
+            )
+            self.s_cyl_axial.setValue(
+                float(getattr(d, "cylinder_axial_half_length_mm", 0.0) or 0.0)
+            )
             ransac_raw = getattr(d, "ransac_backend", "seeded")
             if ransac_raw == "numpy":
                 ransac_raw = "seeded"
@@ -1226,6 +1342,9 @@ class GroupsMixin:
         self._pick_layer_i = 0  # frontmost = what the user sees
         self._pick_replace_gid = None
         self._pick_raw_hit = np.asarray(world, dtype=np.float64)
+        if self._cylinder_3pt_active():
+            self._handle_cylinder_3pt_pick(wall_t0=wall_t0, replace_last=False)
+            return
         self._extract_at_current_layer(replace=False, wall_t0=wall_t0)
 
     def _cycle_pick_depth(self, delta: int):
@@ -1243,6 +1362,9 @@ class GroupsMixin:
                 f"surface ({n} candidates)"
             )
         self._pick_layer_i = new_i
+        if self._cylinder_3pt_active() and self._cyl_seed_points:
+            self._handle_cylinder_3pt_pick(wall_t0=None, replace_last=True)
+            return
         self._extract_at_current_layer(replace=True)
 
     def _update_depth_controls(self):
@@ -1285,9 +1407,15 @@ class GroupsMixin:
 
     def _update_pick_hint(self, n_layers: int):
         """Keep the 3D overlay minimal until depth navigation is available."""
-        text = "P : Pick"
-        if n_layers > 1:
-            text += "\n< : Nearer\n> : Farther"
+        if self._cylinder_3pt_active():
+            n = len(getattr(self, "_cyl_seed_points", None) or [])
+            text = f"P : Cylinder seed {n}/3\nEsc : Clear"
+            if n_layers > 1:
+                text += "\n< : Nearer\n> : Farther"
+        else:
+            text = "P : Pick"
+            if n_layers > 1:
+                text += "\n< : Nearer\n> : Farther"
         actor = (getattr(self.plotter, "actors", None) or {}).get(
             "_point_picking_message"
         )
@@ -1325,19 +1453,40 @@ class GroupsMixin:
 
         t_pick0 = time.perf_counter()
         depth_s = (t_pick0 - wall_t0) if wall_t0 is not None else None
-        want_cell = VoxelHashGrid.cell_size_for_radius(
-            self.settings.detection.local_radius_mm
-        )
+        fit_kind = "plane"
+        if hasattr(self, "fit_kind_cb"):
+            fit_kind = str(self.fit_kind_cb.currentData() or "plane")
+        # Cylinder: wide ball, then radial shell (not a plane slab).
+        local_r = float(self.settings.detection.local_radius_mm)
+        cyl_diam = None
+        if fit_kind == "cylinder" and hasattr(self, "diameter_fixed_cb"):
+            if self.diameter_fixed_cb.isChecked() and hasattr(self, "diameter_mm_spin"):
+                cyl_diam = float(self.diameter_mm_spin.value())
+        if fit_kind == "cylinder":
+            seed_radius_mm = max(8.0 * local_r, 80.0)
+            if cyl_diam is not None and cyl_diam > 0:
+                seed_radius_mm = max(seed_radius_mm, float(cyl_diam) + 40.0)
+        else:
+            seed_radius_mm = local_r
+        want_cell = VoxelHashGrid.cell_size_for_radius(local_r)
         had_grid = (
             self.grid is not None and self.grid.cell_size == want_cell
         )
         t_grid0 = time.perf_counter()
         grid = self._ensure_grid()
         grid_build_s = 0.0 if had_grid else time.perf_counter() - t_grid0
-        self._status(f"picking ({depth_tag}): local plane + refine ...")
+        if fit_kind == "cylinder":
+            self._status(
+                f"picking ({depth_tag}): cylinder shell seed "
+                f"ball r≈{seed_radius_mm:.0f} mm"
+                + (f", Φ={cyl_diam:.1f}" if cyl_diam else "")
+                + " ..."
+            )
+        else:
+            self._status(f"picking ({depth_tag}): local plane + refine ...")
         QApplication.processEvents()
         t_query0 = time.perf_counter()
-        nb = grid.radius_indices(world, self.settings.detection.local_radius_mm)
+        nb = grid.radius_indices(world, seed_radius_mm)
         neighbor_query_s = time.perf_counter() - t_query0
         neighbor_s = grid_build_s + neighbor_query_s
         pick_detail: dict = {
@@ -1345,18 +1494,32 @@ class GroupsMixin:
             "neighbor_query_s": neighbor_query_s,
             "neighbor_s": neighbor_s,
             "n_neighbors": len(nb),
+            "seed_radius_mm": seed_radius_mm,
+            "fit_kind": fit_kind,
         }
         compute = resolve_compute_backend(
             self.settings.detection.compute_backend, n_points=len(self.full_points)
         )
-        indices, plane = pick_plane_region(
-            self.full_points,
-            world,
-            nb,
-            self.settings.detection,
-            compute_backend=compute,
-            timings=pick_detail,
-        )
+        if fit_kind == "cylinder":
+            det = self.settings.detection
+            indices, plane = pick_cylinder_region(
+                self.full_points,
+                world,
+                nb,
+                diameter_mm=cyl_diam,
+                shell_half_width_mm=float(det.cylinder_shell_half_width_mm) or None,
+                axial_half_length_mm=float(det.cylinder_axial_half_length_mm) or None,
+                timings=pick_detail,
+            )
+        else:
+            indices, plane = pick_plane_region(
+                self.full_points,
+                world,
+                nb,
+                self.settings.detection,
+                compute_backend=compute,
+                timings=pick_detail,
+            )
         pick_s = time.perf_counter() - t_pick0
 
         if (
@@ -1423,16 +1586,30 @@ class GroupsMixin:
             timing["wall_s"] = time.perf_counter() - flow_t0
             timing["pick_detail"] = pick_detail
             self._log_fit_timing(timing, kind="pick+fit")
-            planes = g["fit"]["planes"]
-            self._status(
-                f"{g['name']}: {len(planes)} plane(s) [{compute}, "
-                f"{self._fit_timing_status(timing)}]: "
-                + " | ".join(
-                    f"p{p['plane_index']} {p['mad_sigma_mm']*1e3:.0f}um {p['status']}"
-                    + (" BIMODAL" if p["bimodal"] else "")
-                    for p in planes
+            fit = g.get("fit") or {}
+            fit_kind = timing.get("fit_kind") or "plane"
+            if fit_kind == "cylinder" and fit.get("cylinders"):
+                c = fit["cylinders"][0]
+                detail = (
+                    f"cyl Φ={float(c.get('diameter_mm', 0)):.3f}mm "
+                    f"mad≈{float(c.get('mad_sigma_mm') or 0)*1e3:.0f}um {c.get('status')}"
                 )
-                + f"  | {depth_tag}  |  fit.log"
+            else:
+                planes = fit.get("planes") or []
+                n_cir = len(fit.get("circles") or [])
+                detail = (
+                    f"{len(planes)} plane(s): "
+                    + " | ".join(
+                        f"p{p['plane_index']} {p['mad_sigma_mm']*1e3:.0f}um {p['status']}"
+                        + (" BIMODAL" if p.get("bimodal") else "")
+                        for p in planes
+                    )
+                )
+                if n_cir:
+                    detail += f" · {n_cir} circle(s)"
+            self._status(
+                f"{g['name']}: {detail} [{compute}, "
+                f"{self._fit_timing_status(timing)}]  | {depth_tag}  |  fit.log"
             )
         else:
             timing = {
@@ -1464,6 +1641,262 @@ class GroupsMixin:
         # Kept for compatibility with any external callers / tests.
         self._start_pick_at(world)
 
+    def _sync_fit_kind_widgets(self):
+        kind = "plane"
+        if hasattr(self, "fit_kind_cb"):
+            kind = str(self.fit_kind_cb.currentData() or "plane")
+        is_cyl = kind == "cylinder"
+        if hasattr(self, "diam_box"):
+            self.diam_box.setVisible(is_cyl)
+        if hasattr(self, "multiplane_cb"):
+            self.multiplane_cb.setEnabled(kind == "plane")
+        if not is_cyl:
+            self._clear_cylinder_seeds(silent=True)
+
+    def _cylinder_3pt_active(self) -> bool:
+        """Cylinder pick is always 3-point seed on the circumference."""
+        if not hasattr(self, "fit_kind_cb"):
+            return False
+        return str(self.fit_kind_cb.currentData() or "plane") == "cylinder"
+
+    def _clear_cylinder_seeds(self, *, silent: bool = False):
+        had = bool(getattr(self, "_cyl_seed_points", None))
+        self._cyl_seed_points = []
+        self._refresh_cylinder_seed_markers()
+        if had and not silent:
+            self._status("cylinder 3-point seed cleared (Esc)")
+
+    def _refresh_cylinder_seed_markers(self):
+        import pyvista as pv
+
+        for i in range(3):
+            name = f"cyl_seed_{i}"
+            try:
+                self.plotter.remove_actor(name, render=False)
+            except Exception:
+                pass
+        seeds = getattr(self, "_cyl_seed_points", None) or []
+        if not seeds:
+            self.plotter.render()
+            return
+        # Marker size ~2% of local pick radius, floored for visibility.
+        r = max(2.0, 0.04 * float(self.settings.detection.local_radius_mm))
+        colors = ("#e67e22", "#f39c12", "#d35400")
+        for i, pt in enumerate(seeds):
+            center = self._to_view_point(pt).tolist()
+            self.plotter.add_mesh(
+                pv.Sphere(radius=r, center=center),
+                color=colors[i % len(colors)],
+                name=f"cyl_seed_{i}",
+                pickable=False,
+                reset_camera=False,
+            )
+        self.plotter.render()
+
+    def _handle_cylinder_3pt_pick(
+        self, *, wall_t0: float | None, replace_last: bool
+    ):
+        self._update_depth_controls()
+        layer = self._pick_layers[self._pick_layer_i]
+        world_view = np.asarray(layer["seed"], dtype=np.float64)
+        world = self._to_survey_point(world_view)
+        n_layers = len(self._pick_layers)
+        depth_tag = f"surface {self._pick_layer_i + 1}/{n_layers}"
+        if n_layers > 1:
+            depth_tag += " (> farther / < nearer)"
+
+        if not hasattr(self, "_cyl_seed_points"):
+            self._cyl_seed_points = []
+        if replace_last and self._cyl_seed_points:
+            self._cyl_seed_points[-1] = np.asarray(world, dtype=np.float64).reshape(3)
+        else:
+            self._cyl_seed_points.append(
+                np.asarray(world, dtype=np.float64).reshape(3)
+            )
+
+        n = len(self._cyl_seed_points)
+        self._refresh_cylinder_seed_markers()
+        if n < 3:
+            self._status(
+                f"cylinder seed {n}/3 on circumference ({depth_tag}) — "
+                "P again; Esc to clear"
+            )
+            return
+
+        # Third point: build axis + expand shell + fit.
+        self._finish_cylinder_three_point(wall_t0=wall_t0, depth_tag=depth_tag)
+
+    def _finish_cylinder_three_point(
+        self, *, wall_t0: float | None, depth_tag: str
+    ):
+        flow_t0 = wall_t0 if wall_t0 is not None else time.perf_counter()
+        seeds = [np.asarray(p, dtype=np.float64).reshape(3) for p in self._cyl_seed_points]
+        if len(seeds) != 3:
+            raise ValueError("cylinder 3-point seed requires exactly 3 points")
+
+        fixed = bool(self.diameter_fixed_cb.isChecked())
+        diam = float(self.diameter_mm_spin.value()) if fixed else None
+        cyl0 = cylinder_from_three_points(
+            seeds[0],
+            seeds[1],
+            seeds[2],
+            diameter_mm=diam,
+            diameter_fixed=fixed,
+        )
+        if cyl0 is None:
+            # Drop the last click so the user can retry without losing 1–2.
+            self._cyl_seed_points = self._cyl_seed_points[:2]
+            self._refresh_cylinder_seed_markers()
+            raise ValueError(
+                "3 points are nearly collinear — pick a third point farther "
+                "around the circumference (Esc clears all)"
+            )
+
+        local_r = float(self.settings.detection.local_radius_mm)
+        det = self.settings.detection
+        # Ball only needs to cover the radial shell + short axial extent —
+        # not a huge Euclidean radius that forces a full-cloud scan.
+        half_w, half_len = resolve_cylinder_shell_mm(
+            float(cyl0.radius_mm),
+            shell_half_width_mm=float(det.cylinder_shell_half_width_mm) or None,
+            axial_half_length_mm=float(det.cylinder_axial_half_length_mm) or None,
+        )
+        seed_radius_mm = float(
+            np.hypot(float(cyl0.radius_mm) + half_w, half_len) + 5.0
+        )
+        seed_radius_mm = max(seed_radius_mm, 8.0 * local_r, 40.0)
+        # Also cover the span of the three clicks.
+        span = max(
+            float(np.linalg.norm(seeds[i] - seeds[j]))
+            for i, j in ((0, 1), (0, 2), (1, 2))
+        )
+        seed_radius_mm = max(seed_radius_mm, 0.5 * span + half_w)
+        anchor = (seeds[0] + seeds[1] + seeds[2]) / 3.0
+
+        t_pick0 = time.perf_counter()
+        depth_s = (t_pick0 - wall_t0) if wall_t0 is not None else None
+        self._status(
+            f"picking ({depth_tag}): cylinder from 3-point seed "
+            f"Φ={cyl0.diameter_mm:.1f} mm ..."
+        )
+        QApplication.processEvents()
+
+        had_grid = self.grid is not None
+        t_grid0 = time.perf_counter()
+        grid = self._ensure_grid()
+        grid_build_s = 0.0 if had_grid else time.perf_counter() - t_grid0
+        t_query0 = time.perf_counter()
+        nb = grid.radius_indices(anchor, seed_radius_mm)
+        neighbor_query_s = time.perf_counter() - t_query0
+        pick_detail: dict = {
+            "grid_build_s": grid_build_s,
+            "neighbor_query_s": neighbor_query_s,
+            "neighbor_s": grid_build_s + neighbor_query_s,
+            "n_neighbors": len(nb),
+            "seed_radius_mm": seed_radius_mm,
+            "fit_kind": "cylinder",
+            "pick_mode": "cylinder_shell_3pt",
+            "shell_half_width_mm": half_w,
+            "axial_half_length_mm": half_len,
+        }
+        indices, plane = pick_cylinder_region_from_cylinder(
+            self.full_points,
+            nb,
+            cyl0,
+            anchor=anchor,
+            shell_half_width_mm=half_w,
+            axial_half_length_mm=half_len,
+            timings=pick_detail,
+        )
+        pick_s = time.perf_counter() - t_pick0
+
+        gid = self.next_group_id
+        self.next_group_id += 1
+        g = {
+            "id": gid,
+            "name": f"G{gid}",
+            "visible": True,
+            "color": group_color(gid),
+            "clicked": anchor,
+            "coarse_plane": plane.as_array(),
+            "indices": np.asarray(indices, dtype=np.int64),
+            "fit": None,
+            "_fit_cylinder_init": cyl0,
+        }
+        self.groups.append(g)
+        self.active_group_id = gid
+        self._pick_replace_gid = None
+        action = f"added {g['name']} with {len(indices):,} points (3-pt seed)"
+
+        # Clear seeds after a successful commit.
+        self._cyl_seed_points = []
+        self._refresh_cylinder_seed_markers()
+
+        pts = self.full_points[g["indices"]]
+        coarse_mad = float(mad_sigma(plane.signed_distances(pts)))
+        coarse_msg = f"{action} | {depth_tag} | coarse mad≈{coarse_mad * 1e3:.0f} µm"
+        self._status(coarse_msg)
+        QApplication.processEvents()
+
+        self._refresh_group_actors()
+        self._refresh_tree()
+
+        if self.autofit_cb.isChecked():
+            n_g = len(g["indices"])
+            compute = resolve_compute_backend(
+                self.settings.detection.compute_backend, n_points=n_g
+            )
+            self._status(f"{coarse_msg} → fitting {n_g:,} pts ({compute}) ...")
+            QApplication.processEvents()
+            timing = self._fit_group(g, log=False)
+            t_post0 = time.perf_counter()
+            self._active_plane_index = 0
+            self._refresh_tree()
+            self._show_uv_for_selection()
+            timing["pick_s"] = pick_s
+            if depth_s is not None:
+                timing["depth_s"] = depth_s
+            timing["post_s"] = time.perf_counter() - t_post0
+            timing["wall_s"] = time.perf_counter() - flow_t0
+            timing["pick_detail"] = pick_detail
+            self._log_fit_timing(timing, kind="pick+fit")
+            fit = g.get("fit") or {}
+            c = (fit.get("cylinders") or [None])[0]
+            if c:
+                detail = (
+                    f"cyl Φ={float(c.get('diameter_mm', 0)):.3f}mm "
+                    f"mad≈{float(c.get('mad_sigma_mm') or 0)*1e3:.0f}um {c.get('status')}"
+                )
+            else:
+                detail = "cylinder fit missing"
+            self._status(
+                f"{g['name']}: {detail} [{compute}, "
+                f"{self._fit_timing_status(timing)}]  | {depth_tag}  |  fit.log"
+            )
+        else:
+            timing = {
+                "group": g["name"],
+                "n_pts": len(g["indices"]),
+                "compute": resolve_compute_backend(
+                    self.settings.detection.compute_backend,
+                    n_points=len(g["indices"]),
+                ),
+                "ransac_backend": self.settings.detection.ransac_backend,
+                "multi": False,
+                "fit_s": 0.0,
+                "uv_s": 0.0,
+                "total_s": 0.0,
+                "pick_s": pick_s,
+                "pick_detail": pick_detail,
+                "planes": [],
+                "fit_kind": "cylinder",
+            }
+            if depth_s is not None:
+                timing["depth_s"] = depth_s
+            timing["wall_s"] = time.perf_counter() - flow_t0
+            self._log_fit_timing(timing, kind="pick")
+            self._status(f"{coarse_msg}  |  autofit off")
+
     def _fit_group(self, g, *, log: bool = True) -> dict:
         from dataclasses import replace
 
@@ -1474,6 +1907,67 @@ class GroupsMixin:
         compute = resolve_compute_backend(
             self.settings.detection.compute_backend, n_points=n_pts
         )
+        kind = "plane"
+        if hasattr(self, "fit_kind_cb"):
+            kind = str(self.fit_kind_cb.currentData() or "plane")
+
+        if kind == "cylinder":
+            fixed = bool(self.diameter_fixed_cb.isChecked())
+            diam = float(self.diameter_mm_spin.value()) if fixed else None
+            init = g.pop("_fit_cylinder_init", None)
+            # Adaptive radial threshold (plane's 0.5 mm ceiling is far too tight
+            # for ducts). RANSAC boots at CYLINDER_DEFAULT_RANSAC_MM unless init.
+            res = robust_fit_cylinder(
+                pts,
+                threshold=None,
+                seed=0,
+                init=init,
+                diameter_mm=diam,
+                diameter_fixed=fixed,
+                ransac_iterations=1000,
+            )
+            entry = {
+                "cylinder_index": 0,
+                **cylinder_to_json(res.cylinder),
+                "n_points": int(res.n_inliers),
+                "status": res.status,
+                "reasons": list(res.reasons or []),
+                "mad_sigma_mm": res.stats_inliers.get("mad_sigma"),
+                "threshold_mm": res.threshold,
+                "inlier_local": np.flatnonzero(res.inlier_mask).astype(np.int64),
+            }
+            fit = dict(g.get("fit") or {})
+            # Keep planes key present so tree / UV helpers never KeyError.
+            fit.setdefault("planes", [])
+            fit["cylinders"] = [entry]
+            fit.pop("circles", None)
+            g["fit"] = fit
+            t_uv0 = time.perf_counter()
+            try:
+                mask = res.inlier_mask
+                self._cache_uv_for_cylinder(pts, entry, mask)
+            except Exception:
+                pass
+            t_end = time.perf_counter()
+            timing = {
+                "group": g["name"],
+                "n_pts": n_pts,
+                "compute": compute,
+                "ransac_backend": backend,
+                "multi": False,
+                "fit_kind": "cylinder",
+                "fit_s": t_uv0 - t0,
+                "uv_s": t_end - t_uv0,
+                "total_s": t_end - t0,
+                "cylinders": fit["cylinders"],
+                "ransac_boot_mm": CYLINDER_RANSAC_THRESHOLD_MM,
+            }
+            if log:
+                self._log_fit_timing(timing)
+            self._tree_focus = "cylinder"
+            self._active_cylinder_index = int(entry.get("cylinder_index", 0))
+            return timing
+
         multi = self.multiplane_cb.isChecked()
         if multi:
             mp = MultiPlaneParams()
@@ -1512,22 +2006,25 @@ class GroupsMixin:
                 ),
             }]
         t_fit = time.perf_counter()
-        g["fit"] = {
-            "planes": [
-                {
-                    "plane_index": p["plane_index"],
-                    **plane_to_json(p["result"].plane),
-                    "n_points": p["n_points"],
-                    "status": p["result"].status,
-                    "reasons": p["result"].reasons,
-                    "bimodal": p["bimodal"],
-                    "mad_sigma_mm": p["result"].fit.stats_inliers["mad_sigma"],
-                    "threshold_mm": p["result"].fit.threshold,
-                    "inlier_local": np.flatnonzero(p["mask"]).astype(np.int64),
-                }
-                for p in extracted
-            ]
-        }
+        fit = dict(g.get("fit") or {})
+        fit["planes"] = [
+            {
+                "plane_index": p["plane_index"],
+                **plane_to_json(p["result"].plane),
+                "n_points": p["n_points"],
+                "status": p["result"].status,
+                "reasons": p["result"].reasons,
+                "bimodal": p["bimodal"],
+                "mad_sigma_mm": p["result"].fit.stats_inliers["mad_sigma"],
+                "threshold_mm": p["result"].fit.threshold,
+                "inlier_local": np.flatnonzero(p["mask"]).astype(np.int64),
+            }
+            for p in extracted
+        ]
+        # Keep UV-fitted circles; drop cylinder if switching back to plane.
+        fit.setdefault("circles", list(fit.get("circles") or []))
+        fit.pop("cylinders", None)
+        g["fit"] = fit
         for entry, p in zip(g["fit"]["planes"], extracted):
             self._cache_uv_for_plane(pts, entry, p["mask"])
         t_end = time.perf_counter()
@@ -1537,6 +2034,7 @@ class GroupsMixin:
             "compute": compute,
             "ransac_backend": backend,
             "multi": multi,
+            "fit_kind": "plane",
             "fit_s": t_fit - t0,
             "uv_s": t_end - t_fit,
             "total_s": t_end - t0,
@@ -1565,16 +2063,30 @@ class GroupsMixin:
         timing["post_s"] = time.perf_counter() - t_post0
         timing["wall_s"] = time.perf_counter() - wall_t0
         self._log_fit_timing(timing)
-        planes = g["fit"]["planes"]
-        self._status(
-            f"{g['name']}: {len(planes)} plane(s) [{compute}, "
-            f"{self._fit_timing_status(timing)}]: "
-            + " | ".join(
-                f"p{p['plane_index']} {p['mad_sigma_mm']*1e3:.0f}um {p['status']}"
-                + (" BIMODAL" if p["bimodal"] else "")
-                for p in planes
+        fit = g.get("fit") or {}
+        fit_kind = timing.get("fit_kind") or "plane"
+        if fit_kind == "cylinder" and fit.get("cylinders"):
+            c = fit["cylinders"][0]
+            detail = (
+                f"cyl Φ={float(c.get('diameter_mm', 0)):.3f}mm "
+                f"mad≈{float(c.get('mad_sigma_mm') or 0)*1e3:.0f}um {c.get('status')}"
             )
-            + "  |  fit.log"
+        else:
+            planes = fit.get("planes") or []
+            n_cir = len(fit.get("circles") or [])
+            detail = (
+                f"{len(planes)} plane(s): "
+                + " | ".join(
+                    f"p{p['plane_index']} {p['mad_sigma_mm']*1e3:.0f}um {p['status']}"
+                    + (" BIMODAL" if p.get("bimodal") else "")
+                    for p in planes
+                )
+            )
+            if n_cir:
+                detail += f" · {n_cir} circle(s)"
+        self._status(
+            f"{g['name']}: {detail} [{compute}, "
+            f"{self._fit_timing_status(timing)}]  |  fit.log"
         )
         self._sync_action_states()
 
@@ -1613,6 +2125,8 @@ class GroupsMixin:
                 self._status(f"fitting {g['name']} ...")
                 QApplication.processEvents()
                 self._fit_group(g)
+            else:
+                g.pop("_fit_cylinder_init", None)
             save_group(
                 self.project_dir, g["id"], g["name"],
                 points=self.full_points[g["indices"]],
@@ -1640,37 +2154,8 @@ class GroupsMixin:
     def _load_group_fit(
         self, group_id: int, group_indices: np.ndarray | None
     ) -> dict | None:
-        """Restore fit.planes from group JSON, attaching inlier arrays."""
-        doc = load_group_doc(self.project_dir, group_id)
-        if not doc:
-            return None
-        fit = doc.get("fit")
-        if not isinstance(fit, dict) or not isinstance(fit.get("planes"), list):
-            return None
-        gidx = None if group_indices is None else np.asarray(group_indices, dtype=np.int64)
-        lookup = None if gidx is None else {int(v): i for i, v in enumerate(gidx)}
-        planes = []
-        for p in fit["planes"]:
-            if not isinstance(p, dict):
-                continue
-            if "abcd" not in p and not ("normal" in p and "d" in p):
-                continue
-            entry = dict(p)
-            pi = int(entry.get("plane_index", 0))
-            src = load_plane_inlier_indices(self.project_dir, group_id, pi)
-            if src is not None:
-                src = np.asarray(src, dtype=np.int64)
-                entry["inlier_source"] = src
-                entry["inlier_n"] = int(len(src))
-                if lookup is not None:
-                    local = np.array(
-                        [lookup[int(s)] for s in src if int(s) in lookup],
-                        dtype=np.int64,
-                    )
-                    if len(local) == len(src):
-                        entry["inlier_local"] = local
-            planes.append(entry)
-        return {"planes": planes} if planes else None
+        """Restore fit.planes / cylinders / circles from group JSON."""
+        return load_group_fit(self.project_dir, group_id, group_indices)
 
     def _load_all(self):
         if len(self.full_points) == 0:
@@ -1763,6 +2248,7 @@ class GroupsMixin:
             self._reduction_delete_selected()
             return
         plane_sel: list[tuple[int, int]] = []
+        circle_sel: list[tuple[int, int]] = []
         group_sel: list[int] = []
         if hasattr(self, "tree"):
             for item in self.tree.selectedItems():
@@ -1771,8 +2257,13 @@ class GroupsMixin:
                     continue
                 if data[0] == "plane":
                     plane_sel.append((int(data[1]), int(data[2])))
+                elif data[0] == "circle":
+                    circle_sel.append((int(data[1]), int(data[2])))
                 elif data[0] == "group":
                     group_sel.append(int(data[1]))
+        if circle_sel:
+            self._delete_circles(circle_sel)
+            return
         if plane_sel:
             self._delete_planes(plane_sel)
             return
@@ -1782,6 +2273,42 @@ class GroupsMixin:
         if not gids:
             raise ValueError("no active group")
         self._delete_groups(gids)
+
+    def _delete_circles(self, targets: list[tuple[int, int]]):
+        by_group: dict[int, set[int]] = {}
+        for gid, ci in targets:
+            by_group.setdefault(gid, set()).add(int(ci))
+        labels = []
+        last_gid = None
+        for gid, cis in by_group.items():
+            g = self._get_group(gid)
+            if g is None or not g.get("fit"):
+                continue
+            circles = list(g["fit"].get("circles") or [])
+            gone = [c for c in circles if int(c.get("circle_index", 0)) in cis]
+            keep = [c for c in circles if int(c.get("circle_index", 0)) not in cis]
+            if not gone:
+                continue
+            labels.extend(
+                f"{g['name']}/cir{int(c.get('circle_index', 0))}" for c in gone
+            )
+            last_gid = gid
+            g["fit"]["circles"] = keep
+            if gid == self.active_group_id:
+                if keep:
+                    self._active_circle_index = int(keep[0].get("circle_index", 0))
+                    self._tree_focus = "circle"
+                else:
+                    self._active_circle_index = 0
+                    self._tree_focus = "plane"
+        if last_gid is not None:
+            self.active_group_id = last_gid
+        self._refresh_tree()
+        self._show_uv_for_selection()
+        self._refresh_active_plane_bbox()
+        self._sync_action_states()
+        if labels:
+            self._status("deleted " + ", ".join(labels))
 
     def _delete_planes(self, targets: list[tuple[int, int]]):
         by_group: dict[int, set[int]] = {}
@@ -1802,6 +2329,14 @@ class GroupsMixin:
             last_gid = gid
             if keep:
                 g["fit"]["planes"] = keep
+                # Drop circles that depended on deleted planes.
+                circles = list(g["fit"].get("circles") or [])
+                if circles:
+                    g["fit"]["circles"] = [
+                        c
+                        for c in circles
+                        if int(c.get("support_plane_index", 0)) not in pis
+                    ]
                 if gid == self.active_group_id:
                     cur = int(self._active_plane_index)
                     if cur in pis:
@@ -1811,6 +2346,7 @@ class GroupsMixin:
                 g["fit"] = None
                 if gid == self.active_group_id:
                     self._active_plane_index = 0
+                    self._active_circle_index = 0
                     self._tree_focus = "group"
         if last_gid is not None:
             self.active_group_id = last_gid
@@ -1898,7 +2434,8 @@ class GroupsMixin:
                 f.setBold(True)
                 item.setFont(0, f)
             if g["fit"] is not None:
-                for p in g["fit"]["planes"]:
+                fit = g["fit"] if isinstance(g["fit"], dict) else {}
+                for p in fit.get("planes") or []:
                     abcd = plane_from_json(p).as_array()
                     # When Align Z is active, rewrite the plane equation into the
                     # current view frame so n,d match what the user sees.
@@ -1914,7 +2451,7 @@ class GroupsMixin:
                     qflag = "PASS" if p["status"] == "ok" else "WARN"
                     quality = (
                         f"{qflag}  {p['mad_sigma_mm']*1e3:.0f}um"
-                        + (" BIMODAL" if p["bimodal"] else "")
+                        + (" BIMODAL" if p.get("bimodal") else "")
                     )
                     if "selection_refit" in (p.get("reasons") or []):
                         src = p.get("source_plane_index")
@@ -1937,6 +2474,92 @@ class GroupsMixin:
                     else:
                         child.setForeground(3, QColor(160, 90, 0))
                     item.addChild(child)
+                for c_i, c in enumerate(fit.get("cylinders") or []):
+                    diam = float(c.get("diameter_mm", 0.0))
+                    mad = float(c.get("mad_sigma_mm") or 0.0)
+                    qflag = "PASS" if c.get("status") == "ok" else "WARN"
+                    quality = f"{qflag}  radial {mad*1e3:.0f}um"
+                    if c.get("diameter_fixed"):
+                        quality += "  Φ fixed"
+                    pt = np.asarray(c.get("point", [0, 0, 0]), dtype=np.float64).reshape(3)
+                    direction = np.asarray(
+                        c.get("direction", [0, 0, 1]), dtype=np.float64
+                    ).reshape(3)
+                    if self._view_frame is not None:
+                        pt = self._to_view_point(pt)
+                        direction = self._view_frame.apply_direction(direction)
+                    geom = (
+                        f"Φ={diam:.3f}  "
+                        f"p=({pt[0]:+.1f}, {pt[1]:+.1f}, {pt[2]:+.1f})  "
+                        f"u=({direction[0]:+.3f}, {direction[1]:+.3f}, {direction[2]:+.3f})"
+                    )
+                    child = QTreeWidgetItem(
+                        [
+                            f"cyl{c.get('cylinder_index', c_i)}",
+                            geom,
+                            f"{int(c.get('n_points', 0)):,}",
+                            quality,
+                        ]
+                    )
+                    child.setData(
+                        0,
+                        Qt.UserRole,
+                        ("cylinder", g["id"], int(c.get("cylinder_index", c_i))),
+                    )
+                    child.setFlags(child.flags() & ~Qt.ItemIsUserCheckable)
+                    for col in range(4):
+                        child.setToolTip(col, geom)
+                    if qflag == "PASS":
+                        child.setForeground(3, QColor(31, 122, 31))
+                    else:
+                        child.setForeground(3, QColor(160, 90, 0))
+                    item.addChild(child)
+                for c_i, c in enumerate(fit.get("circles") or []):
+                    diam = float(c.get("diameter_mm", 0.0))
+                    mad = float(c.get("mad_sigma_mm") or 0.0)
+                    qflag = "PASS" if c.get("status") == "ok" else "WARN"
+                    quality = f"{qflag}  radial {mad*1e3:.0f}um"
+                    if c.get("diameter_fixed"):
+                        quality += "  Φ fixed"
+                    center = np.asarray(
+                        c.get("center", [0, 0, 0]), dtype=np.float64
+                    ).reshape(3)
+                    if self._view_frame is not None:
+                        center = self._to_view_point(center)
+                    geom = (
+                        f"Φ={diam:.3f}  "
+                        f"c=({center[0]:+.3f}, {center[1]:+.3f}, {center[2]:+.3f})"
+                    )
+                    child = QTreeWidgetItem(
+                        [
+                            f"cir{c.get('circle_index', c_i)}",
+                            geom,
+                            f"{int(c.get('n_points', 0)):,}",
+                            quality,
+                        ]
+                    )
+                    child.setData(
+                        0,
+                        Qt.UserRole,
+                        ("circle", g["id"], int(c.get("circle_index", c_i))),
+                    )
+                    child.setFlags(child.flags() & ~Qt.ItemIsUserCheckable)
+                    for col in range(4):
+                        child.setToolTip(col, geom)
+                    if (
+                        g["id"] == self.active_group_id
+                        and int(c.get("circle_index", c_i))
+                        == int(getattr(self, "_active_circle_index", 0))
+                    ):
+                        f = child.font(0)
+                        f.setBold(True)
+                        child.setFont(0, f)
+                        child.setForeground(0, QColor(196, 92, 38))
+                    if qflag == "PASS":
+                        child.setForeground(3, QColor(31, 122, 31))
+                    else:
+                        child.setForeground(3, QColor(160, 90, 0))
+                    item.addChild(child)
             self.tree.addTopLevelItem(item)
             item.setExpanded(True)
         self.tree.blockSignals(False)
@@ -1949,6 +2572,7 @@ class GroupsMixin:
         if gid is None:
             return
         pi = self._active_plane_index
+        ci = int(getattr(self, "_active_circle_index", 0))
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
             data = item.data(0, Qt.UserRole)
@@ -1962,6 +2586,13 @@ class GroupsMixin:
                     if cd and cd[0] == "plane" and int(cd[2]) == int(pi):
                         chosen = ch
                         break
+            elif self._tree_focus == "circle":
+                for j in range(item.childCount()):
+                    ch = item.child(j)
+                    cd = ch.data(0, Qt.UserRole)
+                    if cd and cd[0] == "circle" and int(cd[2]) == int(ci):
+                        chosen = ch
+                        break
             self.tree.setCurrentItem(chosen)
             return
 
@@ -1972,21 +2603,28 @@ class GroupsMixin:
             self._reduction_fill_bind_combo()
             return
         data = current.data(0, Qt.UserRole)
-        if data and data[0] in ("group", "plane"):
+        if data and data[0] in ("group", "plane", "circle", "cylinder"):
             gid = data[1]
             if data[0] == "plane":
                 self._active_plane_index = int(data[2])
                 self._tree_focus = "plane"
+            elif data[0] == "circle":
+                self._active_circle_index = int(data[2])
+                self._tree_focus = "circle"
+            elif data[0] == "cylinder":
+                self._active_cylinder_index = int(data[2])
+                self._tree_focus = "cylinder"
             else:
-                self._active_plane_index = 0
-                self._tree_focus = "group"
+                if data[0] == "group":
+                    self._active_plane_index = 0
+                self._tree_focus = "group" if data[0] == "group" else data[0]
             if gid != self.active_group_id:
                 self.active_group_id = gid
                 self._refresh_group_actors()
                 self._refresh_tree()
             self._show_uv_for_selection()
+            self._refresh_active_plane_bbox()
         self._sync_action_states()
-        self._reduction_fill_bind_combo()
         self._reduction_fill_bind_combo()
 
     def _on_item_changed(self, item, column):

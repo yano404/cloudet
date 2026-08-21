@@ -10,53 +10,19 @@ Tool for reducing detector positions and relative geometry from 3D point clouds 
 
 ## Design
 
-- **Extraction contract: one click = one connected physical face = one group = one plane equation.**
+- **Default extraction: one click = one connected physical face = one group = one plane equation.**
   Growth starts at the click seed and expands in-plane; extent is set by connectivity (not by a radius cutoff).
   The seed normal is assumed noisy: accumulate → refit → re-accumulate until convergence
   (full-face recovery from a ~20° tilted seed has been verified).
   Separating nearby parallel faces is an exception mode (GUI “Extract multiple planes (p0, p1, …)”).
+- **Also supported:** cylinders (ducts / pipes; Fit kind = `cylinder`, 3-point circumference seed)
+  and planar circles (marker holes via Residuals UV → **Fit circle on selection**; optional Fix Φ).
+  Circles stay on the supporting Groups plane. Details: [Geometry reduction guide](docs/guide/reduction.md).
 - The compute core (`cloudet/`) depends only on NumPy, is fully decoupled from the GUI, and is covered by unit tests.
-- RANSAC is used only to select points; the final plane is always an orthogonal least-squares fit (`robust_fit_plane`: fit → strict reselection → iterate to convergence).
+- RANSAC is used only to select points; the final plane is always an orthogonal least-squares fit (`robust_fit_plane`: fit → strict reselection → iterate to convergence). Cylinder / circle fits follow the same diameter-based (`diameter_mm`) API.
 - Statistics are reported for both inliers (truncated) and all points, together with a truncation-robust `mad_sigma`.
 - Randomness is seeded for reproducibility.
 - Units are mm; planes use Hesse normal form `n·x + d = 0` (`|n|=1`, with a defined sign convention).
-
-## Layout
-
-```
-cloudet/
-  app_window.py     Qt app entrypoint (→ ui.main_window)
-  cli.py            cloudet [project] [--cloud ...] | reduce | version
-  core/             Shared types, I/O, and spatial indexing
-    plane.py        Plane fit core (LSQ / RANSAC / robust iteration / residual stats)
-    plyio.py        PLY I/O (double precision, Open3D-free)
-    neighbors.py    Spatial indexing / display downsampling
-    array_backend.py  Optional CuPy GPU backend (auto fallback to NumPy)
-  fit/              Face extraction and fitting
-    picking.py      Click-driven region extraction (GUI-independent)
-    mainplane.py    Main plane component extraction (connected components + QC)
-    multiplane.py   Optional multi-plane separation per group
-    pipeline.py     Residual u–v maps (for GUI QC)
-  project/          Saved project layout
-    store.py        manifest / settings / group save
-    groups.py       Group loading
-    spatial_cache.py  VoxelHashGrid / display cache on disk
-    settings_apply.py  Settings apply classification (detection vs display)
-  reduction/        Constructive geometry reduction
-    session.py      Recipe-driven session → geometry.json
-    ops.py          Shared op metadata (GUI ↔ recipe)
-    geometry.py     Offset planes, intersections, rotations
-    frame.py        Display-only Align Z pose (axis → +Z, optional yaw)
-  ui/
-    main_window.py    CloudetAppWindow + run_cloudet_qt
-    groups_mixin.py   Groups / Settings dock, pick, fit, tree
-    reduction_mixin.py  Reduction + Measure docks
-    uv_mixin.py       Residual u–v map dock
-    render_mixin.py   3D actor rendering
-    frame_mixin.py    Align Z view frame
-    widgets.py        Shared Qt styling and helpers
-tests/              Synthetic validation (FARO-like σ ≈ 0.03 mm)
-```
 
 ## Usage
 
@@ -74,7 +40,7 @@ cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
 cloudet reduce ~/surveys/proj1 --recipe recipe.json -o geometry.json
 ```
 
-On Linux/WSL, the `[gpu]` extra installs `cupy-cuda12x[ctk]` (CUDA headers for kernel compile). If CuPy is installed without headers, cloudet falls back to NumPy automatically in `auto` mode.
+The `[gpu]` extra installs `cupy-cuda12x[ctk]` (CUDA headers for kernel compile). If CuPy is installed without headers, cloudet falls back to NumPy automatically in `auto` mode.
 
 ### GPU (optional, NVIDIA + CUDA 12.x)
 
@@ -82,7 +48,7 @@ On Linux/WSL, the `[gpu]` extra installs `cupy-cuda12x[ctk]` (CUDA headers for k
 
 ```bat
 pip install -e ".[dev,gpu]"
-pip install "cupy-cuda12x[ctk]"   # if GPU probe fails: missing CUDA headers (common on WSL)
+pip install "cupy-cuda12x[ctk]"   # if GPU probe fails: missing CUDA headers (often on WSL)
 python -c "import cupy as cp; print(cp.cuda.runtime.getDeviceProperties(0)['name'])"
 cloudet --cloud C:\path\to\scan.ply
 ```
@@ -101,6 +67,8 @@ Project layout:
   groups/
     group_000.ply / .json / _indices.npy
     group_000_p0_indices.npy   # inliers used to fit p0 (optional)
+    group_000_cyl0_indices.npy # cylinder inliers (optional)
+    group_000_cir0_indices.npy # circle inliers (optional)
     ...
   vtk.log          # when using the GUI
 ```
@@ -108,21 +76,29 @@ Project layout:
 Qt UI: set the output folder under PROJECT / Load the cloud under SOURCE /
 `P` pick / overlap only `>` farther and `<` nearer /
 `M` append toggle / `F` fit active / `V` show only active / `Ctrl+S` save groups /
-rename in the tree, toggle visibility, and see per-plane quality in the tree.
-After Fit, the right dock shows a pyqtgraph residual u–v map and a signed-residual histogram (µm).
+rename in the tree, toggle visibility, and see per-plane / cylinder / circle quality in the tree.
+Fit kind **plane** (default) or **cylinder** (3-point seed on the circumference; Esc clears).
+After Fit, the right dock shows Residuals: plane **u–v** map or cylinder **s–z** map, plus a signed-residual histogram (µm or mm-scale for ducts).
 Cmd/Ctrl+drag for rectangle selection (handles for adjustment). Zoom / pan supported.
-Refit selection fits an extra plane on those points and adds it as p1, p2, … on the same group (original plane kept). Import that plane into Reduction as G6_p1.
-Clear refit removes only the extra fit. Selecting a plane switches the display.
+On a plane map: **Fit circle on selection** (optional Fix Φ) appends `cir0`, `cir1`, ….
+Refit selection fits an extra plane on those points and adds it as p1, p2, … on the same group (original plane kept).
+Reduction → **Import from Groups** brings in planes, cylinder axes (→ lines), and circle centers (→ points).
+Clear refit removes only the extra plane fit. Selecting a plane / cylinder / circle switches the display.
 The Groups tab mirrors depth controls with navigator buttons.
+More detail: [GUI guide](docs/guide/gui.md), [reduction guide](docs/guide/reduction.md).
 VTK’s own errors and warnings go to `<project_dir>/vtk.log` instead of the terminal
 (`CLOUDET_VTK_LOG=0` restores PyVista’s default; any other value is used as the log path).
 
 ## Geometry reduction
 
 After Fit + save, faces live in `groups/group_*.json`
-(`fit.planes[].normal` + `d`). Analysis parameters (virtual axes, beam-on-target
+(`fit.planes[].normal` + `d`, and optionally `fit.cylinders[]` /
+`fit.circles[]` with `diameter_mm`). Analysis parameters (virtual axes, beam-on-target
 points, drawing offsets) are derived with a declarative recipe — no point cloud
-required at this stage.
+required at this stage. Full recipe / cylinder–circle bind notes:
+[docs/guide/reduction.md](docs/guide/reduction.md).
+Sample recipes (tracker planes, marker circles, duct ∩ wall):
+[examples/recipes/](examples/recipes/).
 
 ```bash
 cloudet reduce <project> --recipe recipe.json -o geometry.json
@@ -187,6 +163,28 @@ has `frame`. In the GUI, check **Also write aligned-frame coordinates** and
 set FRAME **axis** and **origin** (Align Z is not required for export).
 The GUI also writes a sibling `geometry_recipe.json` for replay.
 
+#### `geometry_summary.json` (slim companion)
+
+Export also writes a sibling **`geometry_summary.json`** next to `geometry.json`
+(CLI and GUI). It keeps only entity **names** and coordinates — no recipe echo,
+provenance, or parents — preferring the **aligned** frame when present,
+otherwise survey. Only ids listed in recipe `export` are included (when that
+list is non-empty). Example:
+
+```json
+{
+  "units": "mm",
+  "frame": "aligned",
+  "planes": {},
+  "lines": {
+    "beam_axis": { "point": [0.0, 0.0, 0.0], "direction": [0.0, 0.0, 1.0] }
+  },
+  "points": {
+    "beam_on_target": { "xyz": [0.0, 0.0, 0.0] }
+  }
+}
+```
+
 #### Aligned triad operands (`aligned.origin` / axes / planes)
 
 When `recipe.frame` sets `axis` and `origin`, construct steps may reference
@@ -240,7 +238,8 @@ In the app, the right-hand docks are tabbed (**Residuals** / **Reduction** / **M
 
 Open **Reduction** to construct geometry:
 
-1. Choose an **operation** — only that step’s inputs appear (plane / axis pickers, offset slider, …)
+1. Choose an **operation** — only that step’s inputs appear (plane / axis pickers, offset slider, …).
+   **Import from Groups** brings in planes, cylinder axes, and circle centers
 2. For **Offset**: pick a plane, drag the distance slider for a green live preview, then Apply
 3. For intersections: pick the required planes/axes, then Apply.
    **Normal ∩ plane → point** shoots the source overlay's normal at another plane.
@@ -276,4 +275,5 @@ Open **Measure** to read distances and angles from those entities:
 1. [done] Core
 2. [done] GUI picker (Fit / residual QC / save)
 3. [done] Constructive geometry reduction (recipe → geometry.json; CLI + GUI)
-4. [todo] Richer recipe editor; detector rigid-body pose helpers
+4. [done] Cylinder and circle fit (Groups + Reduction import; Fix Φ / `diameter_mm`)
+5. [todo] Richer recipe editor; detector rigid-body pose helpers

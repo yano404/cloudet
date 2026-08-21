@@ -49,20 +49,28 @@ from cloudet.reduction.frame import (
     transform_record,
 )
 from cloudet.reduction.geometry import (
+    Line,
     axis_arrow_points,
     line_segment_points,
     plane_patch_corners,
     project_point_to_line,
     project_point_to_plane,
 )
-from cloudet.core.plane import Plane
-from cloudet.project.schema import plane_from_json
+from cloudet.project.schema import (
+    circle_from_json,
+    cylinder_from_json,
+    plane_from_json,
+)
 from cloudet.reduction import (
     export_reduction_result,
+    geometry_summary_path,
     load_recipe,
     preview_construct_step,
+    scanned_circle_point_record,
+    scanned_cylinder_line_record,
     scanned_plane_record,
     write_geometry_json,
+    write_geometry_summary_json,
     write_recipe_json,
 )
 from cloudet.reduction.ops import (
@@ -90,7 +98,14 @@ from cloudet.ui.constants import (
     RD_RECIPE_TO_GUI_OP,
     RD_SELECTED_RING,
 )
-from cloudet.ui.plane_labels import plane_id_token, plane_label
+from cloudet.ui.plane_labels import (
+    circle_id_token,
+    circle_label,
+    cylinder_id_token,
+    cylinder_label,
+    plane_id_token,
+    plane_label,
+)
 from cloudet.ui.widgets import UI_STYLE, _line_tube_mesh, _make_collapsible_card, _reset_combo, _reset_tree_widget
 
 
@@ -165,10 +180,11 @@ class ReductionMixin:
         # page: bind
         bind_page, bind_form = _form_page()
         self.rd_bind_combo = _entity_combo()
-        bind_form.addRow("Groups plane", self.rd_bind_combo)
+        bind_form.addRow("Groups fit", self.rd_bind_combo)
         self.rd_bind_hint = QLabel(
-            "Choose a fitted Groups plane (G6/p0, G6/front, …). "
-            "Imported as G6_p0 or G6_front unless you set New id."
+            "Choose a fitted Groups entity: plane (→ plane), "
+            "cylinder axis (→ line), or circle center (→ point). "
+            "Imported as G6_p0 / G6_cyl0 / G6_cir0 unless you set New id."
         )
         self.rd_bind_hint.setObjectName("muted")
         self.rd_bind_hint.setWordWrap(True)
@@ -682,15 +698,35 @@ class ReductionMixin:
         combo = self.rd_bind_combo
         combo.blockSignals(True)
         _reset_combo(combo)
-        combo.addItem("(choose a fitted Groups plane)", None)
+        combo.addItem("(choose a fitted Groups entity)", None)
         for g in self.groups:
-            planes = (g.get("fit") or {}).get("planes") or []
-            for p in planes:
+            fit = g.get("fit") or {}
+            for p in fit.get("planes") or []:
                 pi = int(p.get("plane_index", 0))
-                key = f"{g['id']}:{pi}"
-                label = f"{g['name']}/{plane_label(p)}"
-                combo.addItem(label, key)
+                key = f"plane:{g['id']}:{pi}"
+                combo.addItem(f"{g['name']}/{plane_label(p)}", key)
+            for c in fit.get("cylinders") or []:
+                ci = int(c.get("cylinder_index", 0))
+                key = f"cylinder:{g['id']}:{ci}"
+                diam = float(c.get("diameter_mm", 0.0))
+                combo.addItem(
+                    f"{g['name']}/{cylinder_label(c)}  Φ{diam:.1f}",
+                    key,
+                )
+            for c in fit.get("circles") or []:
+                ci = int(c.get("circle_index", 0))
+                key = f"circle:{g['id']}:{ci}"
+                diam = float(c.get("diameter_mm", 0.0))
+                combo.addItem(
+                    f"{g['name']}/{circle_label(c)}  Φ{diam:.1f}",
+                    key,
+                )
         if keep:
+            # Accept legacy "gid:plane_index" keys as plane:…
+            if keep.count(":") == 1 and not keep.startswith(
+                ("plane:", "cylinder:", "circle:")
+            ):
+                keep = f"plane:{keep}"
             idx = combo.findData(keep)
             if idx >= 0:
                 combo.setCurrentIndex(idx)
@@ -1247,40 +1283,109 @@ class ReductionMixin:
     def _reduction_bind_active(self):
         key = self._reduction_combo_id(getattr(self, "rd_bind_combo", None))
         if not key:
-            raise ValueError("choose a Groups plane")
-        gid_s, _, pi_s = key.partition(":")
+            raise ValueError("choose a Groups fit entity")
+        # Keys: "plane:{gid}:{index}" | "cylinder:…" | "circle:…"
+        # Legacy plane keys were "{gid}:{index}".
+        parts = str(key).split(":")
+        if len(parts) == 2:
+            kind, gid_s, idx_s = "plane", parts[0], parts[1]
+        elif len(parts) == 3:
+            kind, gid_s, idx_s = parts[0], parts[1], parts[2]
+        else:
+            raise ValueError(f"bad Groups fit key: {key!r}")
+        kind = kind.lower()
         g = self._get_group(int(gid_s))
         if g is None or g.get("fit") is None:
-            raise ValueError("that Groups plane is no longer available; Fit again")
-        planes = g["fit"].get("planes") or []
-        pi = int(pi_s or 0)
-        p = next((x for x in planes if int(x.get("plane_index", 0)) == pi), None)
-        if p is None:
-            raise ValueError(f"no plane_index={pi} on {g['name']}")
-        alias = self.rd_id_edit.text().strip() or f"{g['name']}_{plane_id_token(p)}"
-        plane = plane_from_json(p)
-        quality = {
-            "status": p.get("status"),
-            "mad_sigma_mm": p.get("mad_sigma_mm"),
-            "threshold_mm": p.get("threshold_mm"),
-            "n_points": p.get("n_points"),
-            "bimodal": p.get("bimodal"),
-            "reasons": p.get("reasons"),
-        }
-        self._reduction.bind_scanned(
-            alias,
-            plane,
-            group_name=str(g["name"]),
-            group_id=int(g["id"]),
-            plane_index=pi,
-            quality=quality,
-            anchor=self._reduction_anchor_for_group(g),
+            raise ValueError("that Groups fit is no longer available; Fit again")
+        idx = int(idx_s or 0)
+        fit = g["fit"]
+        quality_keys = (
+            "status",
+            "mad_sigma_mm",
+            "threshold_mm",
+            "n_points",
+            "bimodal",
+            "reasons",
         )
+
+        if kind == "plane":
+            planes = fit.get("planes") or []
+            p = next((x for x in planes if int(x.get("plane_index", 0)) == idx), None)
+            if p is None:
+                raise ValueError(f"no plane_index={idx} on {g['name']}")
+            alias = self.rd_id_edit.text().strip() or f"{g['name']}_{plane_id_token(p)}"
+            plane = plane_from_json(p)
+            quality = {k: p.get(k) for k in quality_keys if p.get(k) is not None}
+            self._reduction.bind_scanned(
+                alias,
+                plane,
+                group_name=str(g["name"]),
+                group_id=int(g["id"]),
+                plane_index=idx,
+                quality=quality,
+                anchor=self._reduction_anchor_for_group(g),
+            )
+            tag = f"{g['name']} / p{idx}"
+        elif kind == "cylinder":
+            cylinders = fit.get("cylinders") or []
+            c = next(
+                (x for x in cylinders if int(x.get("cylinder_index", 0)) == idx),
+                None,
+            )
+            if c is None:
+                raise ValueError(f"no cylinder_index={idx} on {g['name']}")
+            alias = (
+                self.rd_id_edit.text().strip()
+                or f"{g['name']}_{cylinder_id_token(c)}"
+            )
+            cyl = cylinder_from_json(c)
+            line = Line(point=cyl.point, direction=cyl.direction)
+            quality = {k: c.get(k) for k in quality_keys if c.get(k) is not None}
+            self._reduction.bind_scanned_line(
+                alias,
+                line,
+                group_name=str(g["name"]),
+                group_id=int(g["id"]),
+                cylinder_index=idx,
+                diameter_mm=float(cyl.diameter_mm),
+                diameter_fixed=bool(cyl.diameter_fixed),
+                quality=quality,
+                anchor=np.asarray(cyl.point, dtype=np.float64),
+            )
+            tag = f"{g['name']} / cyl{idx}"
+        elif kind == "circle":
+            circles = fit.get("circles") or []
+            c = next(
+                (x for x in circles if int(x.get("circle_index", 0)) == idx),
+                None,
+            )
+            if c is None:
+                raise ValueError(f"no circle_index={idx} on {g['name']}")
+            alias = (
+                self.rd_id_edit.text().strip() or f"{g['name']}_{circle_id_token(c)}"
+            )
+            cir = circle_from_json(c)
+            quality = {k: c.get(k) for k in quality_keys if c.get(k) is not None}
+            self._reduction.bind_scanned_point(
+                alias,
+                cir.center,
+                group_name=str(g["name"]),
+                group_id=int(g["id"]),
+                circle_index=idx,
+                diameter_mm=float(cir.diameter_mm),
+                diameter_fixed=bool(cir.diameter_fixed),
+                normal=cir.normal,
+                quality=quality,
+            )
+            tag = f"{g['name']} / cir{idx}"
+        else:
+            raise ValueError(f"unsupported Groups fit kind {kind!r}")
+
         self.rd_id_edit.clear()
         self._refresh_reduction_tree()
         self._reduction_refresh_operand_combos()
         self._refresh_reduction_actors()
-        self._reduction_status_with_replay(f"imported {alias!r} ← {g['name']} / p{pi}")
+        self._reduction_status_with_replay(f"imported {alias!r} ← {tag}")
 
     def _reduction_clear(self):
         self._reduction.clear()
@@ -1506,7 +1611,6 @@ class ReductionMixin:
             raise ValueError(f"faces.{alias}: unsupported from={src!r}")
         name = spec.get("name")
         group_id = spec.get("group_id")
-        plane_index = int(spec.get("plane_index", 0))
         if name is not None and group_id is not None:
             raise ValueError(f"faces.{alias}: provide name or group_id, not both")
         if name is None and group_id is None:
@@ -1522,35 +1626,114 @@ class ReductionMixin:
             g = self._get_group(int(group_id))
         if g is None or not g.get("fit"):
             return None
-        planes = g["fit"].get("planes") or []
-        p = next(
-            (x for x in planes if int(x.get("plane_index", 0)) == plane_index),
-            None,
+
+        kind = str(spec.get("kind", "plane")).lower()
+        if kind in ("", "face"):
+            kind = "plane"
+        quality_keys = (
+            "status",
+            "mad_sigma_mm",
+            "threshold_mm",
+            "n_points",
+            "bimodal",
+            "reasons",
         )
-        if p is None:
-            raise KeyError(
-                f"faces.{alias}: no plane_index={plane_index} on {g['name']}"
+        anchor = self._reduction_anchor_for_group(g)
+
+        if kind == "plane":
+            plane_index = int(spec.get("plane_index", 0))
+            planes = g["fit"].get("planes") or []
+            p = next(
+                (x for x in planes if int(x.get("plane_index", 0)) == plane_index),
+                None,
             )
-        plane = plane_from_json(p)
-        record = scanned_plane_record(
-            plane,
-            group_id=int(g["id"]),
-            group_name=str(g["name"]),
-            plane_index=plane_index,
-            quality={
-                k: p.get(k)
-                for k in (
-                    "status",
-                    "mad_sigma_mm",
-                    "threshold_mm",
-                    "n_points",
-                    "bimodal",
-                    "reasons",
+            if p is None:
+                raise KeyError(
+                    f"faces.{alias}: no plane_index={plane_index} on {g['name']}"
                 )
-                if p.get(k) is not None
-            },
+            plane = plane_from_json(p)
+            record = scanned_plane_record(
+                plane,
+                group_id=int(g["id"]),
+                group_name=str(g["name"]),
+                plane_index=plane_index,
+                quality={k: p.get(k) for k in quality_keys if p.get(k) is not None},
+            )
+            return plane, record, anchor
+
+        if kind == "cylinder":
+            cylinder_index = int(spec.get("cylinder_index", 0))
+            cylinders = g["fit"].get("cylinders") or []
+            c = next(
+                (
+                    x
+                    for x in cylinders
+                    if int(x.get("cylinder_index", 0)) == cylinder_index
+                ),
+                None,
+            )
+            if c is None:
+                raise KeyError(
+                    f"faces.{alias}: no cylinder_index={cylinder_index} on {g['name']}"
+                )
+            cyl = cylinder_from_json(c)
+            if "diameter_mm" in spec:
+                from cloudet.core.cylinder import Cylinder
+
+                cyl = Cylinder(
+                    point=cyl.point,
+                    direction=cyl.direction,
+                    diameter_mm=float(spec["diameter_mm"]),
+                    diameter_fixed=bool(spec.get("diameter_fixed", True)),
+                )
+            line = Line(point=cyl.point, direction=cyl.direction)
+            record = scanned_cylinder_line_record(
+                cyl,
+                group_id=int(g["id"]),
+                group_name=str(g["name"]),
+                cylinder_index=cylinder_index,
+                quality={k: c.get(k) for k in quality_keys if c.get(k) is not None},
+            )
+            return "line", line, record, np.asarray(cyl.point, dtype=np.float64)
+
+        if kind == "circle":
+            circle_index = int(spec.get("circle_index", 0))
+            circles = g["fit"].get("circles") or []
+            c = next(
+                (x for x in circles if int(x.get("circle_index", 0)) == circle_index),
+                None,
+            )
+            if c is None:
+                raise KeyError(
+                    f"faces.{alias}: no circle_index={circle_index} on {g['name']}"
+                )
+            cir = circle_from_json(c)
+            if "diameter_mm" in spec:
+                from cloudet.core.circle import Circle
+
+                cir = Circle(
+                    center=cir.center,
+                    normal=cir.normal,
+                    diameter_mm=float(spec["diameter_mm"]),
+                    diameter_fixed=bool(spec.get("diameter_fixed", True)),
+                )
+            record = scanned_circle_point_record(
+                cir,
+                group_id=int(g["id"]),
+                group_name=str(g["name"]),
+                circle_index=circle_index,
+                quality={k: c.get(k) for k in quality_keys if c.get(k) is not None},
+            )
+            return (
+                "point",
+                np.asarray(cir.center, dtype=np.float64),
+                record,
+                np.asarray(cir.center, dtype=np.float64),
+            )
+
+        raise ValueError(
+            f"faces.{alias}: unsupported kind={kind!r} (use plane, cylinder, or circle)"
         )
-        return plane, record, self._reduction_anchor_for_group(g)
 
     def _reduction_load_recipe_path(self, path: str | Path, *, confirm: bool = True) -> int:
         path = Path(path)
@@ -1626,6 +1809,8 @@ class ReductionMixin:
         if not path:
             return
         write_geometry_json(path, result)
+        summary_path = geometry_summary_path(path)
+        write_geometry_summary_json(summary_path, result)
         # Also write recipe beside it for reproducibility.
         recipe_path = Path(path).with_name(
             Path(path).stem + "_recipe.json"
@@ -1641,7 +1826,8 @@ class ReductionMixin:
         else:
             frame_note = ", survey only"
         self._status(
-            f"exported {path}  ({len(result.planes)} planes, "
+            f"exported {path} + {summary_path.name}  "
+            f"({len(result.planes)} planes, "
             f"{len(result.lines)} lines, {len(result.points)} points{frame_note})"
         )
 

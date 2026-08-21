@@ -10,53 +10,19 @@ FARO Quantum-S などで取得した三次元点群から、原子核実験用�
 
 ## 設計方針
 
-- **抽出の契約: 1クリック = 連結した1つの物理面 = 1 group = 1平面式**。
+- **既定の抽出: 1クリック = 連結した1つの物理面 = 1 group = 1平面式**。
   クリック点を種に面内へ成長させ、範囲は連結性で決まる（半径では打ち切らない）。
   種の法線は必ず誤差を含む前提で、蓄積 → 再フィット → 再蓄積を収束まで反復する
   （20° 傾いた種からでも面全体を復元することを確認済み）。
   近接平行面の分離は例外モード（GUI「Extract multiple planes (p0, p1, …)」）
+- **加えて:** 円筒（ダクト等。Fit kind = `cylinder`、円周上の 3 点シード）と
+  平面円（マーカー穴。Residuals の UV 選択 → **Fit circle on selection**、任意で Fix Φ）。
+  円の中心は支持平面上に固定。詳細は [位置関係リダクション案内](docs/guide/reduction.md)。
 - 計算コア（`cloudet/`）は numpy のみ依存、GUI と完全分離、単体テストで検証
-- RANSAC は点の選別のみに使い、最終平面は常に直交最小二乗（`robust_fit_plane`: フィット → strict 再選別 → 収束まで反復）
+- RANSAC は点の選別のみに使い、最終平面は常に直交最小二乗（`robust_fit_plane`: フィット → strict 再選別 → 収束まで反復）。円筒・円も直径ベース（`diameter_mm`）の API
 - 統計は inlier（打ち切り）と全点の両方を報告し、打ち切りに頑健な `mad_sigma` を併記
 - 乱数はシード固定で再現可能
 - 単位は mm、平面は Hesse 標準形 `n·x + d = 0`（`|n|=1`、符号規約あり）
-
-## 構成
-
-```
-cloudet/
-  app_window.py     Qt アプリのエントリポイント（→ ui.main_window）
-  cli.py            cloudet [project] [--cloud ...] | reduce | version
-  core/             共通型・I/O・空間インデックス
-    plane.py        平面フィットコア（LSQ / RANSAC / robust 反復・残差統計）
-    plyio.py        PLY 読み書き（double 精度、Open3D 非依存）
-    neighbors.py    空間インデックス / 表示間引き
-    array_backend.py  任意 CuPy GPU バックエンド（無ければ NumPy）
-  fit/              面抽出・フィット
-    picking.py      クリック駆動の領域抽出（GUI 非依存）
-    mainplane.py    main plane component 抽出（連結成分 + QC）
-    multiplane.py   任意の group 内多平面分離
-    pipeline.py     残差 u–v マップ（GUI QC 用）
-  project/          保存プロジェクト
-    store.py        manifest / settings / group 保存
-    groups.py       group 読込
-    spatial_cache.py  VoxelHashGrid / 表示キャッシュ
-    settings_apply.py  設定適用の分類（detection vs display）
-  reduction/        構築型リダクション
-    session.py      レシピ駆動セッション → geometry.json
-    ops.py          操作メタデータ（GUI ↔ recipe）
-    geometry.py     オフセット平面・交差・回転
-    frame.py        表示専用 Align Z 姿勢（軸 → +Z、任意 yaw）
-  ui/
-    main_window.py    CloudetAppWindow + run_cloudet_qt
-    groups_mixin.py   Groups / Settings ドック、ピック、フィット、ツリー
-    reduction_mixin.py  Reduction + Measure ドック
-    uv_mixin.py       残差 u–v マップ ドック
-    render_mixin.py   3D アクター描画
-    frame_mixin.py    Align Z 表示フレーム
-    widgets.py        共通 Qt スタイル・ヘルパー
-tests/              合成データによる検証（σ=0.03mm の FARO 条件を模擬）
-```
 
 ## 使い方
 
@@ -74,7 +40,7 @@ cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
 cloudet reduce ~/surveys/proj1 --recipe recipe.json -o geometry.json
 ```
 
-Linux/WSL では `[gpu]` が `cupy-cuda12x[ctk]`（カーネルコンパイル用 CUDA ヘッダ）を入れます。ヘッダ無しで CuPy だけ入っている場合、`auto` では NumPy に自動フォールバックします。
+`[gpu]` は `cupy-cuda12x[ctk]`（カーネルコンパイル用 CUDA ヘッダ）を入れます。ヘッダ無しで CuPy だけ入っている場合、`auto` では NumPy に自動フォールバックします。
 
 ### GPU（任意・NVIDIA + CUDA 12.x）
 
@@ -82,7 +48,7 @@ Linux/WSL では `[gpu]` が `cupy-cuda12x[ctk]`（カーネルコンパイル�
 
 ```bat
 pip install -e ".[dev,gpu]"
-pip install "cupy-cuda12x[ctk]"   # GPU プローブ失敗時（WSL でヘッダ不足になりがち）
+pip install "cupy-cuda12x[ctk]"   # GPU プローブ失敗時（CUDA ヘッダ不足。WSL で起きやすい）
 python -c "import cupy as cp; print(cp.cuda.runtime.getDeviceProperties(0)['name'])"
 cloudet --cloud C:\path\to\scan.ply
 ```
@@ -92,7 +58,7 @@ Settings → **Compute backend**: `auto`（CuPy が使えるとき）/ `numpy` /
 
 CuPy なし（Mac 等）でも従来どおり NumPy のみで動作します。約 5 万点未満は `auto` でも CPU のままです。`CLOUDET_COMPUTE_BACKEND=numpy` で CPU 固定も可能です。
 
-プロジェクト構成::
+プロジェクト構成:
 
 ```text
 <project>/
@@ -101,6 +67,8 @@ CuPy なし（Mac 等）でも従来どおり NumPy のみで動作します。�
   groups/
     group_000.ply / .json / _indices.npy
     group_000_p0_indices.npy   # p0 の fit に使った inlier（任意）
+    group_000_cyl0_indices.npy # 円筒 inlier（任意）
+    group_000_cir0_indices.npy # 円 inlier（任意）
     ...
   vtk.log          # GUI 利用時
 ```
@@ -108,19 +76,26 @@ CuPy なし（Mac 等）でも従来どおり NumPy のみで動作します。�
 Qt UI: PROJECT で出力フォルダを指定 / SOURCE で点群を Load /
 `P` pick / overlap only `>` farther and `<` nearer /
 `M` append toggle / `F` fit active / `V` show only active / `Ctrl+S` save groups /
-rename in tree, visibility toggle, and per-plane quality in the tree.
-Fit 後は右ドックに pyqtgraph の残差 u–v マップと符号付き残差ヒストグラム（µm）を表示。
+ツリーで rename・表示切替、平面 / 円筒 / 円ごとの品質を確認。
+Fit kind は **plane**（既定）または **cylinder**（円周上 3 点シード。Esc でクリア）。
+Fit 後は右ドック Residuals: 平面は **u–v**、円筒は **s–z**、および符号付き残差ヒストグラム。
 Cmd/Ctrl+ドラッグで矩形選択（ハンドルで調整可）。ズーム／パン対応。
-Refit selection でその点だけの平面を追加し、同じ group の p1, p2, … として保存する（元の平面は残る）。Reduction には G6_p1 として取り込める。
-Clear refit で追加フィットだけ消せる。平面を選ぶと表示が切り替わる。
-The Groups tab mirrors depth controls with navigator buttons.
+平面マップでは **Fit circle on selection**（任意で Fix Φ）で `cir0`, `cir1`, … を追加。
+Refit selection でその点だけの平面を p1, p2, … として追加（元の平面は残る）。
+Reduction → **Import from Groups** で平面・円筒軸（→ 直線）・円中心（→ 点）を取り込める。
+Clear refit で追加平面フィットだけ消せる。平面 / 円筒 / 円を選ぶと表示が切り替わる。
+Groups タブでも depth ナビボタンを使える。
+詳細: [GUI 案内](docs/guide/gui.md)、[リダクション案内](docs/guide/reduction.md)。
 VTK 自身のエラー・警告は端末ではなく `<project_dir>/vtk.log` に出る
 （`CLOUDET_VTK_LOG=0` で PyVista 既定の挙動に戻す。別の値はログ出力先として使う）。
 
 ## 位置関係リダクション
 
-Fit + 保存後、面は `groups/group_*.json` の `fit.planes[].normal` + `d` に残ります。
+Fit + 保存後、面は `groups/group_*.json` の `fit.planes[].normal` + `d` に残ります
+（任意で `fit.cylinders[]` / `fit.circles[]` と直径 `diameter_mm`）。
 解析用パラメータ（仮想軸、ビーム×標的交点、図面オフセット面）は、宣言的レシピで導出します（この段階では点群不要）。
+レシピの詳細・円筒／円の bind は [docs/guide/reduction.md](docs/guide/reduction.md)。
+サンプル（tracker 平面、マーカー円、ダクト∩壁）: [examples/recipes/](examples/recipes/)。
 
 ```bash
 cloudet reduce <project> --recipe recipe.json -o geometry.json
@@ -129,6 +104,28 @@ cloudet migrate <project> [--dry-run]
 
 オフセットの符号: 正の `distance_mm` は平面の Hesse 単位法線方向へ移動（Fit と同じ符号規約）。
 反対側（例: 外向き法線に対する「内側」）は負の距離を使います。
+
+レシピ例（tracker 壁 → ビーム軸 ∩ 標的）:
+
+```json
+{
+  "version": 2,
+  "units": "mm",
+  "faces": {
+    "tracker_left":  { "from": "group", "name": "G0" },
+    "tracker_front": { "from": "group", "name": "G1" },
+    "target":        { "from": "group", "name": "G2" }
+  },
+  "construct": [
+    { "id": "left_in",  "op": "offset", "plane": "tracker_left",  "distance_mm": 12.0 },
+    { "id": "front_in", "op": "offset", "plane": "tracker_front", "distance_mm": 12.0 },
+    { "id": "beam_axis", "op": "intersect_planes", "plane_a": "left_in", "plane_b": "front_in" },
+    { "id": "beam_on_target", "op": "intersect_line_plane", "line": "beam_axis", "plane": "target" }
+  ],
+  "export": ["beam_axis", "beam_on_target"],
+  "frame": { "axis": "beam_axis", "origin": "beam_on_target", "flip_z": false }
+}
+```
 
 旧形式（`abcd`、レシピ v1 の `of` / `a`/`b` など）も読み込み時に変換されます。
 保存と `cloudet migrate` は現行キーのみ書き出します。
@@ -160,6 +157,27 @@ cloudet migrate <project> [--dry-run]
 `frame` を付けます。GUI では **Also write aligned-frame coordinates** にチェックし、
 FRAME の **Axis** と **Origin** を設定してください（Export に Align Z は不要）。
 GUI は同じフォルダに `geometry_recipe.json` も書きます。
+
+#### `geometry_summary.json`（薄いサマリ）
+
+エクスポート時、`geometry.json` の隣に **`geometry_summary.json`** も書きます
+（CLI / GUI）。レシピ echo・provenance・parents は含めず、entity の**名前と座標**
+だけです。`aligned` があればその座標を優先し、なければ survey です。
+レシピの `export` が空でなければ、その id だけを含めます。例:
+
+```json
+{
+  "units": "mm",
+  "frame": "aligned",
+  "planes": {},
+  "lines": {
+    "beam_axis": { "point": [0.0, 0.0, 0.0], "direction": [0.0, 0.0, 1.0] }
+  },
+  "points": {
+    "beam_on_target": { "xyz": [0.0, 0.0, 0.0] }
+  }
+}
+```
 
 #### aligned triad オペランド（原点 / 軸 / 平面）
 
@@ -212,7 +230,8 @@ GUI は Load recipe / Load All でその選択を復元しますが、**Align Z 
 
 **Reduction** で幾何を構築します:
 
-1. まず **操作を選択** — その操作の入力だけ出る（面 / 軸の選択、オフセットスライダーなど）
+1. まず **操作を選択** — その操作の入力だけ出る（面 / 軸の選択、オフセットスライダーなど）。
+   **Import from Groups** で平面・円筒軸・円中心を取り込む
 2. **Offset**: 面を選び、スライダーで距離をプレビュー（緑）→ Apply で確定
 3. 交差系: 必要な面・軸を選んで Apply。
    **Normal ∩ plane → point** は元の面のオーバーレイ位置から法線を別の面に当てた交点です。
@@ -246,4 +265,5 @@ GUI は Load recipe / Load All でその選択を復元しますが、**Align Z 
 1. [完了] コア
 2. [完了] GUI picker（Fit / 残差 QC / 保存）
 3. [完了] 構築型リダクション（レシピ → geometry.json; CLI + GUI）
-4. [未] より高機能なレシピ編集、検出器剛体 pose ヘルパ
+4. [完了] 円筒・円フィット（Groups + Reduction 取り込み; Fix Φ / `diameter_mm`）
+5. [未] より高機能なレシピ編集、検出器剛体 pose ヘルパ

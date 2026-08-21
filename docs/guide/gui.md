@@ -16,6 +16,8 @@ cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
   groups/
     group_000.ply / .json / _indices.npy
     group_000_p0_indices.npy   # inliers used to fit p0 (optional)
+    group_000_cyl0_indices.npy # cylinder inliers (optional)
+    group_000_cir0_indices.npy # circle inliers (optional)
     ...
   vtk.log          # VTK warnings (when using the GUI)
 ```
@@ -51,7 +53,8 @@ After Fit, the right dock shows:
 
 Use `Cmd/Ctrl+drag` for rectangle selection to refit a subset.
 Refit adds extra planes (p1, p2, …) on the same group.
-Import them into Reduction as `G6_p1`.
+Import them into Reduction as `G6_p1`. Cylinder axes and circle centers
+import the same way (`G6_cyl0`, `G6_cir0`).
 
 ## VTK logging
 

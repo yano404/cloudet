@@ -1,0 +1,42 @@
+{
+  "version": 2,
+  "units": "mm",
+  "faces": {
+    "wall": {
+      "from": "group",
+      "name": "G0",
+      "kind": "plane",
+      "plane_index": 0
+    },
+    "duct": {
+      "from": "group",
+      "name": "G14",
+      "kind": "cylinder",
+      "cylinder_index": 0,
+      "diameter_mm": 114.3,
+      "diameter_fixed": true
+    }
+  },
+  "construct": [
+    {
+      "id": "duct_hit_wall",
+      "op": "intersect_line_plane",
+      "line": "duct",
+      "plane": "wall"
+    }
+  ],
+  "export": ["duct", "duct_hit_wall"],
+  "frame": {
+    "axis": "duct",
+    "origin": "duct_hit_wall",
+    "flip_z": false
+  },
+  "measures": [
+    {
+      "id": "duct_wall_angle",
+      "op": "angle_line_plane",
+      "line": "duct",
+      "plane": "wall"
+    }
+  ]
+}

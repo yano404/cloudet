@@ -47,6 +47,16 @@ class AppCommonMixin:
                 keysym,
                 lambda d=delta: self._guard(lambda: self._cycle_pick_depth(d)),
             )
+        # Escape clears an in-progress cylinder 3-point seed (VTK has focus).
+        self.plotter.add_key_event(
+            "Escape",
+            lambda: self._guard(self._clear_cylinder_seeds, busy=False),
+        )
+        QShortcut(
+            QKeySequence(Qt.Key_Escape),
+            self,
+            lambda: self._guard(self._clear_cylinder_seeds, busy=False),
+        )
 
     def _register_settings_help(self, widget: QWidget, html: str):
         """Show setting help inside the window instead of a native tooltip."""

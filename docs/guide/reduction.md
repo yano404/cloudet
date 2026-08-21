@@ -5,6 +5,84 @@ After Fit + save, faces live in `groups/group_*.json`
 beam-on-target points, drawing offsets — are derived with a declarative
 recipe (no point cloud required).
 
+Groups may also store **cylinders** and **circles** (`fit.cylinders[]` /
+`fit.circles[]`) with drawing diameter `diameter_mm` and optional
+`diameter_fixed`.
+
+**Circles on a face (photogrammetry markers):**
+
+1. Fit kind = **plane** (pick / Fit) — supporting plane + UV residual map  
+2. Residuals → select rim → optional **Fix Φ** / **Φ (mm)** beside the button →
+   **Fit circle on selection** — appends `cir0`, `cir1`, …  
+   The supporting Groups plane is **locked**; only the in-plane center
+   (and free Φ) are estimated, so the center lies on that face.
+
+There is no separate Fit kind=`circle`; marker holes have no circumference
+points, so circles are always added from the UV selection. Recipe still binds
+with `"kind": "circle"` and optional `"circle_index"`.
+**Cylinder (ducts / pipes):** Fit kind = `cylinder`. Pick is always
+**3-point seed**: click three non-collinear points on the circumference (same
+cross-section works best). That builds the axis from the circumcircle, then
+expands a radial shell and refines. **Esc** clears an in-progress seed.
+Set **Fix diameter Φ** when the drawing diameter is known.
+
+**Cylinder QC:** Residuals dock shows an unrolled **s–z map** (arc length
+`s = r·θ` × axial `z`) colored by signed radial residual `ρ − Φ/2`, plus a
+histogram. Raise **range ±** if the colorbar saturates (duct residuals are
+often larger than plane µm-scale).
+
+Fit polish uses a **geometric** nonlinear refine (minimize `ρ − r`), after an
+algebraic seed — better on partial arcs than algebraic circle alone. Prefer
+**Fix Φ** when the drawing diameter is known.
+
+**Cylinder shell (Settings → Detection):** under **3 CYLINDER SHELL**:
+- **Cylinder shell ± (radial)** — half-thickness of `|ρ − r|` band (`0` = auto
+  `max(6 mm, 0.15·r)`)
+- **Cylinder axial half-length** — half-length along the axis from the pick /
+  seed (`0` = auto `max(40 mm, 1.0·r)`)
+
+Apply settings before picking; shell size does not rebuild the spatial index.
+
+In the recipe, bind them as faces with `"kind": "cylinder"`
+(→ axis **line**) or `"kind": "circle"` (→ center **point**):
+
+```json
+"bore": {
+  "from": "group",
+  "name": "G3",
+  "kind": "cylinder",
+  "diameter_mm": 80.0,
+  "diameter_fixed": true
+},
+"marker_a": {
+  "from": "group",
+  "name": "G3",
+  "kind": "circle",
+  "circle_index": 0,
+  "diameter_mm": 50.0,
+  "diameter_fixed": true
+}
+```
+
+In the GUI **Reduction** dock, **Import** lists fitted planes, cylinders, and
+circles from Groups. Cylinder axes become line entities (`G3_cyl0`); circle
+centers become point entities (`G3_cir0`). The same kinds load from
+`recipe.json` / `cloudet reduce`.
+
+## Sample recipes
+
+Ready-to-copy JSON in the repository under `examples/recipes/`:
+
+| File | Use case |
+|------|----------|
+| `tracker_planes.json` | Tracker walls → beam axis ∩ target |
+| `marker_baseline.json` | Marker circles → chord / baseline (+ distances) |
+| `duct_on_wall.json` | Cylinder axis ∩ wall → hit point (+ angle) |
+
+Adjust `faces.*.name` / indices to your Groups, then
+`cloudet reduce <project> --recipe …` or **Load recipe…** in the GUI.
+See also `examples/recipes/README.md`.
+
 ## CLI usage
 
 ```bash
@@ -118,6 +196,10 @@ in **survey** coordinates:
 
 When the recipe has `frame`, the output includes `aligned` coordinates
 alongside the survey-frame data.
+
+A sibling **`geometry_summary.json`** is also written (CLI and GUI): names and
+coordinates only, preferring the aligned frame when present, otherwise survey.
+If recipe `export` is non-empty, only those ids are listed.
 
 ## Interactive reduction (GUI)
 

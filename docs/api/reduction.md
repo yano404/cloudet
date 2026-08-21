@@ -1,6 +1,8 @@
 # cloudet.reduction
 
-Constructive geometry: bind fitted planes, apply recipe steps, export `geometry.json`.
+Constructive geometry: bind fitted planes, cylinders (axis lines), and
+circles (centers), apply recipe steps, export `geometry.json` and a slim
+sibling `geometry_summary.json`.
 
 - [`session`](reduction-session.md) — `ReductionSession`, recipe load/run/export
 - [`ops`](reduction-ops.md) — operation metadata used by CLI and GUI forms

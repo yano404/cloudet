@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QCheckBox,
     QDockWidget,
     QDoubleSpinBox,
     QFormLayout,
@@ -23,11 +24,17 @@ from PySide6.QtWidgets import (
 )
 
 from cloudet.core.array_backend import resolve_compute_backend
+from cloudet.core.circle import robust_fit_circle
 from cloudet.fit.mainplane import MainPlaneParams, extract_main_plane
 from cloudet.fit.multiplane import bimodality_flag
-from cloudet.fit.pipeline import residual_uv_map
+from cloudet.fit.pipeline import residual_cylinder_map, residual_uv_map
 from cloudet.core.plane import Plane, mad_sigma
-from cloudet.project.schema import plane_from_json, plane_to_json
+from cloudet.project.schema import (
+    circle_to_json,
+    cylinder_from_json,
+    plane_from_json,
+    plane_to_json,
+)
 from cloudet.ui.constants import FIT_MAX_THRESHOLD_MM
 from cloudet.ui.plane_labels import plane_id_token, plane_label
 from cloudet.ui.uv_plot import _UVSelectViewBox, _rdbu_r_colormap
@@ -54,7 +61,7 @@ class UvMixin:
         lay.addWidget(title)
 
         self.uv_meta_label = QLabel(
-            "Fit a plane to see the u–v map and residual histogram."
+            "Fit a plane or cylinder to see the residual map and histogram."
         )
         self.uv_meta_label.setObjectName("muted")
         self.uv_meta_label.setWordWrap(True)
@@ -74,17 +81,18 @@ class UvMixin:
         self.uv_bins_spin.setSingleStep(20)
         self.uv_bins_spin.setValue(200)
         self.uv_bins_spin.setToolTip(
-            "Number of bins along each u–v axis (N → N×N grid)."
+            "Bins along each map axis (N → N×N). Plane: u–v. Cylinder: s–z."
         )
-        disp_form.addRow("u–v bins", self.uv_bins_spin)
+        disp_form.addRow("map bins", self.uv_bins_spin)
         self.uv_range_spin = QDoubleSpinBox()
-        self.uv_range_spin.setRange(50.0, 2000.0)
+        self.uv_range_spin.setRange(50.0, 5000.0)
         self.uv_range_spin.setDecimals(0)
         self.uv_range_spin.setSingleStep(50.0)
         self.uv_range_spin.setValue(FIT_MAX_THRESHOLD_MM * 1e3)
         self.uv_range_spin.setSuffix(" µm")
         self.uv_range_spin.setToolTip(
-            "Colorbar and histogram half-range (±). Does not change the fitted plane."
+            "Colorbar and histogram half-range (±). Does not change the fit. "
+            "Raise for cylinders (radial residuals are often > 0.5 mm)."
         )
         disp_form.addRow("range ±", self.uv_range_spin)
         disp_lay.addLayout(disp_form)
@@ -92,7 +100,7 @@ class UvMixin:
         self.uv_apply_display_btn = QPushButton("Apply display")
         self.uv_apply_display_btn.setObjectName("secondaryBtn")
         self.uv_apply_display_btn.setToolTip(
-            "Rebuild the u–v map and histogram with the bins / range above."
+            "Rebuild the residual map and histogram with the bins / range above."
         )
         self.uv_apply_display_btn.clicked.connect(
             lambda: self._guard(self._apply_uv_display_settings)
@@ -176,6 +184,37 @@ class UvMixin:
         self.uv_clear_rect_btn.clicked.connect(self._clear_uv_rect)
         sel_btn_row.addWidget(self.uv_clear_rect_btn)
         sel_lay.addLayout(sel_btn_row)
+
+        # Circle Φ next to the circle action (not buried in the Groups dock).
+        cir_row = QHBoxLayout()
+        self.uv_diameter_fixed_cb = QCheckBox("Fix Φ")
+        self.uv_diameter_fixed_cb.setChecked(False)
+        self.uv_diameter_fixed_cb.setToolTip(
+            "Lock circle diameter to Φ (mm). Only the center is estimated."
+        )
+        cir_row.addWidget(self.uv_diameter_fixed_cb)
+        cir_row.addWidget(QLabel("Φ (mm)"))
+        self.uv_diameter_mm_spin = QDoubleSpinBox()
+        self.uv_diameter_mm_spin.setRange(0.01, 1.0e6)
+        self.uv_diameter_mm_spin.setDecimals(3)
+        self.uv_diameter_mm_spin.setValue(50.0)
+        self.uv_diameter_mm_spin.setToolTip(
+            "Drawing diameter for Fit circle on selection (mm)"
+        )
+        cir_row.addWidget(self.uv_diameter_mm_spin, stretch=1)
+        self.uv_fit_circle_btn = QPushButton("Fit circle on selection")
+        self.uv_fit_circle_btn.setObjectName("secondaryBtn")
+        self.uv_fit_circle_btn.setEnabled(False)
+        self.uv_fit_circle_btn.setToolTip(
+            "Append a circle on the active plane from the u–v rectangle "
+            "(cir0, cir1, …). For marker rims, select a thin band on the "
+            "inner or outer edge. Optional Fix Φ above."
+        )
+        self.uv_fit_circle_btn.clicked.connect(
+            lambda: self._guard(self._fit_circle_uv_selection)
+        )
+        cir_row.addWidget(self.uv_fit_circle_btn)
+        sel_lay.addLayout(cir_row)
         lay.addWidget(sel_card)
 
         try:
@@ -243,14 +282,40 @@ class UvMixin:
             return max(float(self.uv_range_spin.value()) * 1e-3, 1e-4)
         return float(FIT_MAX_THRESHOLD_MM)
 
+    def _cylinder_vlim_mm(self, cyl_entry: dict | None = None) -> float:
+        """Colorbar half-range for cylinder radial residuals (mm)."""
+        spin = self._uv_vlim_mm()
+        fit_thr = 0.0
+        if cyl_entry is not None:
+            try:
+                fit_thr = float(cyl_entry.get("threshold_mm") or 0.0)
+            except (TypeError, ValueError):
+                fit_thr = 0.0
+        # Duct fits often need > plane's 0.5 mm; use the larger of spin / fit.
+        return float(max(spin, fit_thr, 1.0))
+
     def _apply_uv_display_settings(self):
         """Rebuild residual plots using the current bins / range controls."""
         g = self._active_group()
         if g is None or g.get("fit") is None:
             raise ValueError("no fitted active group")
+        c = self._active_cylinder_entry()
+        if c is not None and self._residual_map_prefers_cylinder(g):
+            for key in ("uv", "uv_samples", "uv_local_idx", "residual_hist"):
+                c.pop(key, None)
+            bins = self._uv_bins_value()
+            thr = self._cylinder_vlim_mm(c)
+            self._status(
+                f"rebuilding cylinder residual display "
+                f"({bins}² bins, ±{thr*1e3:.0f} µm) ..."
+            )
+            QApplication.processEvents()
+            self._show_uv_for_selection()
+            self._status(f"display updated: {bins}² bins, ±{thr*1e3:.0f} µm")
+            return
         p = self._active_plane_entry()
         if p is None:
-            raise ValueError("no active plane")
+            raise ValueError("no active plane or cylinder")
         for key in ("uv", "uv_samples", "uv_local_idx", "residual_hist"):
             p.pop(key, None)
         rf = p.get("selection_refit")
@@ -351,6 +416,89 @@ class UvMixin:
         plane_entry["residual_hist"] = self._residual_hist_from_r(
             uv["r"], threshold_mm=threshold, mad_mm=mad
         )
+
+    def _cache_uv_for_cylinder(
+        self,
+        pts: np.ndarray,
+        cyl_entry: dict,
+        mask: np.ndarray | None,
+    ):
+        """Build unrolled s–z radial residual map on a cylinder entry."""
+        cyl = cylinder_from_json(cyl_entry)
+        bins = self._uv_bins_value()
+        threshold = float(self._cylinder_vlim_mm(cyl_entry))
+        sz = residual_cylinder_map(
+            pts,
+            cyl,
+            mask=mask,
+            bins=bins,
+            return_points=False,
+        )
+        mad = float(cyl_entry.get("mad_sigma_mm") or mad_sigma(sz["r"]))
+        if mask is None:
+            local_idx = np.arange(len(pts), dtype=np.int32)
+        else:
+            local_idx = np.flatnonzero(mask).astype(np.int32)
+        lo, hi = sz["extents_uvn"]
+        cyl_entry["uv"] = {
+            "mean": sz["mean"],
+            "counts": sz["counts"],
+            "u_edges": sz["u_edges"],
+            "v_edges": sz["v_edges"],
+            "vlim_mm": threshold,
+            "n_used": int(sz["n_used"]),
+            "bins": bins,
+            "kind": "cylinder",
+        }
+        cyl_entry["uv_basis"] = {
+            "basis": "cylinder_sz",
+            "point": np.asarray(sz["center"], dtype=np.float64),
+            "direction": np.asarray(sz["direction"], dtype=np.float64),
+            "e1": np.asarray(sz["e1"], dtype=np.float64),
+            "e2": np.asarray(sz["e2"], dtype=np.float64),
+            "radius_mm": float(sz["radius_mm"]),
+            "lo": np.asarray(lo, dtype=np.float64),
+            "hi": np.asarray(hi, dtype=np.float64),
+        }
+        cyl_entry["uv_local_idx"] = local_idx
+        cyl_entry.pop("uv_samples", None)
+        cyl_entry["residual_hist"] = self._residual_hist_from_r(
+            sz["r"], threshold_mm=threshold, mad_mm=mad
+        )
+
+    def _ensure_cylinder_uv(self, g: dict, cyl_entry: dict) -> dict | None:
+        uv = cyl_entry.get("uv")
+        n_idx = len(g.get("indices", []))
+        want_bins = self._uv_bins_value()
+        want_vlim = float(self._cylinder_vlim_mm(cyl_entry))
+        basis = cyl_entry.get("uv_basis") or {}
+        if (
+            uv is not None
+            and cyl_entry.get("uv_local_idx") is not None
+            and basis.get("basis") == "cylinder_sz"
+            and cyl_entry.get("residual_hist") is not None
+            and int(uv.get("bins", 0)) == want_bins
+        ):
+            uv["vlim_mm"] = want_vlim
+            uv["kind"] = "cylinder"
+            return uv
+        if self.full_points.size == 0 or n_idx == 0:
+            return None
+        pts = self.full_points[g["indices"]]
+        local = cyl_entry.get("inlier_local")
+        mask = None
+        if local is not None and len(local) > 0:
+            mask = np.zeros(len(pts), dtype=bool)
+            idx = np.asarray(local, dtype=np.int64)
+            idx = idx[(idx >= 0) & (idx < len(pts))]
+            mask[idx] = True
+            if int(np.count_nonzero(mask)) < 3:
+                mask = None
+        try:
+            self._cache_uv_for_cylinder(pts, cyl_entry, mask)
+        except ValueError:
+            return None
+        return cyl_entry.get("uv")
 
     def _ensure_uv_samples(self, g: dict, plane_entry: dict) -> dict | None:
         """Build per-point u/v/r samples on demand (selection / refit)."""
@@ -465,6 +613,46 @@ class UvMixin:
         p = self._find_plane(g, self._active_plane_index)
         return p if p is not None else planes[0]
 
+    def _find_cylinder(self, g: dict | None, cylinder_index: int) -> dict | None:
+        if g is None or g.get("fit") is None:
+            return None
+        cylinders = g["fit"].get("cylinders") or []
+        return next(
+            (
+                x
+                for x in cylinders
+                if int(x.get("cylinder_index", 0)) == int(cylinder_index)
+            ),
+            None,
+        )
+
+    def _active_cylinder_entry(self) -> dict | None:
+        g = self._active_group()
+        if g is None or g.get("fit") is None:
+            return None
+        cylinders = g["fit"].get("cylinders") or []
+        if not cylinders:
+            return None
+        ci = int(getattr(self, "_active_cylinder_index", 0))
+        c = self._find_cylinder(g, ci)
+        return c if c is not None else cylinders[0]
+
+    def _residual_map_prefers_cylinder(self, g: dict | None) -> bool:
+        """Prefer cylinder s–z map when focus is cylinder or only cylinders exist."""
+        if g is None or g.get("fit") is None:
+            return False
+        cylinders = g["fit"].get("cylinders") or []
+        if not cylinders:
+            return False
+        planes = g["fit"].get("planes") or []
+        focus = getattr(self, "_tree_focus", "group")
+        if focus == "cylinder":
+            return True
+        if focus in ("plane", "circle"):
+            return False
+        # Group focus: cylinder-only groups.
+        return not planes
+
     def _uv_rect_local_indices(self, plane_entry: dict) -> np.ndarray:
         """Group-local indices of points inside the current u–v rectangle."""
         if self._uv_rect is None:
@@ -486,8 +674,9 @@ class UvMixin:
 
     def _sync_uv_action_buttons(self):
         has_rect = self._uv_rect is not None
-        p = self._active_plane_entry()
         g = self._active_group()
+        cyl_mode = self._residual_map_prefers_cylinder(g)
+        p = None if cyl_mode else self._active_plane_entry()
         has_promoted = bool(
             g is not None
             and g.get("fit")
@@ -498,17 +687,25 @@ class UvMixin:
         )
         has_refit = bool(p is not None and p.get("selection_refit") is not None)
         if hasattr(self, "uv_refit_btn"):
-            self.uv_refit_btn.setEnabled(has_rect)
+            self.uv_refit_btn.setEnabled(has_rect and not cyl_mode)
+        if hasattr(self, "uv_fit_circle_btn"):
+            self.uv_fit_circle_btn.setEnabled(
+                has_rect and p is not None and not cyl_mode
+            )
         if hasattr(self, "uv_clear_rect_btn"):
             self.uv_clear_rect_btn.setEnabled(has_rect)
         if hasattr(self, "uv_clear_refit_btn"):
-            self.uv_clear_refit_btn.setEnabled(has_promoted or has_refit)
+            self.uv_clear_refit_btn.setEnabled(
+                (has_promoted or has_refit) and not cyl_mode
+            )
         if hasattr(self, "uv_map_base_btn"):
             self.uv_map_base_btn.setEnabled(True)
             self.uv_map_base_btn.setChecked(self._uv_map_mode == "base" or not has_refit)
         if hasattr(self, "uv_map_refit_btn"):
-            self.uv_map_refit_btn.setEnabled(has_refit)
-            self.uv_map_refit_btn.setChecked(has_refit and self._uv_map_mode == "refit")
+            self.uv_map_refit_btn.setEnabled(has_refit and not cyl_mode)
+            self.uv_map_refit_btn.setChecked(
+                has_refit and self._uv_map_mode == "refit" and not cyl_mode
+            )
         if not has_refit and self._uv_map_mode == "refit":
             self._uv_map_mode = "base"
 
@@ -648,10 +845,17 @@ class UvMixin:
         rect_note = ""
         if self._uv_rect is not None:
             u0, u1, v0, v1 = self._uv_rect
-            rect_note = (
-                f"  |  rect u[{u0:.1f},{u1:.1f}] v[{v0:.1f},{v1:.1f}] mm"
-                f"  |  {n_hist:,} sel pts"
-            )
+            kind = str((uv or {}).get("kind") or "plane")
+            if kind == "cylinder":
+                rect_note = (
+                    f"  |  rect s[{u0:.1f},{u1:.1f}] z[{v0:.1f},{v1:.1f}] mm"
+                    f"  |  {n_hist:,} sel pts"
+                )
+            else:
+                rect_note = (
+                    f"  |  rect u[{u0:.1f},{u1:.1f}] v[{v0:.1f},{v1:.1f}] mm"
+                    f"  |  {n_hist:,} sel pts"
+                )
         refit_note = ""
         if plane_entry is not None and plane_entry.get("selection_refit") is not None:
             rf = plane_entry["selection_refit"]
@@ -792,6 +996,113 @@ class UvMixin:
             self._status("cleared leftover selection-refit sidecar")
             return
         self._status("no selection-refit plane to remove")
+
+    def _fit_circle_uv_selection(self):
+        """Fit a circle on the u–v selection (marker rim / planar hole edge)."""
+        if self._uv_rect is None:
+            raise ValueError("select a u–v rectangle first")
+        g = self._active_group()
+        if g is None or g.get("fit") is None:
+            raise ValueError("no fitted active group")
+        p = self._active_plane_entry()
+        if p is None:
+            raise ValueError("no supporting plane; Fit a plane first")
+        if p.get("uv") is None and self._ensure_plane_uv(g, p) is None:
+            raise ValueError("u–v map missing; Fit the plane again first")
+        samples = self._ensure_uv_samples(g, p)
+        if samples is None:
+            raise ValueError("u–v samples missing; Fit the plane again first")
+        local = self._uv_rect_local_indices(p)
+        n_sel = int(len(local))
+        if n_sel < 20:
+            raise ValueError(f"too few points in selection ({n_sel}; need ≥ 20)")
+
+        pts = self.full_points[g["indices"]]
+        subset = pts[local]
+        plane = plane_from_json(p)
+        fixed = bool(
+            getattr(self, "uv_diameter_fixed_cb", None) is not None
+            and self.uv_diameter_fixed_cb.isChecked()
+        )
+        diam = (
+            float(self.uv_diameter_mm_spin.value())
+            if fixed and hasattr(self, "uv_diameter_mm_spin")
+            else None
+        )
+        compute = resolve_compute_backend(
+            self.settings.detection.compute_backend, n_points=n_sel
+        )
+        self._status(
+            f"fitting circle on {g['name']}/{plane_label(p)} "
+            f"({n_sel:,} selected pts, {compute}) ..."
+        )
+        QApplication.processEvents()
+
+        t0 = time.perf_counter()
+        cir_res = robust_fit_circle(
+            subset,
+            threshold=FIT_MAX_THRESHOLD_MM,
+            seed=0,
+            plane=plane,
+            diameter_mm=diam,
+            diameter_fixed=fixed,
+            ransac_iterations=800,
+        )
+        t_end = time.perf_counter()
+        cir_local = np.asarray(local, dtype=np.int64)[
+            np.flatnonzero(cir_res.inlier_mask)
+        ]
+        fit = dict(g.get("fit") or {})
+        fit.setdefault("planes", [])
+        existing = list(fit.get("circles") or [])
+        next_index = (
+            0
+            if not existing
+            else max(int(c.get("circle_index", 0)) for c in existing) + 1
+        )
+        circle_entry = {
+            "circle_index": next_index,
+            **circle_to_json(cir_res.circle),
+            "n_points": int(cir_res.n_inliers),
+            "status": cir_res.status,
+            "reasons": list(cir_res.reasons or []) + ["uv_selection"],
+            "mad_sigma_mm": cir_res.stats_inliers.get("mad_sigma"),
+            "threshold_mm": cir_res.threshold,
+            "inlier_local": cir_local.astype(np.int64),
+            "support_plane_index": int(p.get("plane_index", 0)),
+            "n_selected": n_sel,
+        }
+        existing.append(circle_entry)
+        fit["circles"] = existing
+        g["fit"] = fit
+        p["uv_rect"] = tuple(self._uv_rect)
+        self._active_circle_index = next_index
+        self._tree_focus = "circle"
+        timing = {
+            "group": f"{g['name']}/cir{next_index}",
+            "n_pts": n_sel,
+            "compute": compute,
+            "ransac_backend": self.settings.detection.ransac_backend,
+            "multi": False,
+            "fit_kind": "circle",
+            "fit_s": t_end - t0,
+            "uv_s": 0.0,
+            "total_s": t_end - t0,
+            "wall_s": t_end - t0,
+            "circles": [circle_entry],
+        }
+        self._log_fit_timing(timing, kind="uv_circle")
+        self._refresh_tree()
+        self._show_uv_for_selection()
+        self._refresh_active_plane_bbox()
+        self._sync_action_states()
+        mad = float(cir_res.stats_inliers.get("mad_sigma") or 0.0)
+        self._status(
+            f"{g['name']}: cir{next_index} Φ={cir_res.circle.diameter_mm:.3f}mm "
+            f"radial mad≈{mad*1e3:.0f}um {cir_res.status} "
+            f"(UV selection on {plane_label(p)}; "
+            f"{len(existing)} circle(s) on this group)"
+        )
 
     def _refit_uv_selection(self):
         """Fit the u–v selection and append it as the next plane (p1, p2, …)."""
@@ -942,7 +1253,7 @@ class UvMixin:
                 )
             )
 
-    def _clear_uv_plot(self, msg: str = "Fit a plane to see residuals."):
+    def _clear_uv_plot(self, msg: str = "Fit a plane or cylinder to see residuals."):
         if hasattr(self, "uv_meta_label"):
             self.uv_meta_label.setText(msg)
         self._uv_view = None
@@ -953,7 +1264,9 @@ class UvMixin:
         if self._uv_img is not None:
             self._uv_img.clear()
         if self._uv_plot is not None:
-            self._uv_plot.setTitle("u–v map")
+            self._uv_plot.setTitle("residual map")
+            self._uv_plot.setLabel("bottom", "u / s (mm)")
+            self._uv_plot.setLabel("left", "v / z (mm)")
         self._clear_hist_items()
         if self._hist_plot is not None:
             self._hist_plot.setTitle("no data")
@@ -1066,14 +1379,25 @@ class UvMixin:
                 map_note = "selection refit"
             else:
                 map_note = "base fit (refit available)"
-        self._uv_plot.setTitle(f"{title}  ·  u–v map ({map_note})", size="9pt")
+        kind = str(uv.get("kind") or view.get("kind") or "plane")
+        if kind == "cylinder":
+            map_title = f"{title}  ·  s–z map (radial)"
+            if self._uv_plot is not None:
+                self._uv_plot.setLabel("bottom", "s = r·θ (mm)")
+                self._uv_plot.setLabel("left", "z axial (mm)")
+        else:
+            map_title = f"{title}  ·  u–v map ({map_note})"
+            if self._uv_plot is not None:
+                self._uv_plot.setLabel("bottom", "u (mm)")
+                self._uv_plot.setLabel("left", "v (mm)")
+        self._uv_plot.setTitle(map_title, size="9pt")
         # Keep view range stable when toggling base/refit on the same axes.
         if keep_selector or self._uv_rect is not None:
             pass
         else:
             self._uv_plot.getViewBox().autoRange()
 
-        scope = self._uv_hist_scope(p)
+        scope = self._uv_hist_scope(p) if kind != "cylinder" else "cylinder radial"
         self._draw_hist(hist, vlim_um=vlim_um, mad_um=mad_um, scope=scope)
         self._sync_uv_roi_item()
         self._sync_uv_action_buttons()
@@ -1099,6 +1423,7 @@ class UvMixin:
         mad_um: float,
         status: str,
         plane_entry: dict | None = None,
+        kind: str = "plane",
     ):
         self._uv_view = {
             "uv": uv,
@@ -1107,6 +1432,7 @@ class UvMixin:
             "mad_um": mad_um,
             "status": status,
             "plane_entry": plane_entry,
+            "kind": kind,
         }
         self._redraw_uv_view()
 
@@ -1150,7 +1476,34 @@ class UvMixin:
     def _show_uv_for_selection(self):
         g = self._active_group()
         if g is None or g.get("fit") is None:
-            self._clear_uv_plot("Fit a plane to see residuals.")
+            self._clear_uv_plot("Fit a plane or cylinder to see residuals.")
+            return
+        if self._residual_map_prefers_cylinder(g):
+            c = self._active_cylinder_entry()
+            if c is None:
+                self._clear_uv_plot("No cylinders in fit.")
+                return
+            self._uv_map_mode = "base"
+            self._uv_rect = None
+            self._remove_uv_roi()
+            title = f"{g['name']} / cyl{int(c.get('cylinder_index', 0))}"
+            uv = self._ensure_cylinder_uv(g, c)
+            if uv is None:
+                self._clear_uv_plot("Not enough inliers for cylinder residual map.")
+                return
+            hist = c.get("residual_hist")
+            mad_um = float(c.get("mad_sigma_mm") or 0.0) * 1e3
+            status = str(c.get("status", ""))
+            self._draw_uv(
+                uv,
+                hist,
+                title=title,
+                mad_um=mad_um,
+                status=status,
+                plane_entry=c,
+                kind="cylinder",
+            )
+            self._refresh_active_plane_bbox()
             return
         p = self._active_plane_entry()
         if p is None:
@@ -1181,5 +1534,6 @@ class UvMixin:
             mad_um=mad_um,
             status=status,
             plane_entry=p,
+            kind="plane",
         )
         self._refresh_active_plane_bbox()
