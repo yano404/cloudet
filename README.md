@@ -10,13 +10,16 @@ Tool for reducing detector positions and relative geometry from 3D point clouds 
 
 ## Design
 
-- **Extraction contract: one click = one connected physical face = one group = one plane equation.**
+- **Default extraction: one click = one connected physical face = one group = one plane equation.**
   Growth starts at the click seed and expands in-plane; extent is set by connectivity (not by a radius cutoff).
   The seed normal is assumed noisy: accumulate → refit → re-accumulate until convergence
   (full-face recovery from a ~20° tilted seed has been verified).
   Separating nearby parallel faces is an exception mode (GUI “Extract multiple planes (p0, p1, …)”).
+- **Also supported:** cylinders (ducts / pipes; Fit kind = `cylinder`, 3-point circumference seed)
+  and planar circles (marker holes via Residuals UV → **Fit circle on selection**; optional Fix Φ).
+  Circles stay on the supporting Groups plane. Details: [Geometry reduction guide](docs/guide/reduction.md).
 - The compute core (`cloudet/`) depends only on NumPy, is fully decoupled from the GUI, and is covered by unit tests.
-- RANSAC is used only to select points; the final plane is always an orthogonal least-squares fit (`robust_fit_plane`: fit → strict reselection → iterate to convergence).
+- RANSAC is used only to select points; the final plane is always an orthogonal least-squares fit (`robust_fit_plane`: fit → strict reselection → iterate to convergence). Cylinder / circle fits follow the same diameter-based (`diameter_mm`) API.
 - Statistics are reported for both inliers (truncated) and all points, together with a truncation-robust `mad_sigma`.
 - Randomness is seeded for reproducibility.
 - Units are mm; planes use Hesse normal form `n·x + d = 0` (`|n|=1`, with a defined sign convention).
@@ -73,12 +76,16 @@ Project layout:
 Qt UI: set the output folder under PROJECT / Load the cloud under SOURCE /
 `P` pick / overlap only `>` farther and `<` nearer /
 `M` append toggle / `F` fit active / `V` show only active / `Ctrl+S` save groups /
-rename in the tree, toggle visibility, and see per-plane quality in the tree.
-After Fit, the right dock shows a pyqtgraph residual u–v map and a signed-residual histogram (µm).
+rename in the tree, toggle visibility, and see per-plane / cylinder / circle quality in the tree.
+Fit kind **plane** (default) or **cylinder** (3-point seed on the circumference; Esc clears).
+After Fit, the right dock shows Residuals: plane **u–v** map or cylinder **s–z** map, plus a signed-residual histogram (µm or mm-scale for ducts).
 Cmd/Ctrl+drag for rectangle selection (handles for adjustment). Zoom / pan supported.
-Refit selection fits an extra plane on those points and adds it as p1, p2, … on the same group (original plane kept). Import that plane into Reduction as G6_p1.
-Clear refit removes only the extra fit. Selecting a plane switches the display.
+On a plane map: **Fit circle on selection** (optional Fix Φ) appends `cir0`, `cir1`, ….
+Refit selection fits an extra plane on those points and adds it as p1, p2, … on the same group (original plane kept).
+Reduction → **Import from Groups** brings in planes, cylinder axes (→ lines), and circle centers (→ points).
+Clear refit removes only the extra plane fit. Selecting a plane / cylinder / circle switches the display.
 The Groups tab mirrors depth controls with navigator buttons.
+More detail: [GUI guide](docs/guide/gui.md), [reduction guide](docs/guide/reduction.md).
 VTK’s own errors and warnings go to `<project_dir>/vtk.log` instead of the terminal
 (`CLOUDET_VTK_LOG=0` restores PyVista’s default; any other value is used as the log path).
 
@@ -88,7 +95,8 @@ After Fit + save, faces live in `groups/group_*.json`
 (`fit.planes[].normal` + `d`, and optionally `fit.cylinders[]` /
 `fit.circles[]` with `diameter_mm`). Analysis parameters (virtual axes, beam-on-target
 points, drawing offsets) are derived with a declarative recipe — no point cloud
-required at this stage.
+required at this stage. Full recipe / cylinder–circle bind notes:
+[docs/guide/reduction.md](docs/guide/reduction.md).
 
 ```bash
 cloudet reduce <project> --recipe recipe.json -o geometry.json
@@ -228,7 +236,8 @@ In the app, the right-hand docks are tabbed (**Residuals** / **Reduction** / **M
 
 Open **Reduction** to construct geometry:
 
-1. Choose an **operation** — only that step’s inputs appear (plane / axis pickers, offset slider, …)
+1. Choose an **operation** — only that step’s inputs appear (plane / axis pickers, offset slider, …).
+   **Import from Groups** brings in planes, cylinder axes, and circle centers
 2. For **Offset**: pick a plane, drag the distance slider for a green live preview, then Apply
 3. For intersections: pick the required planes/axes, then Apply.
    **Normal ∩ plane → point** shoots the source overlay's normal at another plane.
@@ -264,4 +273,5 @@ Open **Measure** to read distances and angles from those entities:
 1. [done] Core
 2. [done] GUI picker (Fit / residual QC / save)
 3. [done] Constructive geometry reduction (recipe → geometry.json; CLI + GUI)
-4. [todo] Richer recipe editor; detector rigid-body pose helpers
+4. [done] Cylinder and circle fit (Groups + Reduction import; Fix Φ / `diameter_mm`)
+5. [todo] Richer recipe editor; detector rigid-body pose helpers
