@@ -21,43 +21,6 @@ FARO Quantum-S などで取得した三次元点群から、原子核実験用�
 - 乱数はシード固定で再現可能
 - 単位は mm、平面は Hesse 標準形 `n·x + d = 0`（`|n|=1`、符号規約あり）
 
-## 構成
-
-```
-cloudet/
-  app_window.py     Qt アプリのエントリポイント（→ ui.main_window）
-  cli.py            cloudet [project] [--cloud ...] | reduce | version
-  core/             共通型・I/O・空間インデックス
-    plane.py        平面フィットコア（LSQ / RANSAC / robust 反復・残差統計）
-    plyio.py        PLY 読み書き（double 精度、Open3D 非依存）
-    neighbors.py    空間インデックス / 表示間引き
-    array_backend.py  任意 CuPy GPU バックエンド（無ければ NumPy）
-  fit/              面抽出・フィット
-    picking.py      クリック駆動の領域抽出（GUI 非依存）
-    mainplane.py    main plane component 抽出（連結成分 + QC）
-    multiplane.py   任意の group 内多平面分離
-    pipeline.py     残差 u–v マップ（GUI QC 用）
-  project/          保存プロジェクト
-    store.py        manifest / settings / group 保存
-    groups.py       group 読込
-    spatial_cache.py  VoxelHashGrid / 表示キャッシュ
-    settings_apply.py  設定適用の分類（detection vs display）
-  reduction/        構築型リダクション
-    session.py      レシピ駆動セッション → geometry.json
-    ops.py          操作メタデータ（GUI ↔ recipe）
-    geometry.py     オフセット平面・交差・回転
-    frame.py        表示専用 Align Z 姿勢（軸 → +Z、任意 yaw）
-  ui/
-    main_window.py    CloudetAppWindow + run_cloudet_qt
-    groups_mixin.py   Groups / Settings ドック、ピック、フィット、ツリー
-    reduction_mixin.py  Reduction + Measure ドック
-    uv_mixin.py       残差 u–v マップ ドック
-    render_mixin.py   3D アクター描画
-    frame_mixin.py    Align Z 表示フレーム
-    widgets.py        共通 Qt スタイル・ヘルパー
-tests/              合成データによる検証（σ=0.03mm の FARO 条件を模擬）
-```
-
 ## 使い方
 
 ```bash
@@ -91,6 +54,21 @@ Settings → **Compute backend**: `auto`（CuPy が使えるとき）/ `numpy` /
 **Display downsampling method** の `auto` も CuPy を Open3D より優先します。
 
 CuPy なし（Mac 等）でも従来どおり NumPy のみで動作します。約 5 万点未満は `auto` でも CPU のままです。`CLOUDET_COMPUTE_BACKEND=numpy` で CPU 固定も可能です。
+
+プロジェクト構成:
+
+```text
+<project>/
+  manifest.json
+  settings.json
+  groups/
+    group_000.ply / .json / _indices.npy
+    group_000_p0_indices.npy   # p0 の fit に使った inlier（任意）
+    group_000_cyl0_indices.npy # 円筒 inlier（任意）
+    group_000_cir0_indices.npy # 円 inlier（任意）
+    ...
+  vtk.log          # GUI 利用時
+```
 
 Qt UI: PROJECT で出力フォルダを指定 / SOURCE で点群を Load /
 `P` pick / overlap only `>` farther and `<` nearer /

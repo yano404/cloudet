@@ -21,43 +21,6 @@ Tool for reducing detector positions and relative geometry from 3D point clouds 
 - Randomness is seeded for reproducibility.
 - Units are mm; planes use Hesse normal form `n·x + d = 0` (`|n|=1`, with a defined sign convention).
 
-## Layout
-
-```
-cloudet/
-  app_window.py     Qt app entrypoint (→ ui.main_window)
-  cli.py            cloudet [project] [--cloud ...] | reduce | version
-  core/             Shared types, I/O, and spatial indexing
-    plane.py        Plane fit core (LSQ / RANSAC / robust iteration / residual stats)
-    plyio.py        PLY I/O (double precision, Open3D-free)
-    neighbors.py    Spatial indexing / display downsampling
-    array_backend.py  Optional CuPy GPU backend (auto fallback to NumPy)
-  fit/              Face extraction and fitting
-    picking.py      Click-driven region extraction (GUI-independent)
-    mainplane.py    Main plane component extraction (connected components + QC)
-    multiplane.py   Optional multi-plane separation per group
-    pipeline.py     Residual u–v maps (for GUI QC)
-  project/          Saved project layout
-    store.py        manifest / settings / group save
-    groups.py       Group loading
-    spatial_cache.py  VoxelHashGrid / display cache on disk
-    settings_apply.py  Settings apply classification (detection vs display)
-  reduction/        Constructive geometry reduction
-    session.py      Recipe-driven session → geometry.json
-    ops.py          Shared op metadata (GUI ↔ recipe)
-    geometry.py     Offset planes, intersections, rotations
-    frame.py        Display-only Align Z pose (axis → +Z, optional yaw)
-  ui/
-    main_window.py    CloudetAppWindow + run_cloudet_qt
-    groups_mixin.py   Groups / Settings dock, pick, fit, tree
-    reduction_mixin.py  Reduction + Measure docks
-    uv_mixin.py       Residual u–v map dock
-    render_mixin.py   3D actor rendering
-    frame_mixin.py    Align Z view frame
-    widgets.py        Shared Qt styling and helpers
-tests/              Synthetic validation (FARO-like σ ≈ 0.03 mm)
-```
-
 ## Usage
 
 ```bash
@@ -91,6 +54,21 @@ In Settings → **Compute backend**: `auto` (CuPy when available), `numpy`, or `
 **Display downsampling method** `auto` also prefers CuPy over Open3D when installed.
 
 CuPy is not required: Mac and CPU-only machines keep using NumPy. Clouds under ~50k points stay on CPU even in `auto` mode. Set `CLOUDET_COMPUTE_BACKEND=numpy` to force CPU.
+
+Project layout:
+
+```text
+<project>/
+  manifest.json
+  settings.json
+  groups/
+    group_000.ply / .json / _indices.npy
+    group_000_p0_indices.npy   # inliers used to fit p0 (optional)
+    group_000_cyl0_indices.npy # cylinder inliers (optional)
+    group_000_cir0_indices.npy # circle inliers (optional)
+    ...
+  vtk.log          # when using the GUI
+```
 
 Qt UI: set the output folder under PROJECT / Load the cloud under SOURCE /
 `P` pick / overlap only `>` farther and `<` nearer /
