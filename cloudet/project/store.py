@@ -66,6 +66,7 @@ __all__ = [
     "plane_inlier_indices_path",
     "load_group_doc",
     "load_group_docs",
+    "load_group_fit",
     "load_fitted_plane",
     "load_fitted_cylinder",
     "load_fitted_circle",
@@ -271,6 +272,8 @@ def _jsonable_fit_summary(fit_summary: dict | None) -> dict | None:
         "mad_sigma_mm",
         "threshold_mm",
         "name",
+        "support_plane_index",
+        "n_selected",
         "inlier_indices_file",
         "inlier_n",
     )
@@ -481,6 +484,84 @@ def load_group_docs(project_dir: str | Path) -> list[dict]:
             docs.append(migrate_group_doc(json.load(f)))
     docs.sort(key=lambda d: int(d["group_id"]))
     return docs
+
+
+def load_group_fit(
+    project_dir: str | Path,
+    group_id: int,
+    group_indices: np.ndarray | None = None,
+) -> dict | None:
+    """Restore ``fit`` (planes, cylinders, circles) from a saved group JSON.
+
+    Attaches plane inlier arrays when ``group_*_p*_indices.npy`` files exist.
+    Returns None when the group has no usable fit entities.
+    """
+    doc = load_group_doc(project_dir, group_id)
+    if not doc:
+        return None
+    fit = doc.get("fit")
+    if not isinstance(fit, dict):
+        return None
+
+    gidx = None if group_indices is None else np.asarray(group_indices, dtype=np.int64)
+    lookup = None if gidx is None else {int(v): i for i, v in enumerate(gidx)}
+
+    planes: list[dict] = []
+    raw_planes = fit.get("planes")
+    if isinstance(raw_planes, list):
+        for p in raw_planes:
+            if not isinstance(p, dict):
+                continue
+            if "abcd" not in p and not ("normal" in p and "d" in p):
+                continue
+            entry = dict(p)
+            pi = int(entry.get("plane_index", 0))
+            src = load_plane_inlier_indices(project_dir, group_id, pi)
+            if src is not None:
+                src = np.asarray(src, dtype=np.int64)
+                entry["inlier_source"] = src
+                entry["inlier_n"] = int(len(src))
+                if lookup is not None:
+                    local = np.array(
+                        [lookup[int(s)] for s in src if int(s) in lookup],
+                        dtype=np.int64,
+                    )
+                    if len(local) == len(src):
+                        entry["inlier_local"] = local
+            planes.append(entry)
+
+    cylinders: list[dict] = []
+    for c in fit.get("cylinders") or []:
+        if not isinstance(c, dict):
+            continue
+        try:
+            cyl = cylinder_from_json(c)
+        except (KeyError, TypeError, ValueError):
+            continue
+        entry = dict(c)
+        entry.update(cylinder_to_json(cyl))
+        cylinders.append(entry)
+
+    circles: list[dict] = []
+    for c in fit.get("circles") or []:
+        if not isinstance(c, dict):
+            continue
+        try:
+            cir = circle_from_json(c)
+        except (KeyError, TypeError, ValueError):
+            continue
+        entry = dict(c)
+        entry.update(circle_to_json(cir))
+        circles.append(entry)
+
+    if not planes and not cylinders and not circles:
+        return None
+    out: dict = {"planes": planes}
+    if cylinders:
+        out["cylinders"] = cylinders
+    if circles:
+        out["circles"] = circles
+    return out
 
 
 def _planes_from_fit(fit: dict | None, *, group_label: str) -> list[dict]:

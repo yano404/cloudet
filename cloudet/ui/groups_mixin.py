@@ -74,9 +74,8 @@ from cloudet.core.plyio import read_ply_xyz
 from cloudet.project import (
     SourceInfo,
     ViewSettings,
-    load_group_doc,
+    load_group_fit,
     load_group_indices,
-    load_plane_inlier_indices,
     load_settings,
     load_manifest,
     save_group,
@@ -2155,37 +2154,8 @@ class GroupsMixin:
     def _load_group_fit(
         self, group_id: int, group_indices: np.ndarray | None
     ) -> dict | None:
-        """Restore fit.planes from group JSON, attaching inlier arrays."""
-        doc = load_group_doc(self.project_dir, group_id)
-        if not doc:
-            return None
-        fit = doc.get("fit")
-        if not isinstance(fit, dict) or not isinstance(fit.get("planes"), list):
-            return None
-        gidx = None if group_indices is None else np.asarray(group_indices, dtype=np.int64)
-        lookup = None if gidx is None else {int(v): i for i, v in enumerate(gidx)}
-        planes = []
-        for p in fit["planes"]:
-            if not isinstance(p, dict):
-                continue
-            if "abcd" not in p and not ("normal" in p and "d" in p):
-                continue
-            entry = dict(p)
-            pi = int(entry.get("plane_index", 0))
-            src = load_plane_inlier_indices(self.project_dir, group_id, pi)
-            if src is not None:
-                src = np.asarray(src, dtype=np.int64)
-                entry["inlier_source"] = src
-                entry["inlier_n"] = int(len(src))
-                if lookup is not None:
-                    local = np.array(
-                        [lookup[int(s)] for s in src if int(s) in lookup],
-                        dtype=np.int64,
-                    )
-                    if len(local) == len(src):
-                        entry["inlier_local"] = local
-            planes.append(entry)
-        return {"planes": planes} if planes else None
+        """Restore fit.planes / cylinders / circles from group JSON."""
+        return load_group_fit(self.project_dir, group_id, group_indices)
 
     def _load_all(self):
         if len(self.full_points) == 0:

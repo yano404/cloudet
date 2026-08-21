@@ -598,6 +598,55 @@ def test_cylinder_circle_json_roundtrip_and_group_save(tmp_path):
     assert "cylinders" in doc["fit"]
     assert "circles" in doc["fit"]
 
+    from cloudet.project.store import load_group_fit
+
+    restored = load_group_fit(tmp_path, 0)
+    assert restored is not None
+    assert len(restored.get("cylinders") or []) == 1
+    assert len(restored.get("circles") or []) == 1
+    assert restored["cylinders"][0]["diameter_mm"] == pytest.approx(80.0)
+    assert restored["circles"][0]["diameter_mm"] == pytest.approx(50.0)
+
+
+def test_load_group_fit_cylinder_only_without_planes(tmp_path):
+    """Cylinder-only groups must reload even when fit.planes is empty."""
+    from cloudet.project.store import load_group_fit
+
+    pts = _cylinder_cloud(n=80, seed=3)
+    params = PickParams()
+    cyl = Cylinder(
+        point=[0, 0, 0],
+        direction=[0, 0, 1],
+        diameter_mm=80.0,
+        diameter_fixed=True,
+    )
+    save_group(
+        tmp_path,
+        1,
+        "duct",
+        pts,
+        None,
+        None,
+        None,
+        detection=params,
+        fit_summary={
+            "planes": [],
+            "cylinders": [
+                {
+                    "cylinder_index": 0,
+                    **cylinder_to_json(cyl),
+                    "n_points": 80,
+                    "status": "ok",
+                }
+            ],
+        },
+    )
+    restored = load_group_fit(tmp_path, 1)
+    assert restored is not None
+    assert restored.get("planes") == []
+    assert len(restored["cylinders"]) == 1
+    assert "circles" not in restored
+
 
 def test_load_fitted_circle_by_index(tmp_path):
     from cloudet.core.circle import Circle
