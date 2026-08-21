@@ -74,7 +74,7 @@ cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
 cloudet reduce ~/surveys/proj1 --recipe recipe.json -o geometry.json
 ```
 
-On Linux/WSL, the `[gpu]` extra installs `cupy-cuda12x[ctk]` (CUDA headers for kernel compile). If CuPy is installed without headers, cloudet falls back to NumPy automatically in `auto` mode.
+The `[gpu]` extra installs `cupy-cuda12x[ctk]` (CUDA headers for kernel compile). If CuPy is installed without headers, cloudet falls back to NumPy automatically in `auto` mode.
 
 ### GPU (optional, NVIDIA + CUDA 12.x)
 
@@ -82,7 +82,7 @@ On Linux/WSL, the `[gpu]` extra installs `cupy-cuda12x[ctk]` (CUDA headers for k
 
 ```bat
 pip install -e ".[dev,gpu]"
-pip install "cupy-cuda12x[ctk]"   # if GPU probe fails: missing CUDA headers (common on WSL)
+pip install "cupy-cuda12x[ctk]"   # if GPU probe fails: missing CUDA headers (often on WSL)
 python -c "import cupy as cp; print(cp.cuda.runtime.getDeviceProperties(0)['name'])"
 cloudet --cloud C:\path\to\scan.ply
 ```
@@ -91,21 +91,6 @@ In Settings → **Compute backend**: `auto` (CuPy when available), `numpy`, or `
 **Display downsampling method** `auto` also prefers CuPy over Open3D when installed.
 
 CuPy is not required: Mac and CPU-only machines keep using NumPy. Clouds under ~50k points stay on CPU even in `auto` mode. Set `CLOUDET_COMPUTE_BACKEND=numpy` to force CPU.
-
-Project layout:
-
-```text
-<project>/
-  manifest.json
-  settings.json
-  groups/
-    group_000.ply / .json / _indices.npy
-    group_000_p0_indices.npy   # inliers used to fit p0 (optional)
-    group_000_cyl0_indices.npy # cylinder inliers (optional)
-    group_000_cir0_indices.npy # circle inliers (optional)
-    ...
-  vtk.log          # when using the GUI
-```
 
 Qt UI: set the output folder under PROJECT / Load the cloud under SOURCE /
 `P` pick / overlap only `>` farther and `<` nearer /

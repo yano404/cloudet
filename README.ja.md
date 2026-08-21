@@ -74,7 +74,7 @@ cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
 cloudet reduce ~/surveys/proj1 --recipe recipe.json -o geometry.json
 ```
 
-Linux/WSL では `[gpu]` が `cupy-cuda12x[ctk]`（カーネルコンパイル用 CUDA ヘッダ）を入れます。ヘッダ無しで CuPy だけ入っている場合、`auto` では NumPy に自動フォールバックします。
+`[gpu]` は `cupy-cuda12x[ctk]`（カーネルコンパイル用 CUDA ヘッダ）を入れます。ヘッダ無しで CuPy だけ入っている場合、`auto` では NumPy に自動フォールバックします。
 
 ### GPU（任意・NVIDIA + CUDA 12.x）
 
@@ -82,7 +82,7 @@ Linux/WSL では `[gpu]` が `cupy-cuda12x[ctk]`（カーネルコンパイル�
 
 ```bat
 pip install -e ".[dev,gpu]"
-pip install "cupy-cuda12x[ctk]"   # GPU プローブ失敗時（WSL でヘッダ不足になりがち）
+pip install "cupy-cuda12x[ctk]"   # GPU プローブ失敗時（CUDA ヘッダ不足。WSL で起きやすい）
 python -c "import cupy as cp; print(cp.cuda.runtime.getDeviceProperties(0)['name'])"
 cloudet --cloud C:\path\to\scan.ply
 ```
@@ -91,21 +91,6 @@ Settings → **Compute backend**: `auto`（CuPy が使えるとき）/ `numpy` /
 **Display downsampling method** の `auto` も CuPy を Open3D より優先します。
 
 CuPy なし（Mac 等）でも従来どおり NumPy のみで動作します。約 5 万点未満は `auto` でも CPU のままです。`CLOUDET_COMPUTE_BACKEND=numpy` で CPU 固定も可能です。
-
-プロジェクト構成::
-
-```text
-<project>/
-  manifest.json
-  settings.json
-  groups/
-    group_000.ply / .json / _indices.npy
-    group_000_p0_indices.npy   # p0 の fit に使った inlier（任意）
-    group_000_cyl0_indices.npy # 円筒 inlier（任意）
-    group_000_cir0_indices.npy # 円 inlier（任意）
-    ...
-  vtk.log          # GUI 利用時
-```
 
 Qt UI: PROJECT で出力フォルダを指定 / SOURCE で点群を Load /
 `P` pick / overlap only `>` farther and `<` nearer /
