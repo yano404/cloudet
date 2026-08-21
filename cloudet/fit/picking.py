@@ -1,21 +1,12 @@
-"""Click-driven plane-region extraction (GUI-independent logic).
+"""Click-driven region extraction (GUI-independent logic).
 
-Given a clicked 3D position on the cloud, fit a local plane to the
-neighbourhood and accumulate points belonging to that surface.
+**Planes:** fit a local plane near the click, progressively expand the
+in-plane region, then accumulate the connected component on the face.
 
-Wide planar faces are easy to cut diagonally if the local normal is
-even slightly tilted: a thin infinite slab then selects a band that
-crosses the true face. To reduce that failure mode this module:
-
-1. Fits a local plane near the click (RANSAC + LSQ).
-2. Progressively expands an in-plane radius from the click, refitting
-   the plane each round so the normal can correct before the region
-   grows across the whole face. Intermediate rounds skip connectivity
-   (radius + slab only) so they stay cheap on large clouds.
-3. Accumulates on the full cloud, restricted by default to the in-plane
-   connected component containing the click, then refits and re-accumulates
-   until the region stabilises. The contract is one click -> one connected
-   physical face, so the region is bounded by connectivity, not by radius.
+**Cylinders:** filter a seed ball to a radial shell about an estimated or
+user-seeded axis (``pick_cylinder_region`` /
+``pick_cylinder_region_from_cylinder``), with optional shell thickness
+from ``PickParams``.
 """
 
 from __future__ import annotations
@@ -26,10 +17,21 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from cloudet.core.array_backend import DevicePoints, get_context
+from cloudet.core.cylinder import (
+    CYLINDER_PICK_MAX_BALL_POINTS,
+    distances_to_axis,
+)
 from cloudet.fit.mainplane import inplane_basis, label_components
 from cloudet.core.plane import Plane, fit_plane_lsq, run_ransac
 
-__all__ = ["PickParams", "pick_plane_region"]
+__all__ = [
+    "PickParams",
+    "pick_plane_region",
+    "pick_ball_region",
+    "pick_cylinder_region",
+    "pick_cylinder_region_from_cylinder",
+    "resolve_cylinder_shell_mm",
+]
 
 _EXPAND_MAX_CELLS = 160
 
@@ -58,6 +60,32 @@ class PickParams:
     # Full-resolution accumulate <-> refit passes (corrects a tilted seed)
     final_refit_rounds: int = 3
     final_refit_tolerance: float = 0.01  # stop when the region changes < 1%
+    # Cylinder shell pick: 0 → auto from estimated / fixed radius.
+    cylinder_shell_half_width_mm: float = 0.0
+    cylinder_axial_half_length_mm: float = 0.0
+
+
+def resolve_cylinder_shell_mm(
+    radius_mm: float,
+    *,
+    shell_half_width_mm: float | None = None,
+    axial_half_length_mm: float | None = None,
+) -> tuple[float, float]:
+    """Resolve cylinder shell half-thickness and axial half-length (mm).
+
+    ``0`` / ``None`` means auto: radial ``max(6, 0.15·r)``, axial
+    ``max(40, 1.0·r)``.
+    """
+    r = max(float(radius_mm), 1e-6)
+    if shell_half_width_mm is None or float(shell_half_width_mm) <= 0.0:
+        half_w = float(max(6.0, 0.15 * r))
+    else:
+        half_w = float(shell_half_width_mm)
+    if axial_half_length_mm is None or float(axial_half_length_mm) <= 0.0:
+        half_len = float(max(40.0, 1.0 * r))
+    else:
+        half_len = float(axial_half_length_mm)
+    return half_w, half_len
 
 
 def _plane_distances(
@@ -480,6 +508,236 @@ def _accumulate_with_refit(
         )
         timings["n_candidates"] = int(len(idx))
     return idx, plane
+
+
+def pick_ball_region(
+    points: np.ndarray,
+    clicked: np.ndarray,
+    ball_idx: np.ndarray,
+    *,
+    timings: dict | None = None,
+) -> tuple[np.ndarray, Plane]:
+    """Keep points in a ball around the click (legacy cylinder seed).
+
+    Prefer ``pick_cylinder_region`` for ducts/pipes (radial shell filter).
+    """
+    points = np.asarray(points, dtype=np.float64)
+    ball_idx = np.asarray(ball_idx, dtype=np.int64)
+    clicked = np.asarray(clicked, dtype=np.float64).reshape(3)
+    t0 = time.perf_counter()
+    if len(ball_idx) < 3:
+        raise ValueError(
+            f"cylinder pick: too few points in seed ball ({len(ball_idx)}; "
+            "increase Pick local radius or click a denser area)"
+        )
+    rng = np.random.default_rng(0)
+    if len(ball_idx) > 5000:
+        sample = ball_idx[rng.choice(len(ball_idx), size=5000, replace=False)]
+    else:
+        sample = ball_idx
+    plane = fit_plane_lsq(points[sample])
+    if timings is not None:
+        timings.update({
+            "local_fit_s": time.perf_counter() - t0,
+            "progressive_s": 0.0,
+            "accumulate_s": 0.0,
+            "n_candidates": int(len(ball_idx)),
+            "pick_mode": "ball",
+        })
+    return ball_idx.astype(np.int64, copy=False), plane
+
+
+def pick_cylinder_region(
+    points: np.ndarray,
+    clicked: np.ndarray,
+    ball_idx: np.ndarray,
+    *,
+    diameter_mm: float | None = None,
+    shell_half_width_mm: float | None = None,
+    axial_half_length_mm: float | None = None,
+    max_ball_points: int = CYLINDER_PICK_MAX_BALL_POINTS,
+    timings: dict | None = None,
+) -> tuple[np.ndarray, Plane]:
+    """Filter a seed ball to a cylindrical shell around a PCA axis.
+
+    1. PCA axis from the ball (largest-variance direction).
+    2. Seed radius = ``diameter_mm/2`` if given, else median distance to axis
+       among points near the click.
+    3. Keep points with ``|radial − r| ≤ shell_half_width`` and axial distance
+       from the click projection within ``axial_half_length``.
+
+    Returns filtered indices and a coarse LSQ plane for group bookkeeping.
+
+    Never promotes the full cloud to float64 — only the seed-ball subset
+    is copied (and subsampled if larger than ``max_ball_points``).
+    """
+    # Index into the caller's array as-is (often float32); do not cast all points.
+    points_all = np.asarray(points)
+    ball_idx = np.asarray(ball_idx, dtype=np.int64)
+    clicked = np.asarray(clicked, dtype=np.float64).reshape(3)
+    t0 = time.perf_counter()
+    if len(ball_idx) < 3:
+        raise ValueError(
+            f"cylinder pick: too few points in seed ball ({len(ball_idx)}; "
+            "increase Pick local radius or click a denser area)"
+        )
+
+    max_ball = max(3, int(max_ball_points))
+    n_ball_raw = int(len(ball_idx))
+    rng = np.random.default_rng(0)
+    if n_ball_raw > max_ball:
+        ball_idx = ball_idx[rng.choice(n_ball_raw, size=max_ball, replace=False)]
+
+    # Promote only the (possibly subsampled) ball — not the whole cloud.
+    pts = np.asarray(points_all[ball_idx], dtype=np.float64, order="C")
+    centroid = pts.mean(axis=0)
+    centered = pts - centroid
+    cov = centered.T @ centered
+    evals, evecs = np.linalg.eigh(cov)
+    u = evecs[:, int(np.argmax(evals))]
+    u = u / np.linalg.norm(u)
+
+    # Prefer axis through the click neighborhood: axis point near click.
+    axis_point = clicked - float((clicked - centroid) @ u) * u
+    radial = distances_to_axis(pts, axis_point, u)
+    # Local ring estimate: points within 25 mm of the click (Euclidean).
+    near = np.linalg.norm(pts - clicked, axis=1) <= 25.0
+    if int(np.count_nonzero(near)) >= 20:
+        seed_r = float(np.median(radial[near]))
+    else:
+        seed_r = float(np.median(radial))
+    if diameter_mm is not None and float(diameter_mm) > 0:
+        seed_r = 0.5 * float(diameter_mm)
+    if not np.isfinite(seed_r) or seed_r <= 0:
+        seed_r = 40.0
+
+    half_w, half_len = resolve_cylinder_shell_mm(
+        seed_r,
+        shell_half_width_mm=shell_half_width_mm,
+        axial_half_length_mm=axial_half_length_mm,
+    )
+
+    t_ax = (pts - clicked) @ u
+    shell = (np.abs(radial - seed_r) <= half_w) & (np.abs(t_ax) <= half_len)
+    keep = ball_idx[shell]
+    if len(keep) < 50:
+        # Loosen shell once so tiny ducts / sparse scans still get a seed.
+        shell = (np.abs(radial - seed_r) <= 2.0 * half_w) & (
+            np.abs(t_ax) <= 2.0 * half_len
+        )
+        keep = ball_idx[shell]
+    if len(keep) < 20:
+        # Last resort: subsample the ball — never return millions of points.
+        if len(ball_idx) > 80_000:
+            keep = ball_idx[rng.choice(len(ball_idx), size=80_000, replace=False)]
+        else:
+            keep = ball_idx
+
+    sample = keep
+    if len(keep) > 5000:
+        sample = keep[rng.choice(len(keep), size=5000, replace=False)]
+    plane = fit_plane_lsq(np.asarray(points_all[sample], dtype=np.float64))
+    if timings is not None:
+        timings.update({
+            "local_fit_s": time.perf_counter() - t0,
+            "progressive_s": 0.0,
+            "accumulate_s": 0.0,
+            "n_candidates": int(len(keep)),
+            "n_ball": n_ball_raw,
+            "n_ball_used": int(len(ball_idx)),
+            "seed_radius_mm": float(seed_r),
+            "shell_half_width_mm": float(half_w),
+            "axial_half_length_mm": float(half_len),
+            "pick_mode": "cylinder_shell",
+        })
+    return keep.astype(np.int64, copy=False), plane
+
+
+def pick_cylinder_region_from_cylinder(
+    points: np.ndarray,
+    ball_idx: np.ndarray,
+    cylinder,
+    *,
+    anchor: np.ndarray | None = None,
+    shell_half_width_mm: float | None = None,
+    axial_half_length_mm: float | None = None,
+    max_ball_points: int = CYLINDER_PICK_MAX_BALL_POINTS,
+    timings: dict | None = None,
+) -> tuple[np.ndarray, Plane]:
+    """Filter a seed ball using a known cylinder axis / radius.
+
+    Used after a 3-point circumference seed: PCA is skipped; the shell is
+    centered on ``cylinder.point`` / ``cylinder.direction`` / radius.
+    ``anchor`` (default: cylinder axis point) limits axial extent.
+    """
+    from cloudet.core.cylinder import Cylinder
+
+    if not isinstance(cylinder, Cylinder):
+        raise TypeError("cylinder must be a Cylinder")
+    points_all = np.asarray(points)
+    ball_idx = np.asarray(ball_idx, dtype=np.int64)
+    t0 = time.perf_counter()
+    if len(ball_idx) < 3:
+        raise ValueError(
+            f"cylinder pick: too few points in seed ball ({len(ball_idx)})"
+        )
+
+    max_ball = max(3, int(max_ball_points))
+    n_ball_raw = int(len(ball_idx))
+    rng = np.random.default_rng(0)
+    if n_ball_raw > max_ball:
+        ball_idx = ball_idx[rng.choice(n_ball_raw, size=max_ball, replace=False)]
+
+    pts = np.asarray(points_all[ball_idx], dtype=np.float64, order="C")
+    u = np.asarray(cylinder.direction, dtype=np.float64).reshape(3)
+    u = u / np.linalg.norm(u)
+    axis_point = np.asarray(cylinder.point, dtype=np.float64).reshape(3)
+    seed_r = float(cylinder.radius_mm)
+    if anchor is None:
+        anchor = axis_point
+    else:
+        anchor = np.asarray(anchor, dtype=np.float64).reshape(3)
+
+    half_w, half_len = resolve_cylinder_shell_mm(
+        seed_r,
+        shell_half_width_mm=shell_half_width_mm,
+        axial_half_length_mm=axial_half_length_mm,
+    )
+
+    radial = distances_to_axis(pts, axis_point, u)
+    t_ax = (pts - anchor) @ u
+    shell = (np.abs(radial - seed_r) <= half_w) & (np.abs(t_ax) <= half_len)
+    keep = ball_idx[shell]
+    if len(keep) < 50:
+        shell = (np.abs(radial - seed_r) <= 2.0 * half_w) & (
+            np.abs(t_ax) <= 2.0 * half_len
+        )
+        keep = ball_idx[shell]
+    if len(keep) < 20:
+        # Last resort: subsample the ball — never return millions of points.
+        if len(ball_idx) > 80_000:
+            keep = ball_idx[rng.choice(len(ball_idx), size=80_000, replace=False)]
+        else:
+            keep = ball_idx
+
+    sample = keep
+    if len(keep) > 5000:
+        sample = keep[rng.choice(len(keep), size=5000, replace=False)]
+    plane = fit_plane_lsq(np.asarray(points_all[sample], dtype=np.float64))
+    if timings is not None:
+        timings.update({
+            "local_fit_s": time.perf_counter() - t0,
+            "progressive_s": 0.0,
+            "accumulate_s": 0.0,
+            "n_candidates": int(len(keep)),
+            "n_ball": n_ball_raw,
+            "n_ball_used": int(len(ball_idx)),
+            "seed_radius_mm": float(seed_r),
+            "shell_half_width_mm": float(half_w),
+            "axial_half_length_mm": float(half_len),
+            "pick_mode": "cylinder_shell_3pt",
+        })
+    return keep.astype(np.int64, copy=False), plane
 
 
 def pick_plane_region(

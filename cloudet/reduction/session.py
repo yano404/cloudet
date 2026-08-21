@@ -62,7 +62,13 @@ from cloudet.project.schema import (
     plane_from_json,
     plane_to_json,
 )
-from cloudet.project import FittedPlane, load_fitted_plane, load_group_doc
+from cloudet.project import (
+    FittedPlane,
+    load_fitted_circle,
+    load_fitted_cylinder,
+    load_fitted_plane,
+    load_group_doc,
+)
 from cloudet.reduction.ops import MEASURE_OPERAND_FIELDS, REDUCTION_OP_BY_RECIPE
 
 __all__ = [
@@ -76,6 +82,8 @@ __all__ = [
     "preview_construct_step",
     "run_reduction",
     "scanned_plane_record",
+    "scanned_cylinder_line_record",
+    "scanned_circle_point_record",
     "write_geometry_json",
     "write_geometry_summary_json",
     "write_recipe_json",
@@ -107,6 +115,62 @@ def scanned_plane_record(
         "group_id": int(group_id),
         "group_name": str(group_name),
         "plane_index": int(plane_index),
+        "quality": {
+            k: quality[k]
+            for k in _SCANNED_QUALITY_KEYS
+            if quality.get(k) is not None
+        },
+    }
+
+
+def scanned_cylinder_line_record(
+    cyl,
+    *,
+    group_id: int,
+    group_name: str,
+    cylinder_index: int = 0,
+    quality: dict | None = None,
+) -> dict:
+    """Record for a scanned cylinder bound as an axis line."""
+    quality = dict(quality or {})
+    return {
+        "point": np.asarray(cyl.point, dtype=np.float64).tolist(),
+        "direction": np.asarray(cyl.direction, dtype=np.float64).tolist(),
+        "provenance": "scanned",
+        "source_kind": "cylinder",
+        "group_id": int(group_id),
+        "group_name": str(group_name),
+        "cylinder_index": int(cylinder_index),
+        "diameter_mm": float(cyl.diameter_mm),
+        "diameter_fixed": bool(cyl.diameter_fixed),
+        "quality": {
+            k: quality[k]
+            for k in _SCANNED_QUALITY_KEYS
+            if quality.get(k) is not None
+        },
+    }
+
+
+def scanned_circle_point_record(
+    cir,
+    *,
+    group_id: int,
+    group_name: str,
+    circle_index: int = 0,
+    quality: dict | None = None,
+) -> dict:
+    """Record for a scanned circle bound as its center point."""
+    quality = dict(quality or {})
+    return {
+        "xyz": np.asarray(cir.center, dtype=np.float64).tolist(),
+        "provenance": "scanned",
+        "source_kind": "circle",
+        "group_id": int(group_id),
+        "group_name": str(group_name),
+        "circle_index": int(circle_index),
+        "diameter_mm": float(cir.diameter_mm),
+        "diameter_fixed": bool(cir.diameter_fixed),
+        "normal": np.asarray(cir.normal, dtype=np.float64).tolist(),
         "quality": {
             k: quality[k]
             for k in _SCANNED_QUALITY_KEYS
@@ -175,7 +239,11 @@ def _recipe_fingerprint(recipe: dict) -> dict:
     return {"sha256": hashlib.sha256(raw).hexdigest(), "echo": recipe}
 
 
-def _bind_face(project_dir: Path, alias: str, spec: dict) -> tuple[Plane, dict]:
+def _bind_face(project_dir: Path, alias: str, spec: dict) -> tuple[str, Any, dict]:
+    """Resolve a recipe face to ``(kind, value, record)``.
+
+    ``kind`` is ``plane``, ``line`` (cylinder axis), or ``point`` (circle center).
+    """
     if not isinstance(spec, dict):
         raise ValueError(f"faces.{alias}: expected object, got {type(spec).__name__}")
     src = spec.get("from", "group")
@@ -184,26 +252,92 @@ def _bind_face(project_dir: Path, alias: str, spec: dict) -> tuple[Plane, dict]:
 
     name = spec.get("name")
     group_id = spec.get("group_id")
-    plane_index = int(spec.get("plane_index", 0))
     if name is not None and group_id is not None:
         raise ValueError(f"faces.{alias}: provide name or group_id, not both")
     if name is None and group_id is None:
         raise ValueError(f"faces.{alias}: need name or group_id")
 
-    fitted: FittedPlane = load_fitted_plane(
-        project_dir,
-        name=None if name is None else str(name),
-        group_id=None if group_id is None else int(group_id),
-        plane_index=plane_index,
+    kind = str(spec.get("kind", "plane")).lower()
+    if kind in ("", "plane", "face"):
+        plane_index = int(spec.get("plane_index", 0))
+        fitted: FittedPlane = load_fitted_plane(
+            project_dir,
+            name=None if name is None else str(name),
+            group_id=None if group_id is None else int(group_id),
+            plane_index=plane_index,
+        )
+        record = scanned_plane_record(
+            fitted.plane,
+            group_id=fitted.group_id,
+            group_name=fitted.group_name,
+            plane_index=fitted.plane_index,
+            quality=fitted.quality,
+        )
+        return "plane", fitted.plane, record
+
+    if kind == "cylinder":
+        cylinder_index = int(spec.get("cylinder_index", 0))
+        fitted_c = load_fitted_cylinder(
+            project_dir,
+            name=None if name is None else str(name),
+            group_id=None if group_id is None else int(group_id),
+            cylinder_index=cylinder_index,
+        )
+        cyl = fitted_c.cylinder
+        # Recipe may override / document fixed diameter.
+        if "diameter_mm" in spec:
+            from cloudet.core.cylinder import Cylinder
+
+            diam = float(spec["diameter_mm"])
+            fixed = bool(spec.get("diameter_fixed", True))
+            cyl = Cylinder(
+                point=cyl.point,
+                direction=cyl.direction,
+                diameter_mm=diam,
+                diameter_fixed=fixed,
+            )
+        line = Line(point=cyl.point, direction=cyl.direction)
+        record = scanned_cylinder_line_record(
+            cyl,
+            group_id=fitted_c.group_id,
+            group_name=fitted_c.group_name,
+            cylinder_index=fitted_c.cylinder_index,
+            quality=fitted_c.quality,
+        )
+        return "line", line, record
+
+    if kind == "circle":
+        circle_index = int(spec.get("circle_index", 0))
+        fitted_r = load_fitted_circle(
+            project_dir,
+            name=None if name is None else str(name),
+            group_id=None if group_id is None else int(group_id),
+            circle_index=circle_index,
+        )
+        cir = fitted_r.circle
+        if "diameter_mm" in spec:
+            from cloudet.core.circle import Circle
+
+            diam = float(spec["diameter_mm"])
+            fixed = bool(spec.get("diameter_fixed", True))
+            cir = Circle(
+                center=cir.center,
+                normal=cir.normal,
+                diameter_mm=diam,
+                diameter_fixed=fixed,
+            )
+        record = scanned_circle_point_record(
+            cir,
+            group_id=fitted_r.group_id,
+            group_name=fitted_r.group_name,
+            circle_index=fitted_r.circle_index,
+            quality=fitted_r.quality,
+        )
+        return "point", np.asarray(cir.center, dtype=np.float64), record
+
+    raise ValueError(
+        f"faces.{alias}: unsupported kind={kind!r} (use plane, cylinder, or circle)"
     )
-    record = scanned_plane_record(
-        fitted.plane,
-        group_id=fitted.group_id,
-        group_name=fitted.group_name,
-        plane_index=fitted.plane_index,
-        quality=fitted.quality,
-    )
-    return fitted.plane, record
 
 
 def _require_plane(
@@ -1344,11 +1478,125 @@ class ReductionSession:
         self._face_specs[alias] = {
             "from": "group",
             "name": str(group_name),
+            "kind": "plane",
             "plane_index": int(plane_index),
         }
         self.visible[alias] = True
         if anchor is not None:
             self.anchors[alias] = np.asarray(anchor, dtype=np.float64).reshape(3)
+        if self._construct:
+            self._replay_construct()
+
+    def bind_scanned_line(
+        self,
+        alias: str,
+        line: Line,
+        *,
+        group_name: str,
+        group_id: int,
+        cylinder_index: int = 0,
+        diameter_mm: float,
+        diameter_fixed: bool = False,
+        quality: dict | None = None,
+        anchor: np.ndarray | None = None,
+        face_spec: dict | None = None,
+    ) -> None:
+        """Register a scanned cylinder axis as a line entity."""
+        from cloudet.core.cylinder import Cylinder
+
+        alias = str(alias)
+        if alias in self._store and self._store[alias].kind != "line":
+            raise ValueError(f"{alias!r} exists as non-line")
+        if alias in self._store:
+            del self._store[alias]
+        cyl = Cylinder(
+            point=line.point,
+            direction=line.direction,
+            diameter_mm=float(diameter_mm),
+            diameter_fixed=bool(diameter_fixed),
+        )
+        record = scanned_cylinder_line_record(
+            cyl,
+            group_name=str(group_name),
+            group_id=int(group_id),
+            cylinder_index=int(cylinder_index),
+            quality=dict(quality or {}),
+        )
+        self._store[alias] = _Entity(kind="line", value=line, record=record)
+        spec = {
+            "from": "group",
+            "name": str(group_name),
+            "kind": "cylinder",
+            "cylinder_index": int(cylinder_index),
+            "diameter_mm": float(diameter_mm),
+            "diameter_fixed": bool(diameter_fixed),
+        }
+        if face_spec:
+            spec.update(face_spec)
+        self._face_specs[alias] = spec
+        self.visible[alias] = True
+        if anchor is not None:
+            self.anchors[alias] = np.asarray(anchor, dtype=np.float64).reshape(3)
+        else:
+            self.anchors[alias] = np.asarray(line.point, dtype=np.float64).reshape(3)
+        if self._construct:
+            self._replay_construct()
+
+    def bind_scanned_point(
+        self,
+        alias: str,
+        point: np.ndarray,
+        *,
+        group_name: str,
+        group_id: int,
+        circle_index: int = 0,
+        diameter_mm: float,
+        diameter_fixed: bool = False,
+        normal: np.ndarray | None = None,
+        quality: dict | None = None,
+        face_spec: dict | None = None,
+    ) -> None:
+        """Register a scanned circle center as a point entity."""
+        from cloudet.core.circle import Circle
+
+        alias = str(alias)
+        if alias in self._store and self._store[alias].kind != "point":
+            raise ValueError(f"{alias!r} exists as non-point")
+        if alias in self._store:
+            del self._store[alias]
+        xyz = np.asarray(point, dtype=np.float64).reshape(3)
+        nrm = (
+            np.array([0.0, 0.0, 1.0])
+            if normal is None
+            else np.asarray(normal, dtype=np.float64).reshape(3)
+        )
+        cir = Circle(
+            center=xyz,
+            normal=nrm,
+            diameter_mm=float(diameter_mm),
+            diameter_fixed=bool(diameter_fixed),
+        )
+        record = scanned_circle_point_record(
+            cir,
+            group_name=str(group_name),
+            group_id=int(group_id),
+            circle_index=int(circle_index),
+            quality=dict(quality or {}),
+        )
+        self._store[alias] = _Entity(kind="point", value=xyz, record=record)
+        spec = {
+            "from": "group",
+            "name": str(group_name),
+            "kind": "circle",
+            "circle_index": int(circle_index),
+            "diameter_mm": float(diameter_mm),
+            "diameter_fixed": bool(diameter_fixed),
+        }
+        if face_spec:
+            spec.update(face_spec)
+        self._face_specs[alias] = spec
+        self.visible[alias] = True
+        self.anchors[alias] = xyz.copy()
         if self._construct:
             self._replay_construct()
 
@@ -1567,19 +1815,54 @@ class ReductionSession:
             if resolved is None:
                 if project_path is None:
                     raise ValueError(f"faces.{alias}: cannot resolve (no project_dir)")
-                plane, record = _bind_face(project_path, alias, spec)
+                kind, value, record = _bind_face(project_path, alias, spec)
                 anchor = _anchor_from_project(project_path, record.get("group_id"))
             else:
-                plane, record, anchor = resolved
-            target.bind_scanned(
-                alias,
-                plane,
-                group_name=str(record.get("group_name", alias)),
-                group_id=int(record.get("group_id", 0)),
-                plane_index=int(record.get("plane_index", 0)),
-                quality=record.get("quality") or {},
-                anchor=anchor,
-            )
+                # Custom binders may return plane-style (plane, record, anchor)
+                # or tagged (kind, value, record, anchor).
+                if len(resolved) == 3:
+                    kind, value, record = "plane", resolved[0], resolved[1]
+                    anchor = resolved[2]
+                else:
+                    kind, value, record, anchor = resolved
+            if kind == "plane":
+                target.bind_scanned(
+                    alias,
+                    value,
+                    group_name=str(record.get("group_name", alias)),
+                    group_id=int(record.get("group_id", 0)),
+                    plane_index=int(record.get("plane_index", 0)),
+                    quality=record.get("quality") or {},
+                    anchor=anchor,
+                )
+            elif kind == "line":
+                target.bind_scanned_line(
+                    alias,
+                    value,
+                    group_name=str(record.get("group_name", alias)),
+                    group_id=int(record.get("group_id", 0)),
+                    cylinder_index=int(record.get("cylinder_index", 0)),
+                    diameter_mm=float(record["diameter_mm"]),
+                    diameter_fixed=bool(record.get("diameter_fixed", False)),
+                    quality=record.get("quality") or {},
+                    anchor=anchor,
+                    face_spec=dict(spec),
+                )
+            elif kind == "point":
+                target.bind_scanned_point(
+                    alias,
+                    value,
+                    group_name=str(record.get("group_name", alias)),
+                    group_id=int(record.get("group_id", 0)),
+                    circle_index=int(record.get("circle_index", 0)),
+                    diameter_mm=float(record["diameter_mm"]),
+                    diameter_fixed=bool(record.get("diameter_fixed", False)),
+                    normal=record.get("normal"),
+                    quality=record.get("quality") or {},
+                    face_spec=dict(spec),
+                )
+            else:
+                raise ValueError(f"faces.{alias}: unexpected bind kind {kind!r}")
             target._face_specs[alias] = dict(spec)
         allowed = set(target._face_specs)
         for i, step in enumerate(recipe.get("construct") or []):

@@ -8,6 +8,7 @@ import pyvista as pv
 from cloudet.core.neighbors import display_xyz
 from cloudet.core.plane import Plane
 from cloudet.project.schema import plane_from_json
+from cloudet.ui.widgets import _line_tube_mesh
 
 
 class RenderMixin:
@@ -69,18 +70,113 @@ class RenderMixin:
 
     def _clear_active_plane_bbox(self):
         self.plotter.remove_actor("active_plane_bbox", render=False)
+        self.plotter.remove_actor("active_cylinder_overlay", render=False)
+        actors = getattr(self.plotter, "actors", None) or {}
+        for name in list(actors.keys()):
+            if str(name).startswith("active_circle_overlay"):
+                self.plotter.remove_actor(name, render=False)
 
     def _refresh_active_plane_bbox(self, *, render: bool = True) -> None:
-        """Draw a thin oriented wireframe around the active fitted plane only."""
+        """Draw wire overlay for the active fitted plane / cylinder / circle."""
         self._clear_active_plane_bbox()
         g = self._active_group()
+        if g is None or self.full_points.size == 0 or len(g.get("indices", [])) == 0:
+            if render:
+                self.plotter.render()
+            return
+
+        fit = g.get("fit") or {}
+        cylinders = fit.get("cylinders") if isinstance(fit.get("cylinders"), list) else []
+        circles = fit.get("circles") if isinstance(fit.get("circles"), list) else []
+
+        if cylinders:
+            from cloudet.project.schema import cylinder_from_json
+
+            try:
+                cyl = cylinder_from_json(cylinders[0])
+            except (KeyError, TypeError, ValueError):
+                cyl = None
+            if cyl is not None:
+                pts = self.full_points[g["indices"]]
+                # Segment length from projected extent along axis.
+                t = (pts - cyl.point) @ cyl.direction
+                t0, t1 = float(np.min(t)), float(np.max(t))
+                if t1 - t0 < 1.0:
+                    t0, t1 = -50.0, 50.0
+                p0 = cyl.point + t0 * cyl.direction
+                p1 = cyl.point + t1 * cyl.direction
+                mesh = _line_tube_mesh(p0, p1, max(cyl.diameter_mm, 1.0))
+                if self._view_frame is not None:
+                    mesh.points = self._to_view_points(
+                        np.asarray(mesh.points, dtype=np.float64)
+                    )
+                self.plotter.add_mesh(
+                    mesh,
+                    name="active_cylinder_overlay",
+                    style="wireframe",
+                    color="#c45c26",
+                    line_width=1.5,
+                    opacity=0.55,
+                    reset_camera=False,
+                    pickable=False,
+                )
+                if render:
+                    self.plotter.render()
+                return
+
+        if circles:
+            from cloudet.project.schema import circle_from_json
+
+            active_ci = int(getattr(self, "_active_circle_index", 0))
+            for entry in circles:
+                try:
+                    cir = circle_from_json(entry)
+                except (KeyError, TypeError, ValueError):
+                    continue
+                ci = int(entry.get("circle_index", 0))
+                n = cir.normal / max(float(np.linalg.norm(cir.normal)), 1e-12)
+                tmp = (
+                    np.array([1.0, 0.0, 0.0])
+                    if abs(n[0]) < 0.9
+                    else np.array([0.0, 1.0, 0.0])
+                )
+                u = np.cross(n, tmp)
+                u /= np.linalg.norm(u)
+                v = np.cross(n, u)
+                theta = np.linspace(0.0, 2.0 * np.pi, 96 if ci == active_ci else 64)
+                r = 0.5 * float(cir.diameter_mm)
+                ring = cir.center + r * (
+                    np.cos(theta)[:, None] * u + np.sin(theta)[:, None] * v
+                )
+                if self._view_frame is not None:
+                    ring = self._to_view_points(ring)
+                poly = pv.lines_from_points(ring, close=True)
+                is_active = ci == active_ci
+                # Active: tube (VTK ignores line_width on polylines). Inactive: thin ring.
+                if is_active:
+                    stroke_mm = max(1.5, 0.025 * float(cir.diameter_mm))
+                    mesh = poly.tube(radius=0.5 * stroke_mm, n_sides=10)
+                    self.plotter.add_mesh(
+                        mesh,
+                        name=f"active_circle_overlay_{ci}",
+                        color="#c45c26",
+                        opacity=0.9,
+                        reset_camera=False,
+                        pickable=False,
+                    )
+                else:
+                    self.plotter.add_mesh(
+                        poly,
+                        name=f"active_circle_overlay_{ci}",
+                        color="#6a8ec0",
+                        line_width=1.5,
+                        opacity=0.55,
+                        reset_camera=False,
+                        pickable=False,
+                    )
+
         p = self._active_plane_entry()
-        if (
-            g is None
-            or p is None
-            or self.full_points.size == 0
-            or len(g.get("indices", [])) == 0
-        ):
+        if p is None:
             if render:
                 self.plotter.render()
             return
