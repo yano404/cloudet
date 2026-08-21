@@ -69,6 +69,20 @@ circles from Groups. Cylinder axes become line entities (`G3_cyl0`); circle
 centers become point entities (`G3_cir0`). The same kinds load from
 `recipe.json` / `cloudet reduce`.
 
+## Sample recipes
+
+Ready-to-copy JSON in the repository under `examples/recipes/`:
+
+| File | Use case |
+|------|----------|
+| `tracker_planes.json` | Tracker walls → beam axis ∩ target |
+| `marker_baseline.json` | Marker circles → chord / baseline (+ distances) |
+| `duct_on_wall.json` | Cylinder axis ∩ wall → hit point (+ angle) |
+
+Adjust `faces.*.name` / indices to your Groups, then
+`cloudet reduce <project> --recipe …` or **Load recipe…** in the GUI.
+See also `examples/recipes/README.md`.
+
 ## CLI usage
 
 ```bash

@@ -9,8 +9,8 @@ Tool for reducing detector positions and relative geometry from 3D point clouds
 
 ## Features
 
-- **Click-to-fit plane extraction** — click a detector surface in the 3D view to automatically extract and fit the plane, with iterative robust refinement
-- **Constructive geometry reduction** — declarative recipe turns fitted planes into axes, intersection points, and offsets
+- **Click-to-fit extraction** — planes (default), cylinders, and planar circles from UV selection
+- **Constructive geometry reduction** — declarative recipe turns fitted faces into axes, intersection points, and offsets (sample recipes: `examples/recipes/` in the repo)
 - **Aligned coordinate frame** — virtual origin, axes, and coordinate planes derived from the rigid frame
 - **GPU acceleration** — optional CuPy backend for large point clouds
 - **CLI and GUI** — Qt-based interactive workflow or headless batch processing

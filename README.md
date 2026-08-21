@@ -97,6 +97,8 @@ After Fit + save, faces live in `groups/group_*.json`
 points, drawing offsets) are derived with a declarative recipe — no point cloud
 required at this stage. Full recipe / cylinder–circle bind notes:
 [docs/guide/reduction.md](docs/guide/reduction.md).
+Sample recipes (tracker planes, marker circles, duct ∩ wall):
+[examples/recipes/](examples/recipes/).
 
 ```bash
 cloudet reduce <project> --recipe recipe.json -o geometry.json

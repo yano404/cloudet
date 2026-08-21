@@ -1,0 +1,41 @@
+{
+  "version": 2,
+  "units": "mm",
+  "faces": {
+    "tracker_left": { "from": "group", "name": "G0" },
+    "tracker_front": { "from": "group", "name": "G1" },
+    "target": { "from": "group", "name": "G2" }
+  },
+  "construct": [
+    {
+      "id": "left_in",
+      "op": "offset",
+      "plane": "tracker_left",
+      "distance_mm": 12.0
+    },
+    {
+      "id": "front_in",
+      "op": "offset",
+      "plane": "tracker_front",
+      "distance_mm": 12.0
+    },
+    {
+      "id": "beam_axis",
+      "op": "intersect_planes",
+      "plane_a": "left_in",
+      "plane_b": "front_in"
+    },
+    {
+      "id": "beam_on_target",
+      "op": "intersect_line_plane",
+      "line": "beam_axis",
+      "plane": "target"
+    }
+  ],
+  "export": ["beam_axis", "beam_on_target"],
+  "frame": {
+    "axis": "beam_axis",
+    "origin": "beam_on_target",
+    "flip_z": false
+  }
+}

@@ -95,6 +95,7 @@ Fit + 保存後、面は `groups/group_*.json` の `fit.planes[].normal` + `d` �
 （任意で `fit.cylinders[]` / `fit.circles[]` と直径 `diameter_mm`）。
 解析用パラメータ（仮想軸、ビーム×標的交点、図面オフセット面）は、宣言的レシピで導出します（この段階では点群不要）。
 レシピの詳細・円筒／円の bind は [docs/guide/reduction.md](docs/guide/reduction.md)。
+サンプル（tracker 平面、マーカー円、ダクト∩壁）: [examples/recipes/](examples/recipes/)。
 
 ```bash
 cloudet reduce <project> --recipe recipe.json -o geometry.json
