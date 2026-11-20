@@ -68,6 +68,7 @@ nav:
           - Overview: api/core.md
           - plane: api/core-plane.md
           - plyio: api/core-plyio.md
+          - convert: api/core-convert.md
           - neighbors: api/core-neighbors.md
           - array_backend: api/core-array-backend.md
       - fit:

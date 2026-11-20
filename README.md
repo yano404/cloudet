@@ -38,6 +38,9 @@ cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
 
 # Constructive geometry reduction (saved fits + recipe → analysis parameters)
 cloudet reduce ~/surveys/proj1 --recipe recipe.json -o geometry.json
+
+# Convert text point clouds (x,y,z per line) to double-precision PLY
+cloudet convert scan_1.txt scan_2.txt -o ply/
 ```
 
 The `[gpu]` extra installs `cupy-cuda12x[ctk]` (CUDA headers for kernel compile). If CuPy is installed without headers, cloudet falls back to NumPy automatically in `auto` mode.

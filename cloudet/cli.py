@@ -5,11 +5,13 @@ Primary entry (GUI-first)::
     cloudet [project_dir] [--cloud <file>]
     cloudet reduce <project> --recipe recipe.json [-o geometry.json]
     cloudet migrate <project> [--recipe FILE] [--geometry FILE] [--dry-run]
+    cloudet convert <input> [<input> ...] [-o OUT] [--force]
     cloudet version
 
 Interactive pick / Fit / residual QC / save all live in the app.
 ``reduce`` derives analysis geometry from saved fits + a recipe.
 ``migrate`` rewrites legacy recipe / geometry / group JSON keys in place.
+``convert`` turns text point clouds (x,y,z per line) into double-precision PLY.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ def build_app_parser() -> argparse.ArgumentParser:
             "  cloudet ~/surveys/run1 --cloud scan.ply\n"
             "  cloudet reduce ~/surveys/run1 --recipe recipe.json -o geometry.json\n"
             "  cloudet migrate ~/surveys/run1 --dry-run\n"
+            "  cloudet convert scan_1.txt scan_2.txt -o ply/\n"
             "  cloudet version\n"
         ),
     )
@@ -112,6 +115,48 @@ def build_migrate_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="report files that would change without writing",
+    )
+    return p
+
+
+def build_convert_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="cloudet convert",
+        description=(
+            "Convert text point clouds (x,y,z per line; comma, tab, semicolon "
+            "or whitespace separated) to double-precision binary PLY. Input is "
+            "streamed, so file size is not limited by memory. Existing outputs "
+            "are skipped unless --force is given."
+        ),
+    )
+    p.add_argument("inputs", nargs="+", metavar="INPUT", help="text point cloud file(s)")
+    p.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        metavar="PATH",
+        help=(
+            "output file (single input, ending in .ply) or output directory "
+            "(created if missing; default: next to each input, with a .ply suffix)"
+        ),
+    )
+    p.add_argument(
+        "--delimiter",
+        choices=("auto", "comma", "semicolon", "tab", "space"),
+        default="auto",
+        help="column separator (default: auto-detect from the first data line)",
+    )
+    p.add_argument(
+        "--chunk-rows",
+        type=int,
+        default=4_000_000,
+        metavar="N",
+        help="rows parsed per chunk (default: 4000000)",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite existing output files",
     )
     return p
 
@@ -196,6 +241,50 @@ def _run_migrate(argv: list[str]) -> int:
     return 0
 
 
+def _convert_output_paths(inputs: list[Path], output: str | None) -> list[Path]:
+    if output is None:
+        return [p.with_suffix(".ply") for p in inputs]
+    out = Path(output)
+    if len(inputs) == 1 and out.suffix.lower() == ".ply":
+        return [out]
+    if out.suffix.lower() == ".ply":
+        raise ValueError("-o must be a directory when converting several inputs")
+    return [out / (p.stem + ".ply") for p in inputs]
+
+
+def _run_convert(argv: list[str]) -> int:
+    from cloudet.core.convert import text_xyz_to_ply
+
+    args = build_convert_parser().parse_args(argv)
+    inputs = [Path(p) for p in args.inputs]
+    try:
+        outputs = _convert_output_paths(inputs, args.output)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    failed = 0
+    for src, dst in zip(inputs, outputs):
+        if dst.exists() and not args.force:
+            print(f"skip {src} ({dst} exists; use --force to overwrite)")
+            continue
+        try:
+            r = text_xyz_to_ply(
+                src,
+                dst,
+                delimiter=args.delimiter,
+                chunk_rows=args.chunk_rows,
+                overwrite=args.force,
+            )
+        except (OSError, ValueError) as e:
+            print(f"error: {src}: {e}", file=sys.stderr)
+            failed += 1
+            continue
+        lo = ", ".join(f"{v:.3f}" for v in r.bbox_min)
+        hi = ", ".join(f"{v:.3f}" for v in r.bbox_max)
+        print(f"converted {r.src} -> {r.dst}  ({r.n_points} points; bbox [{lo}] .. [{hi}])")
+    return 1 if failed else 0
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
@@ -212,6 +301,9 @@ def main(argv=None) -> int:
 
     if argv and argv[0] == "migrate":
         return _run_migrate(argv[1:])
+
+    if argv and argv[0] == "convert":
+        return _run_convert(argv[1:])
 
     args = build_app_parser().parse_args(argv)
     return _run_app(args)
