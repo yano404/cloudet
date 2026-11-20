@@ -4,6 +4,7 @@ Shared types, I/O, and spatial indexing used across all subsystems.
 
 - [`plane`](core-plane.md) — Hesse-form `Plane`, least-squares / RANSAC / robust fitting
 - [`plyio`](core-plyio.md) — double-precision PLY read/write
+- [`convert`](core-convert.md) — streaming text (`x,y,z`) → PLY conversion
 - [`neighbors`](core-neighbors.md) — voxel hash grid and display downsampling
 - [`array_backend`](core-array-backend.md) — NumPy / CuPy switching
 

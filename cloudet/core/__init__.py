@@ -2,6 +2,7 @@
 
 from cloudet.core.array_backend import ArrayContext, DevicePoints, cupy_available, get_context
 from cloudet.core.circle import Circle, CircleFitResult, robust_fit_circle
+from cloudet.core.convert import ConvertResult, text_xyz_to_ply
 from cloudet.core.cylinder import (
     Cylinder,
     CylinderFitResult,
@@ -25,6 +26,7 @@ __all__ = [
     "ArrayContext",
     "Circle",
     "CircleFitResult",
+    "ConvertResult",
     "Cylinder",
     "CylinderFitResult",
     "DevicePoints",
@@ -44,5 +46,6 @@ __all__ = [
     "robust_fit_circle",
     "robust_fit_cylinder",
     "robust_fit_plane",
+    "text_xyz_to_ply",
     "write_ply_xyz",
 ]

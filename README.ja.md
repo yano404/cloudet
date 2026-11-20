@@ -38,6 +38,9 @@ cloudet ~/surveys/proj1 --cloud /path/to/scan.ply
 
 # 構築型リダクション（保存済み fit + レシピ → 解析パラメータ）
 cloudet reduce ~/surveys/proj1 --recipe recipe.json -o geometry.json
+
+# テキスト点群（1 行に x,y,z）を倍精度の PLY に変換
+cloudet convert scan_1.txt scan_2.txt -o ply/
 ```
 
 `[gpu]` extra を指定すると、カーネルのコンパイルに必要な CUDA ヘッダを含む `cupy-cuda12x[ctk]` がインストールされます。CUDA ヘッダなしで CuPy だけがインストールされている場合、`auto` モードでは NumPy に自動的にフォールバックします。

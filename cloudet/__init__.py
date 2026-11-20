@@ -12,6 +12,7 @@ from cloudet.core.plane import (
     residual_stats,
     mad_sigma,
 )
+from cloudet.core.convert import text_xyz_to_ply
 from cloudet.core.plyio import read_ply_xyz, write_ply_xyz
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "mad_sigma",
     "read_ply_xyz",
     "write_ply_xyz",
+    "text_xyz_to_ply",
 ]
 
 __version__ = "0.1.0"
